@@ -1,18 +1,31 @@
+import { BrowserRouter, Route, Routes } from "react-router-dom";
+
+import { AppShell } from "./components/layout/AppShell";
+import { DashboardProvider } from "./context/DashboardProvider";
+import { CompaniesPage } from "./routes/CompaniesPage";
+import { CompanyDetailPage } from "./routes/CompanyDetailPage";
+import { NotFoundPage } from "./routes/NotFoundPage";
+import { SourcesPage } from "./routes/SourcesPage";
+import { StackPage } from "./routes/StackPage";
+import { TodayPage } from "./routes/TodayPage";
+import { UpdatesPage } from "./routes/UpdatesPage";
+
 export function App() {
   return (
-    <main className="grid min-h-screen place-items-center bg-relay-bg px-6 text-relay-text">
-      <section className="w-full max-w-xl border-l border-relay-accent pl-6">
-        <p className="font-mono text-xs uppercase tracking-[0.18em] text-relay-accent">
-          Relay
-        </p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">
-          Foundation ready.
-        </h1>
-        <p className="mt-3 max-w-prose text-sm leading-6 text-relay-muted">
-          The project baseline is running. Product surfaces and intelligence
-          workflows come next.
-        </p>
-      </section>
-    </main>
+    <BrowserRouter>
+      <DashboardProvider>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route index element={<TodayPage />} />
+            <Route path="updates" element={<UpdatesPage />} />
+            <Route path="stack" element={<StackPage />} />
+            <Route path="companies" element={<CompaniesPage />} />
+            <Route path="companies/:ticker" element={<CompanyDetailPage />} />
+            <Route path="sources" element={<SourcesPage />} />
+            <Route path="*" element={<NotFoundPage />} />
+          </Route>
+        </Routes>
+      </DashboardProvider>
+    </BrowserRouter>
   );
 }

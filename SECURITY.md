@@ -19,3 +19,11 @@ Relay is intended for personal research. Local databases, imported documents,
 credentials, paid research, and generated analysis must remain untracked. The
 repository ignores these paths by default; verify staged changes before every
 commit.
+
+The API binds to loopback and accepts only loopback request hostnames by
+default. Keep `HOST` and `RELAY_ALLOWED_HOSTS` unchanged unless network exposure
+is intentional and protected by an additional authentication boundary.
+
+URL imports reject private and reserved destinations, revalidate redirects, and
+pin the validated public address for each request to reduce SSRF and DNS
+rebinding risk. Local database files are created with owner-only permissions.
