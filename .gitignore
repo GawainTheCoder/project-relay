@@ -21,6 +21,7 @@ data/*
 # Logs and caches
 *.log
 .eslintcache
+.playwright-cli/
 .vite/
 
 # Editors and operating systems

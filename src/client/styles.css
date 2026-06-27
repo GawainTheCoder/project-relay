@@ -2,16 +2,26 @@
 
 @theme {
   --color-relay-bg: #07101a;
-  --color-relay-surface: #0d1824;
-  --color-relay-border: #213044;
-  --color-relay-text: #f4f7fb;
-  --color-relay-muted: #8f9cad;
+  --color-relay-deep: #050b12;
+  --color-relay-surface: #0b1520;
+  --color-relay-surface-2: #0e1a27;
+  --color-relay-raised: #111e2c;
+  --color-relay-border: #223142;
+  --color-relay-border-strong: #33465a;
+  --color-relay-text: #f1f5f9;
+  --color-relay-muted: #8f9daf;
+  --color-relay-subtle: #647286;
   --color-relay-accent: #4f8cff;
+  --color-relay-accent-soft: #18355f;
+  --color-relay-positive: #58d68d;
+  --color-relay-negative: #f36d76;
+  --color-relay-warning: #f5c451;
   --font-sans:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
   --font-mono:
-    "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
+    "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", ui-monospace,
+    monospace;
 }
 
 :root {
@@ -19,6 +29,8 @@
   font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  background: var(--color-relay-bg);
+  color: var(--color-relay-text);
 }
 
 * {
@@ -27,12 +39,14 @@
 
 html {
   background: var(--color-relay-bg);
+  scrollbar-color: var(--color-relay-border-strong) transparent;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--color-relay-bg);
 }
 
 button,
@@ -42,6 +56,75 @@ select {
   font: inherit;
 }
 
+button,
+a,
+input,
+textarea,
+select {
+  outline: none;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  box-shadow:
+    0 0 0 2px var(--color-relay-bg),
+    0 0 0 4px var(--color-relay-accent);
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--color-relay-accent) 35%, transparent);
+}
+
+.relay-scrollbar {
+  scrollbar-color: var(--color-relay-border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.relay-grid {
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-relay-border) 16%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-relay-border) 12%, transparent) 1px,
+      transparent 1px
+    );
+  background-size: 38px 38px;
+}
+
+@keyframes relay-enter {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.relay-enter {
+  animation: relay-enter 180ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
