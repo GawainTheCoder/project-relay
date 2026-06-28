@@ -16,6 +16,29 @@ export type Sentiment = "bullish" | "bearish" | "neutral" | "not-material";
 export type Materiality = "high" | "medium" | "low" | "not-material";
 export type Confidence = "high" | "medium" | "low";
 export type ReviewDecision = "proposed" | "accepted" | "rejected";
+export const impactReviewDecisions = [
+  "accepted",
+  "rejected",
+  "deferred",
+] as const;
+export type ImpactReviewDecision = (typeof impactReviewDecisions)[number];
+export const impactReviewReasonTags = [
+  "wrong-company",
+  "wrong-layer",
+  "overstated-materiality",
+  "unsupported-conclusion",
+  "missed-important-claim",
+  "useful-analysis",
+  "other",
+] as const;
+export type ImpactReviewReasonTag = (typeof impactReviewReasonTags)[number];
+export type SourceKind =
+  | "earnings-release"
+  | "sec-filing"
+  | "transcript"
+  | "paper"
+  | "technical"
+  | "other";
 
 export interface EvidenceClaim {
   id: string;
@@ -32,6 +55,48 @@ export interface ThesisImpact {
   confidence: Confidence;
   horizon: string;
   decision: ReviewDecision;
+  review?: ImpactReview | null;
+}
+
+export interface ImpactReview {
+  impactId: string;
+  updateId: string;
+  companyTicker: string;
+  decision: ImpactReviewDecision;
+  reasonTags: ImpactReviewReasonTag[];
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImpactReviewInput {
+  decision: ImpactReviewDecision;
+  reasonTags: ImpactReviewReasonTag[];
+  note?: string;
+}
+
+export interface ImpactReviewSummary {
+  total: number;
+  byDecision: Record<ImpactReviewDecision, number>;
+  byReason: Record<ImpactReviewReasonTag, number>;
+  byCompany: Record<string, number>;
+}
+
+export type SearchResultType =
+  | "brief"
+  | "company"
+  | "document"
+  | "evidence"
+  | "update";
+
+export interface SearchResult {
+  type: SearchResultType;
+  id: string;
+  title: string;
+  subtitle: string;
+  snippet: string;
+  href: string;
+  matchedField: string;
 }
 
 export interface IntelligenceUpdate {
@@ -102,11 +167,12 @@ export interface DailyBrief {
 }
 
 export interface DashboardPayload {
-  brief: DailyBrief;
+  brief: DailyBrief | null;
   updates: IntelligenceUpdate[];
   layers: StackLayer[];
   companies: Company[];
   sources: ResearchSource[];
+  demoData: boolean;
 }
 
 export interface ImportSourceInput {
@@ -115,8 +181,5 @@ export interface ImportSourceInput {
   sourceUrl?: string;
   publishedAt?: string;
   content?: string;
-}
-
-export interface DecisionInput {
-  decision: Exclude<ReviewDecision, "proposed">;
+  sourceKind?: SourceKind;
 }

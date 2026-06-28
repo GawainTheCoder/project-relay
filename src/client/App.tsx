@@ -6,6 +6,7 @@ import { CompaniesPage } from "./routes/CompaniesPage";
 import { CompanyDetailPage } from "./routes/CompanyDetailPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
 import { SourcesPage } from "./routes/SourcesPage";
+import { SearchPage } from "./routes/SearchPage";
 import { StackPage } from "./routes/StackPage";
 import { TodayPage } from "./routes/TodayPage";
 import { UpdatesPage } from "./routes/UpdatesPage";
@@ -18,6 +19,7 @@ export function App() {
           <Route element={<AppShell />}>
             <Route index element={<TodayPage />} />
             <Route path="updates" element={<UpdatesPage />} />
+            <Route path="search" element={<SearchPage />} />
             <Route path="stack" element={<StackPage />} />
             <Route path="companies" element={<CompaniesPage />} />
             <Route path="companies/:ticker" element={<CompanyDetailPage />} />

@@ -39,34 +39,169 @@ describe("Relay API", () => {
     });
   });
 
-  it("validates and applies review decisions", async () => {
+  it("searches persisted intelligence and validates query bounds", async () => {
     const app = createApp({ repository });
 
-    const response = await app.request(
-      "/api/updates/vrt-fy25-q4/decision",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision: "accepted" }),
-      },
-    );
+    const response = await app.request("/api/search?q=backlog&limit=5");
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      id: "vrt-fy25-q4",
-      thesisImpacts: [{ decision: "accepted" }],
+      query: "backlog",
+      results: expect.arrayContaining([
+        expect.objectContaining({
+          type: "update",
+          id: "vrt-fy25-q4",
+        }),
+        expect.objectContaining({
+          type: "evidence",
+          id: "claim-vrt-backlog",
+        }),
+      ]),
     });
 
-    const invalidResponse = await app.request(
-      "/api/updates/vrt-fy25-q4/decision",
+    const invalid = await app.request("/api/search?q=x");
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
+
+    const escapedWildcards = await app.request("/api/search?q=%25_%25");
+    expect(escapedWildcards.status).toBe(200);
+    await expect(escapedWildcards.json()).resolves.toMatchObject({
+      results: [],
+    });
+  });
+
+  it("records per-impact review feedback and exports the evaluation dataset", async () => {
+    const app = createApp({ repository });
+    const response = await app.request(
+      "/api/impacts/impact-vrt-backlog/review",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision: "maybe" }),
+        body: JSON.stringify({
+          decision: "accepted",
+          reasonTags: ["useful-analysis"],
+          note: "The conclusion is directly supported by backlog evidence.",
+        }),
       },
     );
-    expect(invalidResponse.status).toBe(400);
-    await expect(invalidResponse.json()).resolves.toMatchObject({
-      error: { code: "VALIDATION_ERROR" },
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      impactId: "impact-vrt-backlog",
+      decision: "accepted",
+      reasonTags: ["useful-analysis"],
+    });
+    expect(
+      repository.getUpdate("vrt-fy25-q4")?.thesisImpacts[0]?.review,
+    ).toMatchObject({ decision: "accepted" });
+
+    const summary = await app.request("/api/reviews/summary");
+    await expect(summary.json()).resolves.toMatchObject({
+      total: 1,
+      byDecision: { accepted: 1, rejected: 0, deferred: 0 },
+    });
+
+    const exported = await app.request("/api/reviews/export");
+    expect(exported.headers.get("content-disposition")).toContain(
+      "relay-evaluations-",
+    );
+    await expect(exported.json()).resolves.toMatchObject({
+      schemaVersion: 1,
+      summary: { total: 1 },
+      reviews: [
+        expect.objectContaining({
+          impactId: "impact-vrt-backlog",
+          snapshot: expect.objectContaining({
+            update: expect.objectContaining({ id: "vrt-fy25-q4" }),
+          }),
+        }),
+      ],
+    });
+  });
+
+  it("imports local research files and makes their content searchable", async () => {
+    const app = createApp({ repository });
+    const formData = new FormData();
+    formData.set(
+      "file",
+      new File(
+        [
+          "Optics qualification schedules point to tighter laser supply and longer lead times.",
+        ],
+        "optics-note.txt",
+        { type: "text/plain" },
+      ),
+    );
+    formData.set("title", "Personal optics note");
+    formData.set("publisher", "Private research");
+    formData.set("publishedAt", "");
+    formData.set("sourceKind", "other");
+
+    const response = await app.request("/api/sources/file", {
+      method: "POST",
+      body: formData,
+    });
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({
+      duplicate: false,
+      status: "pending",
+    });
+
+    const search = await app.request("/api/search?q=qualification%20schedules");
+    await expect(search.json()).resolves.toMatchObject({
+      results: expect.arrayContaining([
+        expect.objectContaining({
+          type: "document",
+          title: "Personal optics note",
+          matchedField: "source content",
+        }),
+      ]),
+    });
+  });
+
+  it("rejects malformed PDFs and oversized multipart file imports", async () => {
+    const app = createApp({ repository });
+    const invalidPdf = new FormData();
+    invalidPdf.set(
+      "file",
+      new File(["not a pdf"], "filing.pdf", {
+        type: "application/pdf",
+      }),
+    );
+    invalidPdf.set("title", "Invalid filing");
+    invalidPdf.set("publisher", "Local QA");
+    invalidPdf.set("publishedAt", "");
+    invalidPdf.set("sourceKind", "sec-filing");
+
+    const malformedResponse = await app.request("/api/sources/file", {
+      method: "POST",
+      body: invalidPdf,
+    });
+    expect(malformedResponse.status).toBe(400);
+    await expect(malformedResponse.json()).resolves.toMatchObject({
+      error: { code: "FILE_EXTRACTION_FAILED" },
+    });
+
+    const oversized = new FormData();
+    oversized.set(
+      "file",
+      new File([new Uint8Array(10 * 1024 * 1024 + 200_000)], "large.txt", {
+        type: "text/plain",
+      }),
+    );
+    oversized.set("title", "Oversized research");
+    oversized.set("publisher", "Local QA");
+    oversized.set("publishedAt", "");
+    oversized.set("sourceKind", "other");
+
+    const oversizedResponse = await app.request("/api/sources/file", {
+      method: "POST",
+      body: oversized,
+    });
+    expect(oversizedResponse.status).toBe(413);
+    await expect(oversizedResponse.json()).resolves.toMatchObject({
+      error: { code: "PAYLOAD_TOO_LARGE" },
     });
   });
 
@@ -158,7 +293,7 @@ describe("Relay API", () => {
     const app = createApp({ repository });
 
     const crossSite = await app.request(
-      "/api/updates/vrt-fy25-q4/decision",
+      "/api/impacts/impact-vrt-backlog/review",
       {
         method: "POST",
         headers: {
@@ -166,7 +301,10 @@ describe("Relay API", () => {
           origin: "https://attacker.example",
           "sec-fetch-site": "cross-site",
         },
-        body: JSON.stringify({ decision: "accepted" }),
+        body: JSON.stringify({
+          decision: "accepted",
+          reasonTags: ["useful-analysis"],
+        }),
       },
     );
     expect(crossSite.status).toBe(403);
@@ -183,7 +321,7 @@ describe("Relay API", () => {
     });
 
     const localDevOrigin = await app.request(
-      "http://127.0.0.1:8787/api/updates/vrt-fy25-q4/decision",
+      "http://127.0.0.1:8787/api/impacts/impact-vrt-backlog/review",
       {
         method: "POST",
         headers: {
@@ -191,7 +329,10 @@ describe("Relay API", () => {
           origin: "http://127.0.0.1:5173",
           "sec-fetch-site": "same-origin",
         },
-        body: JSON.stringify({ decision: "accepted" }),
+        body: JSON.stringify({
+          decision: "accepted",
+          reasonTags: ["useful-analysis"],
+        }),
       },
     );
     expect(localDevOrigin.status).toBe(200);

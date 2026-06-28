@@ -2,7 +2,7 @@ import { createContext } from "react";
 
 import type {
   DashboardPayload,
-  ReviewDecision,
+  ImpactReviewInput,
 } from "../../shared/contracts";
 import type { RefreshSourcesResult } from "../lib/api";
 
@@ -11,9 +11,9 @@ export interface DashboardContextValue {
   error: string | null;
   isLoading: boolean;
   reload: () => Promise<void>;
-  decideImpact: (
-    updateId: string,
-    decision: Exclude<ReviewDecision, "proposed">,
+  reviewThesisImpact: (
+    impactId: string,
+    input: ImpactReviewInput,
   ) => Promise<void>;
   refreshAllSources: () => Promise<RefreshSourcesResult>;
   regenerateBrief: () => Promise<void>;

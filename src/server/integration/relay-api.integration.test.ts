@@ -230,7 +230,7 @@ describe("Relay API integration contracts", () => {
     expect(stored.error_message).not.toContain("sk-project");
   });
 
-  it("persists accepted and rejected decisions across a database reopen", async () => {
+  it("persists impact reviews across a database reopen", async () => {
     repository.close();
     const directory = mkdtempSync(join(tmpdir(), "relay-integration-"));
     const databasePath = join(directory, "relay.sqlite");
@@ -240,44 +240,51 @@ describe("Relay API integration contracts", () => {
       let app = createApp({ repository: fileRepository });
 
       const accepted = await app.request(
-        "/api/updates/vrt-fy25-q4/decision",
+        "/api/impacts/impact-vrt-backlog/review",
         {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ decision: "accepted" }),
+          body: JSON.stringify({
+            decision: "accepted",
+            reasonTags: ["useful-analysis"],
+          }),
         },
       );
       expect(accepted.status).toBe(200);
-      expect(
-        ((await accepted.json()) as IntelligenceUpdate).thesisImpacts.every(
-          (impact) => impact.decision === "accepted",
-        ),
-      ).toBe(true);
+      await expect(accepted.json()).resolves.toMatchObject({
+        impactId: "impact-vrt-backlog",
+        decision: "accepted",
+      });
       fileRepository.close();
 
       fileRepository = createRelayRepository(databasePath);
       app = createApp({ repository: fileRepository });
       const persisted = await app.request("/api/updates/vrt-fy25-q4");
-      expect(
-        ((await persisted.json()) as IntelligenceUpdate).thesisImpacts.every(
-          (impact) => impact.decision === "accepted",
-        ),
-      ).toBe(true);
+      await expect(persisted.json()).resolves.toMatchObject({
+        thesisImpacts: [
+          expect.objectContaining({
+            id: "impact-vrt-backlog",
+            review: expect.objectContaining({ decision: "accepted" }),
+          }),
+        ],
+      });
 
       const rejected = await app.request(
-        "/api/updates/vrt-fy25-q4/decision",
+        "/api/impacts/impact-vrt-backlog/review",
         {
           method: "POST",
           headers: JSON_HEADERS,
-          body: JSON.stringify({ decision: "rejected" }),
+          body: JSON.stringify({
+            decision: "rejected",
+            reasonTags: ["overstated-materiality"],
+          }),
         },
       );
       expect(rejected.status).toBe(200);
-      expect(
-        ((await rejected.json()) as IntelligenceUpdate).thesisImpacts.every(
-          (impact) => impact.decision === "rejected",
-        ),
-      ).toBe(true);
+      await expect(rejected.json()).resolves.toMatchObject({
+        impactId: "impact-vrt-backlog",
+        decision: "rejected",
+      });
       fileRepository.close();
     } finally {
       rmSync(directory, { force: true, recursive: true });

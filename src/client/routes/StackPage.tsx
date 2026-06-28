@@ -36,7 +36,7 @@ export function StackPage() {
     }
     return (
       data.updates.find(
-        (update) => update.id === data.brief.updateIds[0],
+        (update) => update.id === data.brief?.updateIds[0],
       ) ??
       data.updates[0] ??
       null
@@ -121,10 +121,12 @@ export function StackPage() {
               <div className="min-w-0">
                 <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.1em] text-relay-muted">
                   <span className="size-1.5 rounded-full bg-relay-accent" />
-                  Today’s most material signal
+                  {data.brief
+                    ? "Today’s most material signal"
+                    : "Latest analyzed update"}
                 </div>
                 <p className="mt-2 truncate text-base font-medium">
-                  {data.brief.signal}
+                  {data.brief?.signal ?? primaryUpdate.title}
                 </p>
               </div>
               <span className="hidden shrink-0 items-center gap-2 text-sm text-relay-accent group-hover:text-white sm:flex">

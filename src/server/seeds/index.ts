@@ -8,12 +8,25 @@ import {
   seedUpdates,
 } from "./catalog.js";
 
-export function seedDatabase(repository: RelayRepository): void {
+export const demoBriefId = seedBrief.id;
+export const demoUpdateIds = seedUpdates.map((update) => update.id);
+
+export function seedDatabase(
+  repository: RelayRepository,
+  options: { includeDemoData?: boolean } = {},
+): void {
   repository.seedCatalog({
-    brief: seedBrief,
+    ...(options.includeDemoData ? { brief: seedBrief } : {}),
     companies: seedCompanies,
     layers: seedLayers,
     sources: seedSources,
-    updates: seedUpdates,
+    updates: options.includeDemoData ? seedUpdates : [],
   });
+}
+
+export function clearDemoData(repository: RelayRepository): void {
+  repository.clearDemoIntelligence(
+    demoUpdateIds,
+    demoBriefId,
+  );
 }

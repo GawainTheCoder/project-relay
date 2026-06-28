@@ -158,6 +158,42 @@ const migrations = [
       PRIMARY KEY (brief_id, claim_id)
     );
   `,
+  `
+    ALTER TABLE source_documents
+      ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'other'
+      CHECK (
+        source_kind IN (
+          'earnings-release', 'sec-filing', 'transcript',
+          'paper', 'technical', 'other'
+        )
+      );
+
+    ALTER TABLE source_documents ADD COLUMN filename TEXT;
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS impact_reviews (
+      impact_id TEXT PRIMARY KEY,
+      update_id TEXT NOT NULL,
+      company_ticker TEXT NOT NULL,
+      decision TEXT NOT NULL CHECK (
+        decision IN ('accepted', 'rejected', 'deferred')
+      ),
+      reason_tags_json TEXT NOT NULL,
+      note TEXT,
+      snapshot_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS impact_reviews_updated_at_idx
+      ON impact_reviews(updated_at DESC, impact_id);
+
+    CREATE INDEX IF NOT EXISTS impact_reviews_company_idx
+      ON impact_reviews(company_ticker, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS impact_reviews_decision_idx
+      ON impact_reviews(decision, updated_at DESC);
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {
