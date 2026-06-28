@@ -3,21 +3,29 @@ import {
   Check,
   Clock3,
   Database,
+  Download,
   FilePlus2,
   LoaderCircle,
   RefreshCw,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import type { ResearchSource } from "../../shared/contracts";
+import type {
+  ImpactReviewSummary,
+  ResearchSource,
+} from "../../shared/contracts";
 import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { Button } from "../components/ui/Button";
 import { useDashboard } from "../context/useDashboard";
 import { ImportSourceDialog } from "../features/sources/ImportSourceDialog";
 import { formatRelativeTime } from "../lib/format";
+import {
+  downloadReviewExport,
+  getReviewSummary,
+} from "../lib/api";
 
-type Action = "refresh" | "brief";
+type Action = "refresh" | "brief" | "export";
 
 const sourceTypeLabels: Record<ResearchSource["type"], string> = {
   rss: "RSS",
@@ -41,7 +49,17 @@ export function SourcesPage() {
   const [activeAction, setActiveAction] = useState<Action | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [reviewSummary, setReviewSummary] =
+    useState<ImpactReviewSummary | null>(null);
   const closeImport = useCallback(() => setIsImportOpen(false), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void getReviewSummary(controller.signal)
+      .then(setReviewSummary)
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
 
   if (isLoading) {
     return <PageLoading label="Checking source health" />;
@@ -69,9 +87,12 @@ export function SourcesPage() {
               : ""
           }.`,
         );
-      } else {
+      } else if (action === "brief") {
         await regenerateBrief();
         setActionMessage("Today’s brief was regenerated from current evidence.");
+      } else {
+        await downloadReviewExport();
+        setActionMessage("Evaluation data was exported as a local JSON file.");
       }
     } catch (caughtError) {
       setActionError(
@@ -123,7 +144,7 @@ export function SourcesPage() {
             </Button>
             <Button
               className="flex-1 sm:flex-none"
-              disabled={activeAction !== null}
+              disabled={activeAction !== null || data.updates.length === 0}
               onClick={() => void runAction("brief")}
             >
               {activeAction === "brief" ? (
@@ -135,6 +156,23 @@ export function SourcesPage() {
                 <Sparkles aria-hidden="true" className="size-3.5" />
               )}
               Generate brief
+            </Button>
+            <Button
+              className="flex-1 sm:flex-none"
+              disabled={
+                activeAction !== null || (reviewSummary?.total ?? 0) === 0
+              }
+              onClick={() => void runAction("export")}
+            >
+              {activeAction === "export" ? (
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="size-3.5 animate-spin"
+                />
+              ) : (
+                <Download aria-hidden="true" className="size-3.5" />
+              )}
+              Export reviews
             </Button>
             <Button
               className="w-full sm:w-auto"
@@ -195,6 +233,37 @@ export function SourcesPage() {
             </p>
             <p className="mt-2 text-2xl font-semibold">{totalDocuments}</p>
             <p className="mt-1 text-xs text-relay-muted">source documents</p>
+          </div>
+        </section>
+
+        <section className="mt-9">
+          <div className="flex items-end justify-between border-b border-relay-border pb-3">
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight">
+                Review dataset
+              </h2>
+              <p className="mt-1 text-sm text-relay-muted">
+                Your decisions become reusable local evaluation examples.
+              </p>
+            </div>
+            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
+              JSON export
+            </span>
+          </div>
+          <div className="grid gap-px overflow-hidden border-b border-relay-border bg-relay-border sm:grid-cols-4">
+            {[
+              ["Reviewed", reviewSummary?.total ?? 0],
+              ["Accepted", reviewSummary?.byDecision.accepted ?? 0],
+              ["No change", reviewSummary?.byDecision.rejected ?? 0],
+              ["Deferred", reviewSummary?.byDecision.deferred ?? 0],
+            ].map(([label, value]) => (
+              <div className="bg-relay-bg py-4 pr-5" key={label}>
+                <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
+                  {label}
+                </p>
+                <p className="mt-2 text-xl font-semibold">{value}</p>
+              </div>
+            ))}
           </div>
         </section>
 

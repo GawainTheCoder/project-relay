@@ -9,18 +9,27 @@ import type {
 
 import { jsonError, validationDetails } from "./api/errors.js";
 import {
-  decisionInputSchema,
+  impactReviewInputSchema,
   importSourceInputSchema,
+  localFileMetadataSchema,
   resourceIdSchema,
+  searchQuerySchema,
   tickerSchema,
 } from "./api/schemas.js";
 import {
   createRelayRepository,
   type RelayRepository,
 } from "./db/repository.js";
+import { createImpactReviewRepository } from "./evaluation/index.js";
+import {
+  extractResearchFile,
+  MAX_RESEARCH_FILE_BYTES,
+} from "./ingestion/file.js";
 import { canonicalizeUrl } from "./ingestion/normalize.js";
+import { LocalSearchService } from "./search/index.js";
 
 const MAX_API_BODY_BYTES = 1_100_000;
+const MAX_FILE_IMPORT_BODY_BYTES = MAX_RESEARCH_FILE_BYTES + 100_000;
 const DEFAULT_ALLOWED_HOSTNAMES = ["127.0.0.1", "::1", "localhost"] as const;
 
 export interface AppServices {
@@ -40,6 +49,27 @@ export interface CreateAppOptions {
   databasePath?: string;
   services?: AppServices;
   allowedHostnames?: readonly string[];
+}
+
+interface ImportSuccess {
+  ok: true;
+  payload: {
+    documentId: string;
+    duplicate: boolean;
+    status: string;
+    message?: string;
+    update?: IntelligenceUpdate;
+  };
+  status: 200 | 201 | 202;
+}
+
+interface ImportFailure {
+  ok: false;
+  error: {
+    code: string;
+    message: string;
+  };
+  status: 409 | 502;
 }
 
 async function requestJson(context: {
@@ -72,6 +102,20 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     }
     defaultRepository ??= createRelayRepository(options.databasePath);
     return defaultRepository;
+  };
+  let reviewRepository:
+    | ReturnType<typeof createImpactReviewRepository>
+    | undefined;
+  const getReviewRepository = () => {
+    reviewRepository ??= createImpactReviewRepository(
+      getRepository().database,
+    );
+    return reviewRepository;
+  };
+  let searchService: LocalSearchService | undefined;
+  const getSearchService = () => {
+    searchService ??= new LocalSearchService(getRepository().database);
+    return searchService;
   };
 
   application.use(
@@ -135,16 +179,31 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     context.header("Cache-Control", "no-store");
   });
 
+  const standardBodyLimit = bodyLimit({
+    maxSize: MAX_API_BODY_BYTES,
+    onError: (context) =>
+      jsonError(
+        context,
+        413,
+        "PAYLOAD_TOO_LARGE",
+        "The request body exceeds Relay's import limit.",
+      ),
+  });
+  application.use("/api/*", (context, next) =>
+    context.req.path === "/api/sources/file"
+      ? next()
+      : standardBodyLimit(context, next),
+  );
   application.use(
-    "/api/*",
+    "/api/sources/file",
     bodyLimit({
-      maxSize: MAX_API_BODY_BYTES,
+      maxSize: MAX_FILE_IMPORT_BODY_BYTES,
       onError: (context) =>
         jsonError(
           context,
           413,
           "PAYLOAD_TOO_LARGE",
-          "The request body exceeds Relay's import limit.",
+          "Research files must be 10 MB or smaller.",
         ),
     }),
   );
@@ -158,6 +217,28 @@ export function createApp(options: CreateAppOptions = {}): Hono {
 
   application.get("/api/dashboard", (context) => {
     return context.json(getRepository().getDashboard());
+  });
+
+  application.get("/api/search", (context) => {
+    const parsedQuery = searchQuerySchema.safeParse({
+      q: context.req.query("q"),
+      limit: context.req.query("limit") ?? undefined,
+    });
+    if (!parsedQuery.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "Search queries must contain between 2 and 120 characters.",
+        validationDetails(parsedQuery.error),
+      );
+    }
+    return context.json({
+      query: parsedQuery.data.q,
+      results: getSearchService().search(parsedQuery.data.q, {
+        limit: parsedQuery.data.limit,
+      }),
+    });
   });
 
   application.get("/api/updates/:id", (context) => {
@@ -183,34 +264,68 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     return context.json(update);
   });
 
-  application.post("/api/updates/:id/decision", async (context) => {
+  application.post("/api/impacts/:id/review", async (context) => {
     const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
-    const parsedBody = decisionInputSchema.safeParse(await requestJson(context));
+    const parsedBody = impactReviewInputSchema.safeParse(
+      await requestJson(context),
+    );
     if (!parsedId.success || !parsedBody.success) {
       return jsonError(
         context,
         400,
         "VALIDATION_ERROR",
-        "The review decision is invalid.",
+        "The impact review is invalid.",
         [
           ...(parsedId.success ? [] : validationDetails(parsedId.error)),
           ...(parsedBody.success ? [] : validationDetails(parsedBody.error)),
         ],
       );
     }
-    const update = getRepository().decideUpdate(
-      parsedId.data,
-      parsedBody.data.decision,
-    );
-    if (!update) {
-      return jsonError(
-        context,
-        404,
-        "UPDATE_NOT_FOUND",
-        "The requested update does not exist.",
-      );
+    try {
+      const review = getReviewRepository().reviewImpact({
+        impactId: parsedId.data,
+        decision: parsedBody.data.decision,
+        reasonTags: parsedBody.data.reasonTags,
+        ...(parsedBody.data.note ? { note: parsedBody.data.note } : {}),
+      });
+      return context.json(review);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          context,
+          404,
+          "IMPACT_NOT_FOUND",
+          "The requested thesis impact does not exist.",
+        );
+      }
+      if (error instanceof TypeError) {
+        return jsonError(
+          context,
+          400,
+          "VALIDATION_ERROR",
+          error.message,
+        );
+      }
+      throw error;
     }
-    return context.json(update);
+  });
+
+  application.get("/api/reviews", (context) => {
+    return context.json({
+      reviews: getReviewRepository().listReviews(),
+    });
+  });
+
+  application.get("/api/reviews/summary", (context) => {
+    return context.json(getReviewRepository().getSummary());
+  });
+
+  application.get("/api/reviews/export", (context) => {
+    context.header(
+      "Content-Disposition",
+      `attachment; filename="relay-evaluations-${new Date().toISOString().slice(0, 10)}.json"`,
+    );
+    return context.json(getReviewRepository().exportReviewedExamples());
   });
 
   application.get("/api/companies/:ticker", (context) => {
@@ -260,77 +375,115 @@ export function createApp(options: CreateAppOptions = {}): Hono {
         ? { publishedAt: parsedBody.data.publishedAt }
         : {}),
       ...(parsedBody.data.content ? { content: parsedBody.data.content } : {}),
+      ...(parsedBody.data.sourceKind
+        ? { sourceKind: parsedBody.data.sourceKind }
+        : {}),
     };
-    const repository = getRepository();
-    const document = repository.persistSourceDocument({
-      ...importedInput,
-      content:
-        importedInput.content ??
-        `URL import queued for secure retrieval: ${importedInput.sourceUrl ?? ""}`,
+    const result = await processImportedSource({
+      activeOperations,
+      input: importedInput,
+      repository: getRepository(),
+      ...(options.services ? { services: options.services } : {}),
     });
-    if (document.duplicate && document.updateId) {
-      const existingUpdate = repository.getUpdate(document.updateId);
-      if (existingUpdate) {
-        return context.json({
-          documentId: document.id,
-          duplicate: true,
-          status: "analyzed",
-          update: existingUpdate,
-        });
-      }
-    }
-
-    if (!options.services?.analyzeImportedSource) {
-      return context.json(
-        {
-          documentId: document.id,
-          duplicate: document.duplicate,
-          status: document.status,
-          message:
-            "The source is saved locally and is waiting for the analysis service.",
-        },
-        202,
-      );
-    }
-
-    const operationId = `source-analysis:${document.id}`;
-    if (activeOperations.has(operationId)) {
+    if (!result.ok) {
       return jsonError(
         context,
-        409,
-        "OPERATION_IN_PROGRESS",
-        "This source is already being analyzed.",
+        result.status,
+        result.error.code,
+        result.error.message,
       );
     }
-    activeOperations.add(operationId);
+    return context.json(result.payload, result.status);
+  });
+
+  application.post("/api/sources/file", async (context) => {
+    let formData: FormData;
     try {
-      const analyzedUpdate =
-        await options.services.analyzeImportedSource(importedInput);
-      const update = repository.persistAnalyzedUpdate(analyzedUpdate);
-      repository.markSourceDocumentAnalyzed(document.id, update.id);
-      return context.json(
-        {
-          documentId: document.id,
-          duplicate: document.duplicate,
-          status: "analyzed",
-          update,
-        },
-        201,
-      );
-    } catch (error) {
-      repository.markSourceDocumentError(
-        document.id,
-        error instanceof Error ? error.message : "Unknown analysis error",
-      );
+      formData = await context.req.formData();
+    } catch {
       return jsonError(
         context,
-        502,
-        "ANALYSIS_FAILED",
-        "The source was saved, but analysis failed.",
+        400,
+        "VALIDATION_ERROR",
+        "Upload a research file using multipart form data.",
       );
-    } finally {
-      activeOperations.delete(operationId);
     }
+    const fileValue = formData.get("file");
+    if (!(fileValue instanceof File)) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "Choose a research file to import.",
+      );
+    }
+    const parsedMetadata = localFileMetadataSchema.safeParse({
+      title: formText(formData, "title"),
+      publisher: formText(formData, "publisher"),
+      publishedAt: formText(formData, "publishedAt"),
+      sourceKind: formText(formData, "sourceKind"),
+    });
+    if (!parsedMetadata.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The research file metadata is invalid.",
+        validationDetails(parsedMetadata.error),
+      );
+    }
+    if (!fileValue.name || fileValue.name.length > 255) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The research filename is invalid.",
+      );
+    }
+
+    let content: string;
+    try {
+      content = await extractResearchFile({
+        data: new Uint8Array(await fileValue.arrayBuffer()),
+        filename: fileValue.name,
+        ...(fileValue.type ? { mimeType: fileValue.type } : {}),
+      });
+    } catch (error) {
+      return jsonError(
+        context,
+        400,
+        "FILE_EXTRACTION_FAILED",
+        error instanceof Error
+          ? error.message
+          : "Relay could not read this research file.",
+      );
+    }
+
+    const importedInput: ImportSourceInput = {
+      title: parsedMetadata.data.title,
+      publisher: parsedMetadata.data.publisher,
+      content,
+      sourceKind: parsedMetadata.data.sourceKind,
+      ...(parsedMetadata.data.publishedAt
+        ? { publishedAt: parsedMetadata.data.publishedAt }
+        : {}),
+    };
+    const result = await processImportedSource({
+      activeOperations,
+      filename: fileValue.name,
+      input: importedInput,
+      repository: getRepository(),
+      ...(options.services ? { services: options.services } : {}),
+    });
+    if (!result.ok) {
+      return jsonError(
+        context,
+        result.status,
+        result.error.code,
+        result.error.message,
+      );
+    }
+    return context.json(result.payload, result.status);
   });
 
   application.post("/api/sources/refresh", async (context) => {
@@ -416,6 +569,101 @@ export function createApp(options: CreateAppOptions = {}): Hono {
 }
 
 export const app = createApp();
+
+async function processImportedSource(input: {
+  activeOperations: Set<string>;
+  filename?: string;
+  input: ImportSourceInput;
+  repository: RelayRepository;
+  services?: AppServices;
+}): Promise<ImportSuccess | ImportFailure> {
+  const document = input.repository.persistSourceDocument({
+    ...input.input,
+    content:
+      input.input.content ??
+      `URL import queued for secure retrieval: ${input.input.sourceUrl ?? ""}`,
+    ...(input.filename ? { filename: input.filename } : {}),
+  });
+  if (document.duplicate && document.updateId) {
+    const existingUpdate = input.repository.getUpdate(document.updateId);
+    if (existingUpdate) {
+      return {
+        ok: true,
+        payload: {
+          documentId: document.id,
+          duplicate: true,
+          status: "analyzed",
+          update: existingUpdate,
+        },
+        status: 200,
+      };
+    }
+  }
+
+  if (!input.services?.analyzeImportedSource) {
+    return {
+      ok: true,
+      payload: {
+        documentId: document.id,
+        duplicate: document.duplicate,
+        status: document.status,
+        message:
+          "The source is saved locally and is waiting for the analysis service.",
+      },
+      status: 202,
+    };
+  }
+
+  const operationId = `source-analysis:${document.id}`;
+  if (input.activeOperations.has(operationId)) {
+    return {
+      ok: false,
+      error: {
+        code: "OPERATION_IN_PROGRESS",
+        message: "This source is already being analyzed.",
+      },
+      status: 409,
+    };
+  }
+  input.activeOperations.add(operationId);
+  try {
+    const analyzedUpdate = await input.services.analyzeImportedSource(
+      input.input,
+    );
+    const update = input.repository.persistAnalyzedUpdate(analyzedUpdate);
+    input.repository.markSourceDocumentAnalyzed(document.id, update.id);
+    return {
+      ok: true,
+      payload: {
+        documentId: document.id,
+        duplicate: document.duplicate,
+        status: "analyzed",
+        update,
+      },
+      status: 201,
+    };
+  } catch (error) {
+    input.repository.markSourceDocumentError(
+      document.id,
+      error instanceof Error ? error.message : "Unknown analysis error",
+    );
+    return {
+      ok: false,
+      error: {
+        code: "ANALYSIS_FAILED",
+        message: "The source was saved, but analysis failed.",
+      },
+      status: 502,
+    };
+  } finally {
+    input.activeOperations.delete(operationId);
+  }
+}
+
+function formText(formData: FormData, key: string): string {
+  const value = formData.get(key);
+  return typeof value === "string" ? value : "";
+}
 
 function normalizeHostname(value: string): string {
   return value.trim().toLowerCase().replace(/^\[|\]$/g, "");

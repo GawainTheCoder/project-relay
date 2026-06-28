@@ -24,7 +24,7 @@ export function TodayPage() {
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
 
   const briefClaims = useMemo(() => {
-    if (!data) {
+    if (!data?.brief) {
       return [];
     }
     const claims = data.updates.flatMap((update) => update.claims);
@@ -34,7 +34,7 @@ export function TodayPage() {
   }, [data]);
 
   const affectedImpacts = useMemo(() => {
-    if (!data) {
+    if (!data?.brief) {
       return [];
     }
     return data.brief.updateIds
@@ -63,9 +63,61 @@ export function TodayPage() {
       />
     );
   }
+  const brief = data.brief;
+  if (!brief) {
+    return (
+      <div className="relay-enter min-h-screen">
+        <header className="border-b border-relay-border px-5 py-5 sm:px-8 lg:px-10">
+          <div className="mx-auto max-w-[1100px]">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+              Personal workspace
+            </p>
+            <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
+              Today’s intelligence
+            </h1>
+          </div>
+        </header>
+        <main className="mx-auto max-w-[1100px] px-5 py-16 sm:px-8 lg:px-10 lg:py-24">
+          <section className="max-w-2xl border-l border-relay-border-strong pl-6">
+            <BookOpen
+              aria-hidden="true"
+              className="size-5 text-relay-subtle"
+            />
+            <h2 className="mt-5 text-2xl font-semibold tracking-tight">
+              {data.updates.length
+                ? "Your analysis is ready for synthesis"
+                : "Your workspace is ready"}
+            </h2>
+            <p className="mt-3 text-sm leading-7 text-relay-muted">
+              {data.updates.length
+                ? `Relay has ${data.updates.length} analyzed update${
+                    data.updates.length === 1 ? "" : "s"
+                  }. Generate a daily brief when you want the lead signal and supporting synthesis.`
+                : "Import a research file, public URL, or pasted note. Relay will analyze it, index the evidence locally, and build the first daily brief when you ask."}
+            </p>
+            <div className="mt-7 flex flex-wrap gap-3">
+              <Link
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0]"
+                to="/sources"
+              >
+                {data.updates.length ? "Generate daily brief" : "Import research"}
+                <ArrowRight aria-hidden="true" className="size-3.5" />
+              </Link>
+              <Link
+                className="inline-flex h-10 items-center rounded-md border border-relay-border px-4 text-sm text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
+                to="/search"
+              >
+                Open local search
+              </Link>
+            </div>
+          </section>
+        </main>
+      </div>
+    );
+  }
 
   const primaryUpdate = data.updates.find(
-    (update) => update.id === data.brief.updateIds[0],
+    (update) => update.id === brief.updateIds[0],
   );
 
   return (
@@ -75,7 +127,7 @@ export function TodayPage() {
           <div>
             <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
               <CalendarDays aria-hidden="true" className="size-3.5" />
-              {formatDate(data.brief.date, {
+              {formatDate(brief.date, {
                 weekday: "long",
                 month: "long",
                 day: "numeric",
@@ -88,7 +140,7 @@ export function TodayPage() {
           <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-subtle">
             {data.updates.length} updates monitored
             <span className="mx-2 text-relay-border-strong">·</span>
-            {data.brief.model ?? "Seed example"}
+            {brief.model ?? "Seed example"}
           </div>
         </div>
       </header>
@@ -101,10 +153,10 @@ export function TodayPage() {
               Most material signal
             </div>
             <h2 className="mt-4 max-w-3xl text-3xl font-semibold leading-[1.15] tracking-[-0.025em] sm:text-4xl">
-              {data.brief.title}
+              {brief.title}
             </h2>
             <p className="mt-5 max-w-3xl text-base leading-8 text-relay-muted sm:text-lg">
-              {data.brief.signal}
+              {brief.signal}
             </p>
 
             <div className="mt-8 border-y border-relay-border py-7">
@@ -116,7 +168,7 @@ export function TodayPage() {
                 <div>
                   <h3 className="text-sm font-semibold">Analyst synthesis</h3>
                   <p className="mt-3 max-w-3xl text-[15px] leading-7 text-relay-text/90">
-                    {data.brief.summary}
+                    {brief.summary}
                   </p>
                 </div>
               </div>
@@ -153,14 +205,14 @@ export function TodayPage() {
                   </p>
                 </div>
                 <span className="font-mono text-[10px] text-relay-subtle">
-                  {data.brief.secondarySignals.length}
+                  {brief.secondarySignals.length}
                 </span>
               </div>
-              {data.brief.secondarySignals.length ? (
+              {brief.secondarySignals.length ? (
                 <ol className="divide-y divide-relay-border">
-                  {data.brief.secondarySignals.map((signal, index) => {
+                  {brief.secondarySignals.map((signal, index) => {
                     const relatedUpdate = data.updates.find(
-                      (update) => update.id === data.brief.updateIds[index + 1],
+                      (update) => update.id === brief.updateIds[index + 1],
                     );
                     return (
                       <li

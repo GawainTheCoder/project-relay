@@ -35,3 +35,9 @@ export {
   type UrlIngestionInput,
   type UrlIngestionOptions,
 } from "./url.js";
+export {
+  extractResearchFile,
+  isSupportedResearchFilename,
+  MAX_RESEARCH_FILE_BYTES,
+  researchFileAccept,
+} from "./file.js";

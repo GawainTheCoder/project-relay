@@ -8,13 +8,13 @@ import {
 
 import type {
   DashboardPayload,
-  ReviewDecision,
+  ImpactReviewInput,
 } from "../../shared/contracts";
 import {
-  decideUpdate,
   generateBrief,
   getDashboard,
   refreshSources,
+  reviewImpact,
 } from "../lib/api";
 import { DashboardContext } from "./dashboard-context";
 
@@ -63,21 +63,21 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     await loadDashboard();
   }, [loadDashboard]);
 
-  const decideImpact = useCallback(
-    async (
-      updateId: string,
-      decision: Exclude<ReviewDecision, "proposed">,
-    ) => {
-      const updated = await decideUpdate(updateId, { decision });
+  const reviewThesisImpact = useCallback(
+    async (impactId: string, input: ImpactReviewInput) => {
+      const review = await reviewImpact(impactId, input);
       setData((current) => {
         if (!current) {
           return current;
         }
         return {
           ...current,
-          updates: current.updates.map((update) =>
-            update.id === updated.id ? updated : update,
-          ),
+          updates: current.updates.map((update) => ({
+            ...update,
+            thesisImpacts: update.thesisImpacts.map((impact) =>
+              impact.id === impactId ? { ...impact, review } : impact,
+            ),
+          })),
         };
       });
     },
@@ -101,13 +101,13 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       error,
       isLoading,
       reload,
-      decideImpact,
+      reviewThesisImpact,
       refreshAllSources,
       regenerateBrief,
     }),
     [
       data,
-      decideImpact,
+      reviewThesisImpact,
       error,
       isLoading,
       regenerateBrief,

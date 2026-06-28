@@ -119,7 +119,13 @@ export async function refreshPublicSources(
 export async function generateDailyBrief(
   repository: RelayRepository,
 ): Promise<DailyBrief> {
-  return synthesizeDailyBrief(repository.listUpdates(30));
+  const updates = repository.listUpdates(30);
+  if (!updates.length) {
+    throw new Error(
+      "Import and analyze at least one source before generating a brief.",
+    );
+  }
+  return synthesizeDailyBrief(updates);
 }
 
 function refreshLimit(): number {

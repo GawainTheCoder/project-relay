@@ -1,21 +1,45 @@
-import { Building2, FileText, Layers3, Search, X } from "lucide-react";
+import {
+  BookOpenText,
+  Building2,
+  FileSearch,
+  FileText,
+  Layers3,
+  LoaderCircle,
+  Quote,
+  Search,
+  X,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import type {
+  SearchResult as PersistedSearchResult,
+  SearchResultType,
+} from "../../shared/contracts";
 import { useDashboard } from "../context/useDashboard";
 import { getLayerName } from "../lib/format";
+import { searchRelay } from "../lib/api";
 
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-type SearchResult = {
+type PaletteResult = {
   description: string;
   href: string;
   icon: typeof Search;
   key: string;
   label: string;
+  meta?: string;
+};
+
+const persistedIcons: Record<SearchResultType, typeof Search> = {
+  brief: BookOpenText,
+  company: Building2,
+  document: FileSearch,
+  evidence: Quote,
+  update: FileText,
 };
 
 export function CommandPalette({
@@ -23,23 +47,66 @@ export function CommandPalette({
   onClose,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
+  const [remoteState, setRemoteState] = useState<{
+    query: string;
+    results: PersistedSearchResult[];
+  }>({ query: "", results: [] });
+  const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const { data } = useDashboard();
+  const cleanQuery = query.trim();
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
-    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    const frame = window.requestAnimationFrame(() => {
+      setQuery("");
+      setRemoteState({ query: "", results: [] });
+      inputRef.current?.focus();
+    });
     return () => window.cancelAnimationFrame(frame);
   }, [isOpen]);
 
-  const results = useMemo(() => {
+  useEffect(() => {
+    if (!isOpen || cleanQuery.length < 2) {
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setIsSearching(true);
+      void searchRelay(cleanQuery, {
+        limit: 10,
+        signal: controller.signal,
+      })
+        .then((response) =>
+          setRemoteState({ query: cleanQuery, results: response.results }),
+        )
+        .catch((error: unknown) => {
+          if (
+            !(error instanceof DOMException && error.name === "AbortError")
+          ) {
+            setRemoteState({ query: cleanQuery, results: [] });
+          }
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) {
+            setIsSearching(false);
+          }
+        });
+    }, 160);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [cleanQuery, isOpen]);
+
+  const localResults = useMemo(() => {
     if (!data) {
       return [];
     }
-    const entries: SearchResult[] = [
+    const entries: PaletteResult[] = [
       ...data.companies.map((company) => ({
         key: `company-${company.ticker}`,
         label: `${company.ticker} · ${company.name}`,
@@ -62,18 +129,20 @@ export function CommandPalette({
         icon: Layers3,
       })),
     ];
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return entries.slice(0, 8);
-    }
-    return entries
-      .filter(
-        (entry) =>
-          entry.label.toLowerCase().includes(normalized) ||
-          entry.description.toLowerCase().includes(normalized),
-      )
-      .slice(0, 10);
-  }, [data, query]);
+    return entries.slice(0, 8);
+  }, [data]);
+
+  const results: PaletteResult[] =
+    cleanQuery.length >= 2
+      ? (remoteState.query === cleanQuery ? remoteState.results : []).map((result) => ({
+          key: `${result.type}-${result.id}`,
+          label: result.title,
+          description: result.snippet || result.subtitle,
+          href: result.href,
+          icon: persistedIcons[result.type],
+          meta: result.matchedField,
+        }))
+      : localResults;
 
   if (!isOpen) {
     return null;
@@ -98,22 +167,34 @@ export function CommandPalette({
     >
       <div className="mx-auto w-full max-w-2xl overflow-hidden rounded-lg border border-relay-border-strong bg-relay-surface shadow-2xl shadow-black/50">
         <div className="flex items-center gap-3 border-b border-relay-border px-4">
-          <Search
-            aria-hidden="true"
-            className="size-4 shrink-0 text-relay-muted"
-          />
+          {cleanQuery.length >= 2 && isSearching ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-4 shrink-0 animate-spin text-relay-accent"
+            />
+          ) : (
+            <Search
+              aria-hidden="true"
+              className="size-4 shrink-0 text-relay-muted"
+            />
+          )}
           <input
             className="h-14 min-w-0 flex-1 bg-transparent text-sm text-relay-text placeholder:text-relay-subtle"
+            maxLength={120}
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 onClose();
               }
-              if (event.key === "Enter" && results[0]) {
-                choose(results[0].href);
+              if (event.key === "Enter") {
+                if (results[0]) {
+                  choose(results[0].href);
+                } else if (cleanQuery.length >= 2) {
+                  choose(`/search?q=${encodeURIComponent(cleanQuery)}`);
+                }
               }
             }}
-            placeholder="Search companies, updates, and stack layers"
+            placeholder="Search documents, evidence, companies, and updates"
             ref={inputRef}
             value={query}
           />
@@ -141,7 +222,7 @@ export function CommandPalette({
                     aria-hidden="true"
                     className="mt-0.5 size-4 shrink-0 text-relay-subtle group-hover:text-relay-accent"
                   />
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-relay-text">
                       {result.label}
                     </span>
@@ -149,18 +230,34 @@ export function CommandPalette({
                       {result.description}
                     </span>
                   </span>
+                  {result.meta ? (
+                    <span className="font-mono text-[9px] uppercase text-relay-subtle">
+                      {result.meta}
+                    </span>
+                  ) : null}
                 </button>
               );
             })
           ) : (
             <p className="px-3 py-10 text-center text-sm text-relay-muted">
-              No matching intelligence.
+              {cleanQuery.length >= 2 && isSearching
+                ? "Searching local intelligence…"
+                : "No matches."}
             </p>
           )}
         </div>
         <div className="flex items-center justify-between border-t border-relay-border px-4 py-2 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
-          <span>Enter to open</span>
-          <span>Esc to close</span>
+          <button
+            className="text-relay-muted hover:text-relay-accent disabled:opacity-40"
+            disabled={cleanQuery.length < 2}
+            onClick={() =>
+              choose(`/search?q=${encodeURIComponent(cleanQuery)}`)
+            }
+            type="button"
+          >
+            View all results
+          </button>
+          <span>Enter to open · Esc to close</span>
         </div>
       </div>
     </div>

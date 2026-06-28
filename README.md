@@ -59,14 +59,14 @@ The repository contains a working local-first application:
   source evidence.
 - **Updates** provides a filterable research console with grounded summaries,
   materiality, beneficiaries, threats, next signals, exact quotes, and a
-  human-review decision.
+  per-company review decision with structured feedback.
 - **Stack** visualizes layer dependencies and watchlist exposure.
 - **Companies** provides thesis cards and company detail pages with confirmation
   signals, break conditions, metrics, and linked evidence.
-- **Sources** imports authorized research, refreshes enabled public feeds, shows
-  ingestion health, and generates a new daily brief.
-- **Search** opens with `Cmd+K` or `Ctrl+K` and searches the currently loaded
-  companies, updates, and stack layers.
+- **Sources** imports authorized text, HTML, Markdown, and PDF research,
+  refreshes public feeds, exports review examples, and generates daily briefs.
+- **Search** has a dedicated route and a `Cmd+K` / `Ctrl+K` palette. It searches
+  persisted documents, evidence, updates, briefs, theses, and watch metrics.
 
 The responsive dark interface uses a collapsible desktop navigation rail and
 drawer-based inspectors on narrower screens.
@@ -75,12 +75,12 @@ drawer-based inspectors on narrower screens.
 
 ```mermaid
 flowchart TD
-    INPUT["Manual text, public URL, RSS, or Atom"] --> NORMALIZE["Normalize and deduplicate"]
+    INPUT["Local file, manual text, public URL, RSS, or Atom"] --> NORMALIZE["Normalize and deduplicate"]
     NORMALIZE --> ANALYZE["Structured OpenAI analysis"]
     ANALYZE --> VERIFY["Validate exact quotes against source paragraphs"]
     VERIFY --> STORE[("Local SQLite")]
     STORE --> REVIEW["Review update and proposed thesis impact"]
-    REVIEW --> DECISION["Accept change or record no thesis change"]
+    REVIEW --> DECISION["Accept, reject, or defer with reason tags"]
     STORE --> SYNTHESIS["Generate selective daily brief"]
     SYNTHESIS --> STORE
 ```
@@ -94,7 +94,9 @@ For live imports, Relay separates:
    threatened, and what to watch next.
 4. **Assessment** — materiality and sentiment, with confidence and time horizon
    on proposed company impacts.
-5. **Review state** — proposed impacts stay proposed until accepted or rejected.
+5. **Review state** — each proposed company impact can be accepted, rejected,
+   or deferred with reason tags and a note. Relay snapshots the reviewed
+   analysis and evidence as a stable evaluation example.
 
 An accepted decision records approval on the proposed impact. It does not
 silently rewrite the underlying company thesis.
@@ -106,6 +108,8 @@ silently rewrite the underlying company thesis.
 - **Manual text:** paste an article, transcript, filing excerpt, research note,
   or other text you are authorized to process. Content is limited to 250,000
   characters.
+- **Local files:** upload UTF-8 text, Markdown, HTML, or a text-based PDF up to
+  10 MB. Scanned image-only PDFs must be OCR'd before import.
 - **Manual public URL:** Relay fetches public HTML or plain text, extracts the
   readable article body, and analyzes it. Title and publisher are still required
   in the current import form.
@@ -126,21 +130,28 @@ documents are deduplicated using their canonical URL and content hash.
 ### Not automated
 
 Investor-relations pages and SEC EDGAR appear in the source catalog as planned
-or manual sources, but Relay does not automatically crawl them. Import their
-public pages or authorized text manually. There is no automated PDF parser,
-file upload, authenticated/paywalled scraper, earnings-call adapter, SEC filing
-adapter, or GitHub API integration. GitHub releases currently arrive through
-public Atom feeds only.
+or manual sources, but Relay does not automatically crawl them. Import a public
+URL, local PDF, or authorized text and label it as an earnings release, SEC
+filing, transcript, paper, technical release, or other research. There is no
+authenticated/paywalled scraper, automated earnings-call adapter, SEC filing
+crawler, OCR pipeline, or GitHub API integration. GitHub releases currently
+arrive through public Atom feeds only.
 
 Relay never bypasses a paywall or access control. If you import paid research,
 you are responsible for having the right to process it and for keeping it
 private.
 
-## Demo data and live data
+## Personal mode and demo data
 
-A new database is seeded with the ten-layer map, 13 watchlist companies, source
-catalog entries, seven example updates, and one example daily brief so every
-screen is immediately usable.
+Relay starts as a clean personal workspace. A new database contains the
+ten-layer map, 13 watchlist companies, and source definitions, but no fabricated
+updates or daily brief. Import research to create the first update.
+
+Set `RELAY_DEMO_DATA=true` only when you want the seven example updates and
+example brief for UI exploration. Switching it back to `false` removes only
+the known fixture updates, the fixture brief, and any generated brief that
+references a fixture update. Personal imports, generated updates, and briefs
+that do not rely on fixture evidence are preserved.
 
 Seed records are product fixtures, not a live market-data feed:
 
@@ -148,9 +159,9 @@ Seed records are product fixtures, not a live market-data feed:
   **Seed data** in the interface.
 - Example quotes and conclusions have not been independently verified and must
   not be treated as current research.
-- Live imports store the configured OpenAI model name and coexist with the seed
+- Live imports store the configured OpenAI model name and can coexist with demo
   records.
-- Seed records are inserted only when their IDs are absent; restarting Relay
+- Demo records are inserted only when their IDs are absent; restarting Relay
   does not erase imports or review decisions.
 
 Because seed and live records coexist, the seed-data banner remains visible
@@ -163,7 +174,8 @@ while any seed update is present.
 - Hono on the Node.js HTTP server
 - Node's built-in SQLite driver in WAL mode
 - OpenAI Responses API with strict Zod structured outputs
-- Mozilla Readability, RSS/Atom parsing, and hardened remote fetching
+- Mozilla Readability, `pdf-parse`, RSS/Atom parsing, and hardened remote
+  fetching
 - Vitest and ESLint
 
 The application is one TypeScript project. Client routes live under
@@ -187,15 +199,17 @@ cp .env.example .env
 Set `OPENAI_API_KEY` in `.env`, then start both the Vite client and Hono API:
 
 ```bash
+chmod 600 .env
 npm run dev
 ```
 
 Open `http://127.0.0.1:5173`. The API runs at
 `http://127.0.0.1:8787` and Vite proxies `/api` during development.
 
-Without a valid API key, the seeded dashboard still works, but source analysis,
-feed refresh analysis, and brief generation will fail. Import metadata and
-content may still be saved locally before an analysis failure is reported.
+Without a valid API key, the catalog and local search still work, but source
+analysis, feed refresh analysis, and brief generation will fail. Import
+metadata and content may still be saved locally before an analysis failure is
+reported.
 
 To build and run the production bundle locally:
 
@@ -219,6 +233,7 @@ The production server serves both the API and the built client from
 | `RELAY_ALLOWED_HOSTS` | `127.0.0.1,localhost,::1` | Comma-separated API request-host allowlist. This is not authentication. |
 | `RELAY_REFRESH_MAX_ITEMS` | `4` | Maximum feed entries analyzed per manual refresh; clamped to 1–12. |
 | `RELAY_DATABASE_PATH` | `data/relay.sqlite` | Optional path for the local SQLite database. |
+| `RELAY_DEMO_DATA` | `false` | Set to `true` to load clearly labeled demo updates and a demo brief. |
 
 Both OpenAI requests use `store: false`. Source content still leaves the local
 machine when Relay sends it to the configured OpenAI model, so do not process
@@ -229,6 +244,7 @@ material whose license or sensitivity prohibits that use.
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Run client and API in watch mode. |
+| `npm run backup` | Create a verified, owner-only SQLite snapshot under `backups/relay`. |
 | `npm run dev:web` | Run only the Vite client. |
 | `npm run dev:api` | Run only the API in watch mode. |
 | `npm run test` | Run the Vitest suite once. |
@@ -246,18 +262,19 @@ source text, generated analysis, review decisions, and generated briefs are
 persisted there and ignored by Git. Database files are restricted to the current
 OS user where the filesystem supports Unix permissions.
 
-For a consistent file-level backup, stop Relay and copy all SQLite files:
+Create a consistent backup while Relay is running or stopped:
 
 ```bash
-mkdir -p backups/relay
-cp data/relay.sqlite* backups/relay/
+npm run backup
 ```
 
-Keep backups private and untracked. Restore only while Relay is stopped, and
-restore the database together with any matching WAL/SHM files from the same
-snapshot.
+The command uses SQLite's online backup API, verifies the snapshot with
+`PRAGMA integrity_check`, writes it with owner-only permissions, and never
+overwrites an existing destination. Backups are private and ignored by Git.
+To restore, stop Relay, replace `data/relay.sqlite` with one snapshot, and
+remove stale `-wal` and `-shm` files before restarting.
 
-To intentionally reset all local research and return to the seed catalog, stop
+To intentionally reset all local research and return to the reference catalog, stop
 Relay and run:
 
 ```bash
@@ -265,8 +282,9 @@ rm -f data/relay.sqlite data/relay.sqlite-wal data/relay.sqlite-shm
 npm run dev
 ```
 
-The next server start recreates the schema and demo records. There is no in-app
-backup, restore, export, or reset control.
+The next server start recreates the schema and reference catalog. Demo updates
+are added only when `RELAY_DEMO_DATA=true`. There is no in-app restore or reset
+control.
 
 ## Security boundary
 
@@ -279,8 +297,10 @@ backup, restore, export, or reset control.
   reserved destinations, revalidates redirects, pins the validated public IP,
   limits redirects, body size, content type, and request duration, and reduces
   SSRF and DNS-rebinding risk.
-- API request bodies are size-limited. The server applies a restrictive content
-  security policy and other secure response headers.
+- API request bodies are size-limited, including a dedicated 10 MB file ceiling.
+  Uploaded files are parsed in memory and never written using user-controlled
+  filenames. The server applies a restrictive content security policy and
+  other secure response headers.
 - `.env`, credentials, databases, imported documents, and local analysis are
   ignored by Git. CI uses read-only repository permissions, and Dependabot
   monitors npm and GitHub Actions dependencies.
@@ -297,19 +317,19 @@ material that cannot be redistributed.
   automatically fetch each linked full article.
 - Sources are defined in code. The UI cannot add, edit, enable, or disable feed
   definitions.
-- PDF ingestion, local file upload, authenticated sources, and automated
-  investor-relations or SEC ingestion are not implemented.
+- Authenticated sources, OCR, and automated investor-relations or SEC ingestion
+  are not implemented.
 - Company theses and the watchlist are seeded in code and are read-only in the
   UI. Accepting an impact changes its review state; it does not update the
   company thesis or create a thesis-revision history.
-- Review decisions apply to all proposed impacts attached to the selected
-  update.
-- Search is client-side over the loaded dashboard payload, not a persisted
-  full-text index.
+- Reviews apply to one proposed company impact at a time. Relay exports reviewed
+  examples as JSON but does not yet use them to tune prompts automatically.
+- Search is persisted and local, but currently uses ranked, escaped SQLite
+  `LIKE` queries rather than an FTS index or semantic embeddings.
 - Deduplication catches exact normalized URL/content matches, not every
   syndicated or semantically equivalent report.
 - There is no multi-user access, cloud sync, notification system, portfolio
-  accounting, market-price data, or automated backup.
+  accounting, market-price data, or scheduled backup.
 - Model availability, latency, output quality, and API cost depend on the
   configured OpenAI account and selected models.
 

@@ -3,6 +3,7 @@ import {
   FileText,
   Link2,
   LoaderCircle,
+  Upload,
   X,
 } from "lucide-react";
 import {
@@ -12,8 +13,11 @@ import {
   useState,
 } from "react";
 
-import type { ImportSourceInput } from "../../../shared/contracts";
-import { importSource } from "../../lib/api";
+import type {
+  ImportSourceInput,
+  SourceKind,
+} from "../../../shared/contracts";
+import { importSource, importSourceFile } from "../../lib/api";
 import { Button } from "../../components/ui/Button";
 
 interface ImportSourceDialogProps {
@@ -31,10 +35,13 @@ export function ImportSourceDialog({
   const [publisher, setPublisher] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [content, setContent] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [sourceKind, setSourceKind] = useState<SourceKind>("other");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -70,8 +77,10 @@ export function ImportSourceDialog({
       setError("Title and publisher are required.");
       return;
     }
-    if (!cleanUrl && cleanContent.length < 20) {
-      setError("Add a source URL or at least 20 characters of source text.");
+    if (!file && !cleanUrl && cleanContent.length < 20) {
+      setError(
+        "Choose a file, add a source URL, or paste at least 20 characters.",
+      );
       return;
     }
 
@@ -80,11 +89,19 @@ export function ImportSourceDialog({
       publisher: cleanPublisher,
       ...(cleanUrl ? { sourceUrl: cleanUrl } : {}),
       ...(cleanContent ? { content: cleanContent } : {}),
+      sourceKind,
     };
 
     setIsSubmitting(true);
     try {
-      const result = await importSource(input);
+      const result = file
+        ? await importSourceFile({
+            file,
+            publisher: cleanPublisher,
+            sourceKind,
+            title: cleanTitle,
+          })
+        : await importSource(input);
       setSuccess(
         result.duplicate
           ? "This source was already in Relay. The existing analysis was kept."
@@ -97,6 +114,11 @@ export function ImportSourceDialog({
       setPublisher("");
       setSourceUrl("");
       setContent("");
+      setFile(null);
+      setSourceKind("other");
+      if (fileRef.current) {
+        fileRef.current.value = "";
+      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
@@ -130,7 +152,7 @@ export function ImportSourceDialog({
               Import research
             </h2>
             <p className="mt-1 text-sm text-relay-muted">
-              Add a URL or paste research you are authorized to use.
+              Add a file, URL, or text you are authorized to use.
             </p>
           </div>
           <button
@@ -175,6 +197,52 @@ export function ImportSourceDialog({
             </div>
 
             <label className="block">
+              <span className="text-xs font-medium text-relay-muted">
+                Source type
+              </span>
+              <select
+                className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm text-relay-text focus:border-relay-accent"
+                onChange={(event) =>
+                  setSourceKind(event.target.value as SourceKind)
+                }
+                value={sourceKind}
+              >
+                <option value="other">Article or research note</option>
+                <option value="earnings-release">Earnings release</option>
+                <option value="sec-filing">SEC filing</option>
+                <option value="transcript">Transcript</option>
+                <option value="paper">Paper</option>
+                <option value="technical">Technical release</option>
+              </select>
+            </label>
+
+            <label className="block rounded-md border border-dashed border-relay-border-strong bg-relay-deep p-4 transition-colors hover:border-relay-accent/60">
+              <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
+                <Upload aria-hidden="true" className="size-3.5" />
+                Local research file
+              </span>
+              <input
+                accept=".pdf,.txt,.md,.html,.htm"
+                className="mt-3 block w-full text-xs text-relay-muted file:mr-3 file:rounded file:border-0 file:bg-relay-raised file:px-3 file:py-2 file:text-xs file:text-relay-text"
+                onChange={(event) => {
+                  const nextFile = event.target.files?.[0] ?? null;
+                  setFile(nextFile);
+                  if (nextFile && !title.trim()) {
+                    setTitle(
+                      nextFile.name.replace(/\.(pdf|txt|md|html?|htm)$/i, ""),
+                    );
+                  }
+                }}
+                ref={fileRef}
+                type="file"
+              />
+              <span className="mt-2 block text-[10px] leading-4 text-relay-subtle">
+                PDF, text, Markdown, or HTML · 10 MB max · scanned PDFs need
+                OCR first
+              </span>
+            </label>
+
+            <label className="block">
               <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
                 <Link2 aria-hidden="true" className="size-3.5" />
                 Source URL
@@ -190,7 +258,7 @@ export function ImportSourceDialog({
 
             <div className="flex items-center gap-3 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
               <span className="h-px flex-1 bg-relay-border" />
-              Or paste text
+              Or paste text directly
               <span className="h-px flex-1 bg-relay-border" />
             </div>
 

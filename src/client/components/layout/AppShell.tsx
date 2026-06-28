@@ -18,6 +18,7 @@ import { useDashboard } from "../../context/useDashboard";
 
 const primaryNavigation = [
   { label: "Today", href: "/", icon: Sun, end: true },
+  { label: "Search", href: "/search", icon: Search, end: false },
   { label: "Updates", href: "/updates", icon: Bell, end: false },
   { label: "Stack", href: "/stack", icon: Layers3, end: false },
   { label: "Companies", href: "/companies", icon: Building2, end: false },
@@ -29,9 +30,7 @@ export function AppShell() {
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const { data } = useDashboard();
-  const isSeedData =
-    data?.brief.model === null ||
-    data?.updates.some((update) => update.model === null);
+  const isSeedData = data?.demoData ?? false;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

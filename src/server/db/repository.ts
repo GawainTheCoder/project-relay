@@ -7,17 +7,24 @@ import type {
   Company,
   DailyBrief,
   DashboardPayload,
+  ImpactReview,
   IntelligenceUpdate,
   ResearchSource,
+  SourceKind,
   StackLayer,
 } from "../../shared/contracts.js";
 
-import { seedDatabase } from "../seeds/index.js";
+import {
+  clearDemoData,
+  demoBriefId,
+  demoUpdateIds,
+  seedDatabase,
+} from "../seeds/index.js";
 import { migrateDatabase } from "./schema.js";
 import { canonicalizeUrl } from "../ingestion/normalize.js";
 
 interface CatalogSeed {
-  brief: DailyBrief;
+  brief?: DailyBrief;
   companies: Company[];
   layers: StackLayer[];
   sources: ResearchSource[];
@@ -31,6 +38,8 @@ export interface SourceDocumentInput {
   publishedAt?: string;
   content: string;
   researchSourceId?: string;
+  sourceKind?: SourceKind;
+  filename?: string;
 }
 
 export interface SourceDocumentRecord {
@@ -159,13 +168,15 @@ export class RelayRepository {
         this.persistAnalyzedUpdate(update);
       }
     });
-    const existingBriefForSeedDate = row(
-      this.database
-        .prepare("SELECT id FROM daily_briefs WHERE date = ? LIMIT 1")
-        .get(catalog.brief.date),
-    );
-    if (!existingBriefForSeedDate) {
-      this.persistDailyBrief(catalog.brief);
+    if (catalog.brief) {
+      const existingBriefForSeedDate = row(
+        this.database
+          .prepare("SELECT id FROM daily_briefs WHERE date = ? LIMIT 1")
+          .get(catalog.brief.date),
+      );
+      if (!existingBriefForSeedDate) {
+        this.persistDailyBrief(catalog.brief);
+      }
     }
   }
 
@@ -175,22 +186,42 @@ export class RelayRepository {
         .prepare("SELECT id FROM daily_briefs ORDER BY date DESC, generated_at DESC LIMIT 1")
         .get(),
     );
-    if (!briefRow) {
-      throw new Error("Relay has no daily brief. Seed or generate one first.");
-    }
-
-    const brief = this.getBrief(text(briefRow, "id"));
-    if (!brief) {
-      throw new Error("Latest daily brief could not be loaded.");
-    }
+    const brief = briefRow ? this.getBrief(text(briefRow, "id")) : null;
+    const updates = this.listUpdates();
 
     return {
       brief,
-      updates: this.listUpdates(),
+      updates,
       layers: this.listLayers(),
       companies: this.listCompanies(),
       sources: this.listSources(),
+      demoData:
+        brief?.id === demoBriefId ||
+        updates.some((update) => demoUpdateIds.includes(update.id)),
     };
+  }
+
+  clearDemoIntelligence(updateIds: string[], briefId: string): void {
+    this.withTransaction(() => {
+      this.database.prepare("DELETE FROM daily_briefs WHERE id = ?").run(briefId);
+      const deleteDerivedBrief = this.database.prepare(`
+        DELETE FROM daily_briefs
+        WHERE id IN (
+          SELECT brief_id FROM brief_updates WHERE update_id = ?
+        )
+      `);
+      const deleteUpdate = this.database.prepare(
+        "DELETE FROM intelligence_updates WHERE id = ?",
+      );
+      const deleteDemoReviews = this.database.prepare(
+        "DELETE FROM impact_reviews WHERE update_id = ?",
+      );
+      updateIds.forEach((updateId) => {
+        deleteDerivedBrief.run(updateId);
+        deleteDemoReviews.run(updateId);
+        deleteUpdate.run(updateId);
+      });
+    });
   }
 
   listLayers(): StackLayer[] {
@@ -304,6 +335,9 @@ export class RelayRepository {
         .prepare("SELECT * FROM thesis_impacts WHERE update_id = ? ORDER BY rowid")
         .all(id),
     );
+    const reviewStatement = this.database.prepare(
+      "SELECT * FROM impact_reviews WHERE impact_id = ?",
+    );
 
     return {
       id: text(updateRow, "id"),
@@ -335,24 +369,29 @@ export class RelayRepository {
         sourceId: text(claimRow, "source_id"),
         locator: text(claimRow, "locator"),
       })),
-      thesisImpacts: impactRows.map((impactRow) => ({
-        id: text(impactRow, "id"),
-        companyTicker: text(impactRow, "company_ticker"),
-        direction: text(
-          impactRow,
-          "direction",
-        ) as IntelligenceUpdate["thesisImpacts"][number]["direction"],
-        summary: text(impactRow, "summary"),
-        confidence: text(
-          impactRow,
-          "confidence",
-        ) as IntelligenceUpdate["thesisImpacts"][number]["confidence"],
-        horizon: text(impactRow, "horizon"),
-        decision: text(
-          impactRow,
-          "decision",
-        ) as IntelligenceUpdate["thesisImpacts"][number]["decision"],
-      })),
+      thesisImpacts: impactRows.map((impactRow) => {
+        const impactId = text(impactRow, "id");
+        const reviewRow = row(reviewStatement.get(impactId));
+        return {
+          id: impactId,
+          companyTicker: text(impactRow, "company_ticker"),
+          direction: text(
+            impactRow,
+            "direction",
+          ) as IntelligenceUpdate["thesisImpacts"][number]["direction"],
+          summary: text(impactRow, "summary"),
+          confidence: text(
+            impactRow,
+            "confidence",
+          ) as IntelligenceUpdate["thesisImpacts"][number]["confidence"],
+          horizon: text(impactRow, "horizon"),
+          decision: text(
+            impactRow,
+            "decision",
+          ) as IntelligenceUpdate["thesisImpacts"][number]["decision"],
+          review: reviewRow ? mapImpactReview(reviewRow) : null,
+        };
+      }),
       model: nullableText(updateRow, "model"),
     };
   }
@@ -509,19 +548,6 @@ export class RelayRepository {
     return persisted;
   }
 
-  decideUpdate(
-    id: string,
-    decision: "accepted" | "rejected",
-  ): IntelligenceUpdate | null {
-    const result = this.database
-      .prepare("UPDATE thesis_impacts SET decision = ? WHERE update_id = ?")
-      .run(decision, id);
-    if (result.changes === 0) {
-      return this.getUpdate(id);
-    }
-    return this.getUpdate(id);
-  }
-
   getBrief(id: string): DailyBrief | null {
     const briefRow = row(
       this.database.prepare("SELECT * FROM daily_briefs WHERE id = ?").get(id),
@@ -664,8 +690,8 @@ export class RelayRepository {
         .prepare(`
           INSERT INTO source_documents (
             id, title, publisher, source_url, published_at, content, content_hash,
-            analysis_status, ingested_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            analysis_status, ingested_at, source_kind, filename
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
         `)
         .run(
           id,
@@ -676,6 +702,8 @@ export class RelayRepository {
           input.content,
           contentHash,
           ingestedAt,
+          input.sourceKind ?? "other",
+          input.filename ?? null,
         );
       this.database
         .prepare(`
@@ -761,7 +789,7 @@ export class RelayRepository {
 export function createRelayRepository(
   databasePath = process.env.RELAY_DATABASE_PATH ??
     resolve(process.cwd(), "data", "relay.sqlite"),
-  options: { seed?: boolean } = {},
+  options: { seed?: boolean; demoData?: boolean } = {},
 ): RelayRepository {
   if (databasePath !== ":memory:") {
     mkdirSync(dirname(databasePath), { recursive: true });
@@ -774,7 +802,14 @@ export function createRelayRepository(
   database.exec("PRAGMA busy_timeout = 5000");
   const repository = new RelayRepository(database);
   if (options.seed ?? true) {
-    seedDatabase(repository);
+    const includeDemoData =
+      options.demoData ??
+      (process.env.NODE_ENV === "test" ||
+        process.env.RELAY_DEMO_DATA?.trim().toLowerCase() === "true");
+    seedDatabase(repository, { includeDemoData });
+    if (!includeDemoData) {
+      clearDemoData(repository);
+    }
   }
   if (databasePath !== ":memory:") {
     restrictDatabaseFiles(databasePath);
@@ -804,4 +839,23 @@ function sanitizeStoredError(message: string): string {
     )
     .replace(/[\r\n\t]+/g, " ")
     .slice(0, 1_000);
+}
+
+function mapImpactReview(reviewRow: SqlRow): ImpactReview {
+  return {
+    impactId: text(reviewRow, "impact_id"),
+    updateId: text(reviewRow, "update_id"),
+    companyTicker: text(reviewRow, "company_ticker"),
+    decision: text(
+      reviewRow,
+      "decision",
+    ) as ImpactReview["decision"],
+    reasonTags: parseJson<ImpactReview["reasonTags"]>(
+      reviewRow.reason_tags_json,
+      [],
+    ),
+    note: nullableText(reviewRow, "note"),
+    createdAt: text(reviewRow, "created_at"),
+    updatedAt: text(reviewRow, "updated_at"),
+  };
 }

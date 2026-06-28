@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import type { ReviewDecision } from "../../shared/contracts";
+import type { ImpactReviewInput } from "../../shared/contracts";
 import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { useDashboard } from "../context/useDashboard";
 import { UpdateAnalysis } from "../features/updates/UpdateAnalysis";
@@ -12,7 +12,7 @@ import {
 import { ThesisDecisionPanel } from "../features/updates/ThesisDecisionPanel";
 
 export function UpdatesPage() {
-  const { data, decideImpact, error, isLoading, reload } = useDashboard();
+  const { data, error, isLoading, reload, reviewThesisImpact } = useDashboard();
   const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = useState<UpdateFilter>("all");
   const [query, setQuery] = useState("");
@@ -103,18 +103,10 @@ export function UpdatesPage() {
           selectUpdate(previous.id);
         }
       }
-      if (event.key.toLowerCase() === "a") {
-        event.preventDefault();
-        void decideImpact(selectedUpdate.id, "accepted");
-      }
-      if (event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        void decideImpact(selectedUpdate.id, "rejected");
-      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [decideImpact, filteredUpdates, selectUpdate, selectedUpdate]);
+  }, [filteredUpdates, selectUpdate, selectedUpdate]);
 
   if (isLoading) {
     return <PageLoading label="Loading research console" />;
@@ -128,13 +120,11 @@ export function UpdatesPage() {
     );
   }
 
-  const handleDecide = async (
-    decision: Exclude<ReviewDecision, "proposed">,
+  const handleReview = async (
+    impactId: string,
+    input: ImpactReviewInput,
   ) => {
-    if (!selectedUpdate) {
-      return;
-    }
-    await decideImpact(selectedUpdate.id, decision);
+    await reviewThesisImpact(impactId, input);
   };
 
   return (
@@ -190,7 +180,7 @@ export function UpdatesPage() {
         {selectedUpdate ? (
           <div className="hidden min-h-0 xl:block">
             <ThesisDecisionPanel
-              onDecide={handleDecide}
+              onReview={handleReview}
               selectedClaimId={selectedClaimId}
               update={selectedUpdate}
             />
@@ -209,7 +199,7 @@ export function UpdatesPage() {
           <div className="relative h-full w-full max-w-[390px]">
             <ThesisDecisionPanel
               onClose={() => setIsInspectorOpen(false)}
-              onDecide={handleDecide}
+              onReview={handleReview}
               selectedClaimId={selectedClaimId}
               update={selectedUpdate}
             />

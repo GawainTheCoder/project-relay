@@ -13,6 +13,7 @@ coverage/
 # Local application data
 data/*
 !data/.gitkeep
+backups/
 *.db
 *.db-*
 *.sqlite
