@@ -15,6 +15,11 @@ export type LayerId = (typeof layerIds)[number];
 export type Sentiment = "bullish" | "bearish" | "neutral" | "not-material";
 export type Materiality = "high" | "medium" | "low" | "not-material";
 export type Confidence = "high" | "medium" | "low";
+export type SignalNovelty =
+  | "new"
+  | "confirmation"
+  | "contradiction"
+  | "repetition";
 export type ReviewDecision = "proposed" | "accepted" | "rejected";
 export const impactReviewDecisions = [
   "accepted",
@@ -34,7 +39,6 @@ export const impactReviewReasonTags = [
 export type ImpactReviewReasonTag = (typeof impactReviewReasonTags)[number];
 export type SourceKind =
   | "earnings-release"
-  | "sec-filing"
   | "transcript"
   | "paper"
   | "technical"
@@ -54,6 +58,7 @@ export interface ThesisImpact {
   summary: string;
   confidence: Confidence;
   horizon: string;
+  thesisDelta: string;
   decision: ReviewDecision;
   review?: ImpactReview | null;
 }
@@ -85,7 +90,6 @@ export interface ImpactReviewSummary {
 export type SearchResultType =
   | "brief"
   | "company"
-  | "document"
   | "evidence"
   | "update";
 
@@ -109,6 +113,8 @@ export interface IntelligenceUpdate {
   layerIds: LayerId[];
   companyTickers: string[];
   materiality: Materiality;
+  materialityReason: string;
+  novelty: SignalNovelty;
   sentiment: Sentiment;
   whatHappened: string;
   whyItMatters: string;

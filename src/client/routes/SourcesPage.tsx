@@ -2,39 +2,55 @@ import {
   AlertCircle,
   Check,
   Clock3,
-  Database,
-  Download,
   FilePlus2,
   LoaderCircle,
   RefreshCw,
+  Rss,
   Sparkles,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
-import type {
-  ImpactReviewSummary,
-  ResearchSource,
-} from "../../shared/contracts";
+import type { ResearchSource } from "../../shared/contracts";
 import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { Button } from "../components/ui/Button";
 import { useDashboard } from "../context/useDashboard";
 import { ImportSourceDialog } from "../features/sources/ImportSourceDialog";
 import { formatRelativeTime } from "../lib/format";
-import {
-  downloadReviewExport,
-  getReviewSummary,
-} from "../lib/api";
 
-type Action = "refresh" | "brief" | "export";
+type Action = "refresh" | "brief";
 
 const sourceTypeLabels: Record<ResearchSource["type"], string> = {
-  rss: "RSS",
-  "investor-relations": "Investor relations",
-  filing: "Filing",
-  paper: "Paper",
-  release: "Release",
-  manual: "Manual",
+  rss: "RSS feed",
+  "investor-relations": "Official company",
+  filing: "Company disclosure",
+  paper: "Research feed",
+  release: "Release feed",
+  manual: "On-demand source",
 };
+
+function SourceStatus({ source }: { source: ResearchSource }) {
+  const label = !source.enabled
+    ? "On demand"
+    : source.status === "ready"
+      ? "Ready"
+      : source.status === "syncing"
+        ? "Refreshing"
+        : "Needs attention";
+  const color = !source.enabled
+    ? "bg-relay-subtle"
+    : source.status === "ready"
+      ? "bg-relay-positive"
+      : source.status === "syncing"
+        ? "animate-pulse bg-relay-warning"
+        : "bg-relay-negative";
+
+  return (
+    <span className="inline-flex items-center gap-2 text-xs text-relay-muted">
+      <span aria-hidden="true" className={`size-2 rounded-full ${color}`} />
+      {label}
+    </span>
+  );
+}
 
 export function SourcesPage() {
   const {
@@ -49,20 +65,10 @@ export function SourcesPage() {
   const [activeAction, setActiveAction] = useState<Action | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [reviewSummary, setReviewSummary] =
-    useState<ImpactReviewSummary | null>(null);
   const closeImport = useCallback(() => setIsImportOpen(false), []);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void getReviewSummary(controller.signal)
-      .then(setReviewSummary)
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, []);
-
   if (isLoading) {
-    return <PageLoading label="Checking source health" />;
+    return <PageLoading label="Checking trusted sources" />;
   }
   if (error || !data) {
     return (
@@ -81,18 +87,17 @@ export function SourcesPage() {
       if (action === "refresh") {
         const result = await refreshAllSources();
         setActionMessage(
-          `Refresh complete: ${result.imported} imported, ${result.analyzed} analyzed${
+          `Refresh complete: ${result.imported} new, ${result.analyzed} analyzed${
             result.errors.length
-              ? `, ${result.errors.length} error${result.errors.length === 1 ? "" : "s"}`
+              ? `, ${result.errors.length} source error${result.errors.length === 1 ? "" : "s"}`
               : ""
           }.`,
         );
-      } else if (action === "brief") {
-        await regenerateBrief();
-        setActionMessage("Today’s brief was regenerated from current evidence.");
       } else {
-        await downloadReviewExport();
-        setActionMessage("Evaluation data was exported as a local JSON file.");
+        await regenerateBrief();
+        setActionMessage(
+          "Today’s brief was generated from thesis-changing signals.",
+        );
       }
     } catch (caughtError) {
       setActionError(
@@ -105,14 +110,11 @@ export function SourcesPage() {
     }
   };
 
-  const totalDocuments = data.sources.reduce(
-    (sum, source) => sum + source.documentCount,
-    0,
-  );
-  const healthySources = data.sources.filter(
-    (source) => source.enabled && source.status === "ready",
+  const enabledSources = data.sources.filter((source) => source.enabled);
+  const healthySources = enabledSources.filter(
+    (source) => source.status === "ready",
   ).length;
-  const enabledSources = data.sources.filter((source) => source.enabled).length;
+  const onDemandSources = data.sources.length - enabledSources.length;
 
   return (
     <div className="relay-enter min-h-screen">
@@ -120,10 +122,10 @@ export function SourcesPage() {
         <div className="mx-auto flex max-w-[1280px] flex-wrap items-end justify-between gap-4">
           <div>
             <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
-              Intake and provenance
+              High-signal intake
             </p>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              Sources
+              Trusted sources
             </h1>
           </div>
           <div className="flex w-full flex-wrap gap-2 sm:w-auto">
@@ -140,7 +142,7 @@ export function SourcesPage() {
               ) : (
                 <RefreshCw aria-hidden="true" className="size-3.5" />
               )}
-              Refresh public feeds
+              Refresh
             </Button>
             <Button
               className="flex-1 sm:flex-none"
@@ -158,29 +160,12 @@ export function SourcesPage() {
               Generate brief
             </Button>
             <Button
-              className="flex-1 sm:flex-none"
-              disabled={
-                activeAction !== null || (reviewSummary?.total ?? 0) === 0
-              }
-              onClick={() => void runAction("export")}
-            >
-              {activeAction === "export" ? (
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-3.5 animate-spin"
-                />
-              ) : (
-                <Download aria-hidden="true" className="size-3.5" />
-              )}
-              Export reviews
-            </Button>
-            <Button
               className="w-full sm:w-auto"
               onClick={() => setIsImportOpen(true)}
               variant="primary"
             >
               <FilePlus2 aria-hidden="true" className="size-3.5" />
-              Import research
+              Add signal
             </Button>
           </div>
         </div>
@@ -206,33 +191,36 @@ export function SourcesPage() {
           </div>
         ) : null}
 
-        <section className="grid gap-px overflow-hidden rounded-md border border-relay-border bg-relay-border sm:grid-cols-3">
+        <section
+          aria-label="Source health summary"
+          className="grid gap-px overflow-hidden rounded-md border border-relay-border bg-relay-border sm:grid-cols-3"
+        >
           <div className="bg-relay-surface p-5">
             <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-subtle">
-              Connected
+              Monitored
             </p>
             <p className="mt-2 text-2xl font-semibold">
-              {data.sources.length}
+              {enabledSources.length}
             </p>
-            <p className="mt-1 text-xs text-relay-muted">research sources</p>
+            <p className="mt-1 text-xs text-relay-muted">automated feeds</p>
           </div>
           <div className="bg-relay-surface p-5">
             <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-subtle">
-              Healthy
+              Ready
             </p>
             <p className="mt-2 text-2xl font-semibold text-relay-positive">
-              {healthySources}/{enabledSources}
+              {healthySources}/{enabledSources.length}
             </p>
-            <p className="mt-1 text-xs text-relay-muted">
-              enabled sources ready
-            </p>
+            <p className="mt-1 text-xs text-relay-muted">feeds available</p>
           </div>
           <div className="bg-relay-surface p-5">
             <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-subtle">
-              Corpus
+              On demand
             </p>
-            <p className="mt-2 text-2xl font-semibold">{totalDocuments}</p>
-            <p className="mt-1 text-xs text-relay-muted">source documents</p>
+            <p className="mt-2 text-2xl font-semibold">{onDemandSources}</p>
+            <p className="mt-1 text-xs text-relay-muted">
+              URL or excerpt sources
+            </p>
           </div>
         </section>
 
@@ -240,90 +228,39 @@ export function SourcesPage() {
           <div className="flex items-end justify-between border-b border-relay-border pb-3">
             <div>
               <h2 className="text-lg font-semibold tracking-tight">
-                Review dataset
+                Source health
               </h2>
               <p className="mt-1 text-sm text-relay-muted">
-                Your decisions become reusable local evaluation examples.
+                Specialist feeds, official company channels, and manual context.
               </p>
             </div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
-              JSON export
-            </span>
-          </div>
-          <div className="grid gap-px overflow-hidden border-b border-relay-border bg-relay-border sm:grid-cols-4">
-            {[
-              ["Reviewed", reviewSummary?.total ?? 0],
-              ["Accepted", reviewSummary?.byDecision.accepted ?? 0],
-              ["No change", reviewSummary?.byDecision.rejected ?? 0],
-              ["Deferred", reviewSummary?.byDecision.deferred ?? 0],
-            ].map(([label, value]) => (
-              <div className="bg-relay-bg py-4 pr-5" key={label}>
-                <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-                  {label}
-                </p>
-                <p className="mt-2 text-xl font-semibold">{value}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="mt-9">
-          <div className="flex items-end justify-between border-b border-relay-border pb-3">
-            <div>
-              <h2 className="text-lg font-semibold tracking-tight">
-                Ingestion health
-              </h2>
-              <p className="mt-1 text-sm text-relay-muted">
-                Public feeds and your manually imported research.
-              </p>
-            </div>
-            <Database
-              aria-hidden="true"
-              className="size-4 text-relay-subtle"
-            />
+            <Rss aria-hidden="true" className="size-4 text-relay-subtle" />
           </div>
 
           {data.sources.length ? (
             <div className="divide-y divide-relay-border">
               {data.sources.map((source) => (
                 <article
-                  className="grid gap-4 py-5 sm:grid-cols-[minmax(180px,1fr)_150px_120px_150px]"
+                  className="grid gap-4 py-5 sm:grid-cols-[minmax(220px,1fr)_150px_130px_150px]"
                   key={source.id}
                 >
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        aria-label={
-                          source.enabled ? source.status : "not automated"
-                        }
-                        className={`size-2 rounded-full ${
-                          !source.enabled
-                            ? "bg-relay-subtle"
-                            : source.status === "ready"
-                            ? "bg-relay-positive"
-                            : source.status === "syncing"
-                              ? "animate-pulse bg-relay-warning"
-                              : "bg-relay-negative"
-                        }`}
-                      />
-                      <h3 className="truncate text-sm font-medium">
-                        {source.name}
-                      </h3>
-                    </div>
+                    <h3 className="truncate text-sm font-medium">
+                      {source.name}
+                    </h3>
                     {source.url ? (
-                      <p className="mt-1 truncate pl-4 text-xs text-relay-subtle">
+                      <p className="mt-1 truncate text-xs text-relay-subtle">
                         {source.url}
                       </p>
-                    ) : null}
-                    {!source.enabled ? (
-                      <p className="mt-1 pl-4 font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle">
-                        Manual/planned · Not automated
+                    ) : (
+                      <p className="mt-1 text-xs text-relay-subtle">
+                        Add excerpts manually when permitted.
                       </p>
-                    ) : null}
+                    )}
                   </div>
                   <div>
                     <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-                      Type
+                      Source
                     </p>
                     <p className="mt-1 text-xs text-relay-muted">
                       {sourceTypeLabels[source.type]}
@@ -331,23 +268,23 @@ export function SourcesPage() {
                   </div>
                   <div>
                     <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-                      Documents
+                      Status
                     </p>
-                    <p className="mt-1 text-xs text-relay-muted">
-                      {source.documentCount}
-                    </p>
+                    <div className="mt-1">
+                      <SourceStatus source={source} />
+                    </div>
                   </div>
                   <div>
                     <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-                      Last sync
+                      Last checked
                     </p>
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-relay-muted">
                       <Clock3 aria-hidden="true" className="size-3" />
                       {!source.enabled
-                        ? "Not automated"
+                        ? "On demand"
                         : source.lastSyncedAt
-                        ? formatRelativeTime(source.lastSyncedAt)
-                        : "Not yet synced"}
+                          ? formatRelativeTime(source.lastSyncedAt)
+                          : "Not yet checked"}
                     </p>
                   </div>
                 </article>
@@ -356,18 +293,17 @@ export function SourcesPage() {
           ) : (
             <div className="grid min-h-52 place-items-center border-b border-relay-border text-center">
               <p className="text-sm text-relay-muted">
-                No sources are configured. Import research to begin.
+                No trusted sources are configured yet.
               </p>
             </div>
           )}
         </section>
 
         <section className="mt-10 border-l border-relay-border-strong pl-5">
-          <h2 className="text-sm font-semibold">Personal research boundary</h2>
+          <h2 className="text-sm font-semibold">Manual context boundary</h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-relay-muted">
-            Relay stores imported material locally for your analysis. Only add
-            paid research you are licensed to access, and do not redistribute
-            source content through the dashboard.
+            Paste only the excerpts you are authorized to process. Relay uses
+            them as private context and keeps the supporting evidence local.
           </p>
         </section>
       </main>

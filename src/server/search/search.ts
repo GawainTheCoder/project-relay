@@ -8,7 +8,6 @@ export const MAX_SEARCH_RESULT_LIMIT = 50;
 export type SearchResultType =
   | "brief"
   | "company"
-  | "document"
   | "evidence"
   | "update";
 
@@ -62,7 +61,6 @@ export class LocalSearchService {
     const candidates = [
       ...this.searchUpdates(query, tokens, candidateLimit),
       ...this.searchEvidence(query, tokens, candidateLimit),
-      ...this.searchDocuments(query, tokens, candidateLimit),
       ...this.searchCompanies(query, tokens, candidateLimit),
       ...this.searchBriefs(query, tokens, candidateLimit),
     ];
@@ -148,7 +146,7 @@ export class LocalSearchService {
         id: requiredText(updateRow, "id"),
         title: requiredText(updateRow, "title"),
         subtitle: requiredText(updateRow, "publisher"),
-        href: `/updates?update=${encodeURIComponent(requiredText(updateRow, "id"))}`,
+        href: `/signals?update=${encodeURIComponent(requiredText(updateRow, "id"))}`,
         fields,
         query,
         tokens,
@@ -200,57 +198,7 @@ export class LocalSearchService {
         id: requiredText(evidenceRow, "id"),
         title: `Evidence · ${requiredText(evidenceRow, "update_title")}`,
         subtitle: `${requiredText(evidenceRow, "publisher")} · ${requiredText(evidenceRow, "locator")}`,
-        href: `/updates?update=${encodeURIComponent(requiredText(evidenceRow, "update_id"))}`,
-        fields,
-        query,
-        tokens,
-      });
-    });
-  }
-
-  private searchDocuments(
-    query: string,
-    tokens: string[],
-    limit: number,
-  ): RankedSearchResult[] {
-    const searchableExpression = `
-      COALESCE(title, '') || ' ' ||
-      COALESCE(publisher, '') || ' ' ||
-      COALESCE(source_kind, '') || ' ' ||
-      COALESCE(filename, '') || ' ' ||
-      COALESCE(content, '')
-    `;
-    const documentRows = this.queryRows(
-      `
-        SELECT
-          id, title, publisher, content, analysis_status, update_id,
-          source_kind, filename
-        FROM source_documents
-        WHERE ${tokenWhere(searchableExpression, tokens)}
-        ORDER BY published_at DESC, ingested_at DESC
-        LIMIT ?
-      `,
-      [...toPatterns(tokens), limit],
-    );
-
-    return documentRows.map((documentRow) => {
-      const fields: SearchField[] = [
-        field("title", documentRow.title, 108),
-        field("publisher", documentRow.publisher, 74),
-        field("source type", documentRow.source_kind, 72),
-        field("filename", documentRow.filename, 68),
-        field("source content", documentRow.content, 82),
-      ];
-      const documentId = requiredText(documentRow, "id");
-      const updateId = optionalText(documentRow.update_id);
-      return buildResult({
-        type: "document",
-        id: documentId,
-        title: requiredText(documentRow, "title"),
-        subtitle: `${requiredText(documentRow, "publisher")} · ${sourceKindLabel(optionalText(documentRow.source_kind))}`,
-        href: updateId
-          ? `/updates?update=${encodeURIComponent(updateId)}`
-          : `/sources?document=${encodeURIComponent(documentId)}`,
+        href: `/signals?update=${encodeURIComponent(requiredText(evidenceRow, "update_id"))}`,
         fields,
         query,
         tokens,
@@ -309,7 +257,7 @@ export class LocalSearchService {
         id: ticker,
         title: `${ticker} · ${requiredText(companyRow, "name")}`,
         subtitle: "Company thesis",
-        href: `/companies/${encodeURIComponent(ticker)}`,
+        href: `/theses/${encodeURIComponent(ticker)}`,
         fields,
         query,
         tokens,
@@ -433,16 +381,6 @@ function field(
 
 function optionalText(value: SqlValue | undefined): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function sourceKindLabel(value: string | null): string {
-  if (!value || value === "other") {
-    return "Research note";
-  }
-  return value
-    .split("-")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
 }
 
 function requiredText(row: SqlRow, key: string): string {

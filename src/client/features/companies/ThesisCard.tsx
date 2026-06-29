@@ -89,7 +89,7 @@ export function ThesisCard({ company }: { company: Company }) {
       <footer className="border-t border-relay-border p-5">
         <Link
           className="inline-flex items-center gap-2 text-sm font-medium text-relay-accent hover:text-white"
-          to={`/companies/${company.ticker}`}
+          to={`/theses/${company.ticker}`}
         >
           Open full thesis
           <ArrowRight aria-hidden="true" className="size-3.5" />

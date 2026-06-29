@@ -118,9 +118,16 @@ export class RelayRepository {
       INSERT OR IGNORE INTO company_layers (company_ticker, layer_id) VALUES (?, ?)
     `);
     const insertSource = this.database.prepare(`
-      INSERT OR IGNORE INTO research_sources (
-        id, name, type, url, enabled, status, last_synced_at, document_count
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO research_sources (
+        id, name, type, url, enabled, status, last_synced_at, document_count,
+        archived
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        type = excluded.type,
+        url = excluded.url,
+        enabled = excluded.enabled,
+        archived = 0
     `);
 
     this.withTransaction(() => {
@@ -161,6 +168,13 @@ export class RelayRepository {
           source.documentCount,
         );
       });
+      this.database
+        .prepare(`
+          UPDATE research_sources
+          SET archived = 1
+          WHERE id NOT IN (${catalog.sources.map(() => "?").join(", ")})
+        `)
+        .run(...catalog.sources.map((source) => source.id));
     });
 
     catalog.updates.forEach((update) => {
@@ -273,7 +287,9 @@ export class RelayRepository {
   listSources(): ResearchSource[] {
     return rows(
       this.database
-        .prepare("SELECT * FROM research_sources ORDER BY name")
+        .prepare(
+          "SELECT * FROM research_sources WHERE archived = 0 ORDER BY name",
+        )
         .all(),
     ).map((sourceRow) => ({
       id: text(sourceRow, "id"),
@@ -299,6 +315,35 @@ export class RelayRepository {
           LIMIT ?
         `)
         .all(limit),
+    );
+    return updateRows
+      .map((updateRow) => this.getUpdate(text(updateRow, "id")))
+      .filter((update): update is IntelligenceUpdate => update !== null);
+  }
+
+  listAllUpdates(): IntelligenceUpdate[] {
+    const updateRows = rows(
+      this.database
+        .prepare(`
+          SELECT id FROM intelligence_updates
+          ORDER BY ingested_at ASC, published_at ASC
+        `)
+        .all(),
+    );
+    return updateRows
+      .map((updateRow) => this.getUpdate(text(updateRow, "id")))
+      .filter((update): update is IntelligenceUpdate => update !== null);
+  }
+
+  listUpdatesIngestedAfter(ingestedAt: string): IntelligenceUpdate[] {
+    const updateRows = rows(
+      this.database
+        .prepare(`
+          SELECT id FROM intelligence_updates
+          WHERE ingested_at > ?
+          ORDER BY ingested_at ASC, published_at ASC
+        `)
+        .all(ingestedAt),
     );
     return updateRows
       .map((updateRow) => this.getUpdate(text(updateRow, "id")))
@@ -357,6 +402,11 @@ export class RelayRepository {
         updateRow,
         "materiality",
       ) as IntelligenceUpdate["materiality"],
+      materialityReason: text(updateRow, "materiality_reason"),
+      novelty: text(
+        updateRow,
+        "novelty",
+      ) as IntelligenceUpdate["novelty"],
       sentiment: text(updateRow, "sentiment") as IntelligenceUpdate["sentiment"],
       whatHappened: text(updateRow, "what_happened"),
       whyItMatters: text(updateRow, "why_it_matters"),
@@ -385,6 +435,7 @@ export class RelayRepository {
             "confidence",
           ) as IntelligenceUpdate["thesisImpacts"][number]["confidence"],
           horizon: text(impactRow, "horizon"),
+          thesisDelta: text(impactRow, "thesis_delta"),
           decision: text(
             impactRow,
             "decision",
@@ -397,12 +448,13 @@ export class RelayRepository {
   }
 
   persistAnalyzedUpdate(update: IntelligenceUpdate): IntelligenceUpdate {
+    assertSignalInvariants(update);
     const insertUpdate = this.database.prepare(`
       INSERT INTO intelligence_updates (
         id, title, publisher, source_url, published_at, ingested_at, materiality,
-        sentiment, what_happened, why_it_matters, beneficiaries_json,
-        threatened_json, watch_next_json, model
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        materiality_reason, novelty, sentiment, what_happened, why_it_matters,
+        beneficiaries_json, threatened_json, watch_next_json, model
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         publisher = excluded.publisher,
@@ -410,6 +462,8 @@ export class RelayRepository {
         published_at = excluded.published_at,
         ingested_at = excluded.ingested_at,
         materiality = excluded.materiality,
+        materiality_reason = excluded.materiality_reason,
+        novelty = excluded.novelty,
         sentiment = excluded.sentiment,
         what_happened = excluded.what_happened,
         why_it_matters = excluded.why_it_matters,
@@ -436,7 +490,8 @@ export class RelayRepository {
     const insertImpact = this.database.prepare(`
       INSERT INTO thesis_impacts (
         id, update_id, company_ticker, direction, summary, confidence, horizon, decision
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        , thesis_delta
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         update_id = excluded.update_id,
         company_ticker = excluded.company_ticker,
@@ -444,6 +499,7 @@ export class RelayRepository {
         summary = excluded.summary,
         confidence = excluded.confidence,
         horizon = excluded.horizon,
+        thesis_delta = excluded.thesis_delta,
         decision = CASE
           WHEN thesis_impacts.decision = 'proposed' THEN excluded.decision
           ELSE thesis_impacts.decision
@@ -461,6 +517,8 @@ export class RelayRepository {
         update.publishedAt,
         update.ingestedAt,
         update.materiality,
+        update.materialityReason,
+        update.novelty,
         update.sentiment,
         update.whatHappened,
         update.whyItMatters,
@@ -536,6 +594,7 @@ export class RelayRepository {
             impact.confidence,
             impact.horizon,
             impact.decision,
+            impact.thesisDelta,
           );
         }
       });
@@ -690,8 +749,9 @@ export class RelayRepository {
         .prepare(`
           INSERT INTO source_documents (
             id, title, publisher, source_url, published_at, content, content_hash,
-            analysis_status, ingested_at, source_kind, filename
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+            analysis_status, ingested_at, source_kind, filename,
+            research_source_id, analysis_version
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, 'thesis-aware-v1')
         `)
         .run(
           id,
@@ -704,6 +764,7 @@ export class RelayRepository {
           ingestedAt,
           input.sourceKind ?? "other",
           input.filename ?? null,
+          input.researchSourceId ?? "manual-imports",
         );
       this.database
         .prepare(`
@@ -734,6 +795,23 @@ export class RelayRepository {
         WHERE id = ?
       `)
       .run(sanitizeStoredError(message), documentId);
+  }
+
+  getResearchSourceIdForUpdate(updateId: string): string | null {
+    const sourceRow = row(
+      this.database
+        .prepare(`
+          SELECT research_source_id
+          FROM source_documents
+          WHERE update_id = ?
+          ORDER BY ingested_at DESC
+          LIMIT 1
+        `)
+        .get(updateId),
+    );
+    return sourceRow
+      ? nullableText(sourceRow, "research_source_id")
+      : null;
   }
 
   recordSourceSync(
@@ -858,4 +936,46 @@ function mapImpactReview(reviewRow: SqlRow): ImpactReview {
     createdAt: text(reviewRow, "created_at"),
     updatedAt: text(reviewRow, "updated_at"),
   };
+}
+
+function assertSignalInvariants(update: IntelligenceUpdate): void {
+  if (update.novelty === "repetition" && update.materiality !== "not-material") {
+    throw new TypeError("Repeated signals must be classified as not material.");
+  }
+  if (update.materiality === "not-material") {
+    if (update.sentiment !== "not-material") {
+      throw new TypeError(
+        "Not-material signals must use not-material sentiment.",
+      );
+    }
+    if (update.thesisImpacts.length > 0) {
+      throw new TypeError(
+        "Not-material signals cannot contain thesis impacts.",
+      );
+    }
+    return;
+  }
+
+  if (update.sentiment === "not-material") {
+    throw new TypeError(
+      "Material signals cannot use not-material sentiment.",
+    );
+  }
+  if (update.claims.length === 0) {
+    throw new TypeError(
+      "Material signals must contain at least one exact evidence claim.",
+    );
+  }
+  if (
+    update.thesisImpacts.length === 0 ||
+    update.thesisImpacts.some(
+      (impact) =>
+        impact.direction === "not-material" ||
+        !impact.thesisDelta.trim(),
+    )
+  ) {
+    throw new TypeError(
+      "Material signals must contain a concrete thesis delta.",
+    );
+  }
 }

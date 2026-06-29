@@ -64,7 +64,7 @@ export function CompaniesPage() {
               Personal watchlist
             </p>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              Company theses
+              Theses
             </h1>
           </div>
           <label className="flex h-10 w-full items-center gap-2 rounded-md border border-relay-border bg-relay-surface px-3 sm:w-72">
@@ -165,7 +165,7 @@ export function CompaniesPage() {
               </span>
               <Link
                 className="inline-flex items-center gap-1.5 font-medium text-relay-accent hover:text-white xl:hidden"
-                to={`/companies/${selectedCompany.ticker}`}
+                to={`/theses/${selectedCompany.ticker}`}
               >
                 View thesis
                 <ArrowRight aria-hidden="true" className="size-3" />

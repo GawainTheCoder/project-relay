@@ -123,7 +123,7 @@ export function StackInspector({
                 <Link
                   className="group block rounded-md border border-relay-border bg-relay-surface-2 p-3 transition-colors hover:border-relay-border-strong"
                   key={update.id}
-                  to={`/updates?update=${encodeURIComponent(update.id)}`}
+                  to={`/signals?update=${encodeURIComponent(update.id)}`}
                 >
                   <p className="text-xs font-medium leading-5">
                     {update.title}
@@ -153,7 +153,7 @@ export function StackInspector({
         <div className="border-t border-relay-border p-5">
           <Link
             className="inline-flex items-center gap-2 text-sm font-medium text-relay-accent hover:text-white"
-            to={`/companies/${company.ticker}`}
+            to={`/theses/${company.ticker}`}
           >
             View company thesis
             <ExternalLink aria-hidden="true" className="size-3.5" />

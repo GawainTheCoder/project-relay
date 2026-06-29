@@ -1,4 +1,10 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+} from "react-router-dom";
 
 import { AppShell } from "./components/layout/AppShell";
 import { DashboardProvider } from "./context/DashboardProvider";
@@ -11,6 +17,11 @@ import { StackPage } from "./routes/StackPage";
 import { TodayPage } from "./routes/TodayPage";
 import { UpdatesPage } from "./routes/UpdatesPage";
 
+function LegacyUpdatesRedirect() {
+  const location = useLocation();
+  return <Navigate replace to={`/signals${location.search}`} />;
+}
+
 export function App() {
   return (
     <BrowserRouter>
@@ -18,9 +29,12 @@ export function App() {
         <Routes>
           <Route element={<AppShell />}>
             <Route index element={<TodayPage />} />
-            <Route path="updates" element={<UpdatesPage />} />
+            <Route path="signals" element={<UpdatesPage />} />
+            <Route path="updates" element={<LegacyUpdatesRedirect />} />
             <Route path="search" element={<SearchPage />} />
             <Route path="stack" element={<StackPage />} />
+            <Route path="theses" element={<CompaniesPage />} />
+            <Route path="theses/:ticker" element={<CompanyDetailPage />} />
             <Route path="companies" element={<CompaniesPage />} />
             <Route path="companies/:ticker" element={<CompanyDetailPage />} />
             <Route path="sources" element={<SourcesPage />} />

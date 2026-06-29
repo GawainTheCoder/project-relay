@@ -31,7 +31,7 @@ describe("LocalSearchService", () => {
           type: "update",
           id: "vrt-fy25-q4",
           matchedField: "title",
-          href: "/updates?update=vrt-fy25-q4",
+          href: "/signals?update=vrt-fy25-q4",
         }),
         expect.objectContaining({
           type: "evidence",
@@ -53,27 +53,6 @@ describe("LocalSearchService", () => {
       .size).toBe(results.length);
   });
 
-  it("searches imported source titles, publishers, and full content", () => {
-    repository = createRelayRepository(":memory:");
-    const document = repository.persistSourceDocument({
-      title: "Independent optics field note",
-      publisher: "Personal research",
-      content:
-        "Laser qualification schedules point to tighter transceiver availability.",
-    });
-    const search = new LocalSearchService(repository.database);
-
-    expect(search.search("laser qualification")).toContainEqual(
-      expect.objectContaining({
-        type: "document",
-        id: document.id,
-        title: "Independent optics field note",
-        matchedField: "source content",
-        href: `/sources?document=${document.id}`,
-      }),
-    );
-  });
-
   it("finds company theses and watch metrics with an actionable company link", () => {
     repository = createRelayRepository(":memory:");
     const search = new LocalSearchService(repository.database);
@@ -82,7 +61,7 @@ describe("LocalSearchService", () => {
       expect.objectContaining({
         type: "company",
         id: "TSM",
-        href: "/companies/TSM",
+        href: "/theses/TSM",
         matchedField: "watch metrics",
       }),
     );

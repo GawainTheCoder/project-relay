@@ -36,7 +36,7 @@ export function UpdateAnalysis({
   update,
 }: UpdateAnalysisProps) {
   return (
-    <article className="relay-scrollbar min-h-0 overflow-y-auto">
+    <article className="relay-scrollbar h-full min-h-0 overflow-y-auto">
       <header className="border-b border-relay-border px-5 py-6 sm:px-7 lg:px-8">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-xs font-medium text-relay-accent">
@@ -81,6 +81,9 @@ export function UpdateAnalysis({
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <MaterialityBadge materiality={update.materiality} />
           <SentimentBadge sentiment={update.sentiment} />
+          <span className="rounded border border-relay-border px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-muted">
+            {update.novelty}
+          </span>
           {update.layerIds.map((layerId) => (
             <span
               className="font-mono text-[10px] uppercase tracking-[0.08em] text-relay-muted"
@@ -95,6 +98,9 @@ export function UpdateAnalysis({
             Affected: {update.companyTickers.join(", ")}
           </p>
         ) : null}
+        <p className="mt-4 max-w-3xl border-l border-relay-border-strong pl-3 text-xs leading-5 text-relay-muted">
+          {update.materialityReason}
+        </p>
       </header>
 
       <div className="mx-auto max-w-3xl px-5 sm:px-7 lg:px-8">

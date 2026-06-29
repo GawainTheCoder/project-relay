@@ -8,6 +8,7 @@ import {
   secureFetchText,
   type SecureFetchOptions,
 } from "./network.js";
+import { PUBLIC_SOURCE_REGISTRY } from "./source-registry.js";
 import type {
   PublicSourceDefinition,
   RssEntry,
@@ -20,43 +21,7 @@ const RSS_CONTENT_TYPES = [
   "text/xml",
 ] as const;
 
-export const PUBLIC_SOURCE_REGISTRY: readonly PublicSourceDefinition[] = [
-  {
-    id: "arxiv-distributed-systems",
-    name: "arXiv — Distributed, Parallel, and Cluster Computing",
-    type: "paper",
-    url: "https://rss.arxiv.org/rss/cs.DC",
-    enabledByDefault: true,
-  },
-  {
-    id: "the-next-platform",
-    name: "The Next Platform",
-    type: "rss",
-    url: "https://www.nextplatform.com/feed/",
-    enabledByDefault: true,
-  },
-  {
-    id: "cloudflare-technical-blog",
-    name: "Cloudflare Technical Blog",
-    type: "rss",
-    url: "https://blog.cloudflare.com/rss/",
-    enabledByDefault: false,
-  },
-  {
-    id: "vllm-releases",
-    name: "vLLM releases",
-    type: "release",
-    url: "https://github.com/vllm-project/vllm/releases.atom",
-    enabledByDefault: true,
-  },
-  {
-    id: "sglang-releases",
-    name: "SGLang releases",
-    type: "release",
-    url: "https://github.com/sgl-project/sglang/releases.atom",
-    enabledByDefault: true,
-  },
-] as const;
+export { PUBLIC_SOURCE_REGISTRY };
 
 export async function fetchRssSource(
   source: PublicSourceDefinition,

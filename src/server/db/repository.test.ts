@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { DailyBrief, IntelligenceUpdate } from "../../shared/contracts.js";
 
 import { createImpactReviewRepository } from "../evaluation/index.js";
+import { SOURCE_CATALOG_ROWS } from "../ingestion/source-registry.js";
 import {
   createRelayRepository,
   type RelayRepository,
@@ -33,7 +34,7 @@ describe("RelayRepository", () => {
     expect(first.companies).toHaveLength(13);
     expect(first.layers).toHaveLength(10);
     expect(first.updates).toHaveLength(7);
-    expect(first.sources).toHaveLength(12);
+    expect(first.sources).toHaveLength(SOURCE_CATALOG_ROWS.length);
     expect(first.brief?.updateIds.length).toBeGreaterThan(0);
 
     const secondRepositoryView = repository.getDashboard();
@@ -173,6 +174,9 @@ describe("RelayRepository", () => {
       layerIds: ["optics"],
       companyTickers: ["COHR"],
       materiality: "high",
+      materialityReason:
+        "New production evidence strengthens the optics capacity thesis.",
+      novelty: "new",
       sentiment: "bullish",
       whatHappened: "A qualified optical component entered volume production.",
       whyItMatters: "The result adds supply to a constrained link in the stack.",
@@ -195,6 +199,8 @@ describe("RelayRepository", () => {
           summary: "The ramp supports the optics capacity thesis.",
           confidence: "medium",
           horizon: "6–12 months",
+          thesisDelta:
+            "Moves the thesis from expected qualification to observed volume production.",
           decision: "proposed",
         },
       ],
@@ -219,6 +225,55 @@ describe("RelayRepository", () => {
     expect(repository.getUpdate(update.id)?.whyItMatters).toBe(
       "The refreshed analysis keeps the same evidence.",
     );
+  });
+
+  it("enforces materiality and novelty invariants at persistence", () => {
+    const seed = repository.getUpdate("vrt-fy25-q4");
+    if (!seed) {
+      throw new Error("Seed update missing");
+    }
+    const base: IntelligenceUpdate = {
+      ...seed,
+      id: "invariant-test-update",
+      claims: seed.claims.map((claim) => ({
+        ...claim,
+        id: `invariant-${claim.id}`,
+      })),
+      thesisImpacts: seed.thesisImpacts.map((impact) => ({
+        ...impact,
+        id: `invariant-${impact.id}`,
+      })),
+    };
+
+    expect(() =>
+      repository.persistAnalyzedUpdate({
+        ...base,
+        novelty: "repetition",
+      }),
+    ).toThrow("Repeated signals must be classified as not material.");
+    expect(() =>
+      repository.persistAnalyzedUpdate({
+        ...base,
+        materiality: "not-material",
+        sentiment: "bullish",
+        thesisImpacts: [],
+      }),
+    ).toThrow("Not-material signals must use not-material sentiment.");
+    expect(() =>
+      repository.persistAnalyzedUpdate({
+        ...base,
+        sentiment: "not-material",
+      }),
+    ).toThrow("Material signals cannot use not-material sentiment.");
+    expect(() =>
+      repository.persistAnalyzedUpdate({
+        ...base,
+        thesisImpacts: base.thesisImpacts.map((impact) => ({
+          ...impact,
+          direction: "not-material",
+        })),
+      }),
+    ).toThrow("Material signals must contain a concrete thesis delta.");
   });
 
   it("deduplicates imported source documents without duplicating source counts", () => {

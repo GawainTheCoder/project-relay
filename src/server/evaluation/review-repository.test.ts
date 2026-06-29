@@ -30,7 +30,8 @@ function createFixtureDatabase(): DatabaseSync {
       direction TEXT NOT NULL,
       summary TEXT NOT NULL,
       confidence TEXT NOT NULL,
-      horizon TEXT NOT NULL
+      horizon TEXT NOT NULL,
+      thesis_delta TEXT NOT NULL
     );
 
     CREATE TABLE update_layers (
@@ -57,19 +58,23 @@ function createFixtureDatabase(): DatabaseSync {
     );
 
     INSERT INTO thesis_impacts (
-      id, update_id, company_ticker, direction, summary, confidence, horizon
+      id, update_id, company_ticker, direction, summary, confidence, horizon,
+      thesis_delta
     ) VALUES
       (
         'impact-cohr', 'update-optics', 'COHR', 'bullish',
-        'The ramp supports the optics capacity thesis.', 'high', '6-12 months'
+        'The ramp supports the optics capacity thesis.', 'high', '6-12 months',
+        'Observed production strengthens expected capacity.'
       ),
       (
         'impact-lite', 'update-optics', 'LITE', 'neutral',
-        'Competitor capacity could affect pricing.', 'medium', '3-6 months'
+        'Competitor capacity could affect pricing.', 'medium', '3-6 months',
+        'Competitor supply adds pricing risk.'
       ),
       (
         'impact-glw', 'update-optics', 'GLW', 'bullish',
-        'More links could support fiber demand.', 'low', '12-24 months'
+        'More links could support fiber demand.', 'low', '12-24 months',
+        'Link growth modestly strengthens fiber demand.'
       );
 
     INSERT INTO update_layers (update_id, layer_id) VALUES

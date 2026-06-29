@@ -194,6 +194,39 @@ const migrations = [
     CREATE INDEX IF NOT EXISTS impact_reviews_decision_idx
       ON impact_reviews(decision, updated_at DESC);
   `,
+  `
+    ALTER TABLE research_sources
+      ADD COLUMN archived INTEGER NOT NULL DEFAULT 0
+      CHECK (archived IN (0, 1));
+
+    ALTER TABLE source_documents
+      ADD COLUMN research_source_id TEXT
+      REFERENCES research_sources(id);
+
+    ALTER TABLE source_documents
+      ADD COLUMN analysis_version TEXT NOT NULL DEFAULT 'legacy';
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN novelty TEXT NOT NULL DEFAULT 'repetition'
+      CHECK (novelty IN ('new', 'confirmation', 'contradiction', 'repetition'));
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN materiality_reason TEXT NOT NULL
+      DEFAULT 'Legacy analysis created before thesis-aware materiality.';
+
+    ALTER TABLE thesis_impacts
+      ADD COLUMN thesis_delta TEXT NOT NULL
+      DEFAULT 'Legacy proposed thesis impact.';
+
+    UPDATE source_documents
+    SET research_source_id = (
+      SELECT source.id
+      FROM research_sources AS source
+      WHERE source.name = source_documents.publisher
+      LIMIT 1
+    )
+    WHERE research_source_id IS NULL;
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {
