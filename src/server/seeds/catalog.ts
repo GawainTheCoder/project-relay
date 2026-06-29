@@ -5,6 +5,7 @@ import type {
   ResearchSource,
   StackLayer,
 } from "../../shared/contracts.js";
+import { SOURCE_CATALOG_ROWS } from "../ingestion/source-registry.js";
 
 export const seedLayers: StackLayer[] = [
   {
@@ -253,20 +254,8 @@ export const seedCompanies: Company[] = [
   },
 ];
 
-export const seedSources: ResearchSource[] = [
-  { id: "nvidia-ir", name: "NVIDIA Investor Relations", type: "investor-relations", url: "https://investor.nvidia.com/", enabled: false, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "broadcom-ir", name: "Broadcom Investor Relations", type: "investor-relations", url: "https://investors.broadcom.com/", enabled: false, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "vertiv-ir", name: "Vertiv Investor Relations", type: "investor-relations", url: "https://investors.vertiv.com/", enabled: false, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "micron-ir", name: "Micron Investor Relations", type: "investor-relations", url: "https://investors.micron.com/", enabled: false, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "arista-ir", name: "Arista Investor Relations", type: "investor-relations", url: "https://investors.arista.com/", enabled: false, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "tsmc-ir", name: "TSMC Investor Relations", type: "investor-relations", url: "https://investor.tsmc.com/", enabled: false, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "sec-edgar", name: "SEC EDGAR", type: "filing", url: "https://www.sec.gov/edgar", enabled: false, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "arxiv-distributed-systems", name: "arXiv — Distributed, Parallel, and Cluster Computing", type: "paper", url: "https://rss.arxiv.org/rss/cs.DC", enabled: true, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "the-next-platform", name: "The Next Platform", type: "rss", url: "https://www.nextplatform.com/feed/", enabled: true, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "vllm-releases", name: "vLLM releases", type: "release", url: "https://github.com/vllm-project/vllm/releases.atom", enabled: true, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "sglang-releases", name: "SGLang releases", type: "release", url: "https://github.com/sgl-project/sglang/releases.atom", enabled: true, status: "ready", lastSyncedAt: null, documentCount: 0 },
-  { id: "manual-imports", name: "Manual research", type: "manual", url: null, enabled: true, status: "ready", lastSyncedAt: null, documentCount: 0 },
-];
+export const seedSources: ResearchSource[] =
+  SOURCE_CATALOG_ROWS.map((source) => ({ ...source }));
 
 export const seedUpdates: IntelligenceUpdate[] = [
   {
@@ -279,6 +268,8 @@ export const seedUpdates: IntelligenceUpdate[] = [
     layerIds: ["accelerators", "networking"],
     companyTickers: ["NVDA", "TSM", "MU"],
     materiality: "high",
+    materialityReason: "Example demand evidence strengthens the seeded NVIDIA platform thesis.",
+    novelty: "new",
     sentiment: "bullish",
     whatHappened: "NVIDIA reported record quarterly data-center revenue while guiding to another sequential increase.",
     whyItMatters: "The result confirms that demand for accelerated systems remains strong enough to pull manufacturing and HBM capacity with it.",
@@ -286,7 +277,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     threatened: ["Alternative accelerator platforms that are not scaling at the same rate"],
     watchNext: ["Rubin production availability", "Gross margin through the platform transition", "Cloud deployment timing"],
     claims: [{ id: "claim-nvda-dc", quote: "Record quarterly Data Center revenue of $62.3 billion, up 22% from Q3 and up 75% from a year ago", sourceId: "nvidia-ir", locator: "Q4 FY2026 results, highlights" }],
-    thesisImpacts: [{ id: "impact-nvda-dc", companyTicker: "NVDA", direction: "bullish", summary: "Record growth supports the view that NVIDIA's platform demand remains structurally strong.", confidence: "high", horizon: "6–12 months", decision: "proposed" }],
+    thesisImpacts: [{ id: "impact-nvda-dc", companyTicker: "NVDA", direction: "bullish", summary: "Record growth supports the view that NVIDIA's platform demand remains structurally strong.", confidence: "high", horizon: "6–12 months", thesisDelta: "Strengthens confidence in durable platform demand.", decision: "proposed" }],
     model: null,
   },
   {
@@ -299,6 +290,8 @@ export const seedUpdates: IntelligenceUpdate[] = [
     layerIds: ["accelerators", "networking"],
     companyTickers: ["AVGO", "MRVL", "ANET"],
     materiality: "high",
+    materialityReason: "Example custom-silicon evidence strengthens the seeded Broadcom thesis.",
+    novelty: "new",
     sentiment: "bullish",
     whatHappened: "Broadcom said custom accelerators and Ethernet switches were driving a sharp increase in AI semiconductor revenue.",
     whyItMatters: "This is direct evidence that hyperscaler custom compute and Ethernet are scaling as a parallel architecture to merchant GPUs.",
@@ -306,7 +299,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     threatened: ["Competing custom silicon suppliers", "Proprietary-only networking assumptions"],
     watchNext: ["XPU customer concentration", "Ethernet switch mix", "Sustainability beyond the initial program ramps"],
     claims: [{ id: "claim-avgo-ai", quote: "We expect AI semiconductor revenue to double year-over-year to $8.2 billion", sourceId: "broadcom-ir", locator: "Q4 FY2025 results, CEO commentary" }],
-    thesisImpacts: [{ id: "impact-avgo-ai", companyTicker: "AVGO", direction: "bullish", summary: "The outlook validates both legs of the custom XPU and Ethernet thesis.", confidence: "high", horizon: "3–12 months", decision: "proposed" }],
+    thesisImpacts: [{ id: "impact-avgo-ai", companyTicker: "AVGO", direction: "bullish", summary: "The outlook validates both legs of the custom XPU and Ethernet thesis.", confidence: "high", horizon: "3–12 months", thesisDelta: "Strengthens confidence in custom XPU and Ethernet adoption.", decision: "proposed" }],
     model: null,
   },
   {
@@ -319,6 +312,8 @@ export const seedUpdates: IntelligenceUpdate[] = [
     layerIds: ["power-cooling"],
     companyTickers: ["VRT", "ETN", "GEV"],
     materiality: "high",
+    materialityReason: "Example backlog evidence extends the expected power-infrastructure cycle.",
+    novelty: "new",
     sentiment: "bullish",
     whatHappened: "Vertiv reported backlog of $15 billion, more than double the same period a year earlier.",
     whyItMatters: "Physical power and cooling infrastructure is being ordered far ahead of deployment, showing that megawatts are a binding AI constraint.",
@@ -326,7 +321,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     threatened: ["Projects dependent on short lead-time power equipment"],
     watchNext: ["Backlog conversion", "Cancellation rates", "Liquid-cooling production capacity"],
     claims: [{ id: "claim-vrt-backlog", quote: "backlog increased to $15.0 billion, up 109% compared to the same period last year", sourceId: "vertiv-ir", locator: "Q4 2025 results, financial highlights" }],
-    thesisImpacts: [{ id: "impact-vrt-backlog", companyTicker: "VRT", direction: "bullish", summary: "Order coverage strongly supports a multi-year power and thermal infrastructure cycle.", confidence: "high", horizon: "12–24 months", decision: "proposed" }],
+    thesisImpacts: [{ id: "impact-vrt-backlog", companyTicker: "VRT", direction: "bullish", summary: "Order coverage strongly supports a multi-year power and thermal infrastructure cycle.", confidence: "high", horizon: "12–24 months", thesisDelta: "Extends confidence in the duration of the power and cooling cycle.", decision: "proposed" }],
     model: null,
   },
   {
@@ -339,6 +334,8 @@ export const seedUpdates: IntelligenceUpdate[] = [
     layerIds: ["memory"],
     companyTickers: ["MU", "NVDA", "AMD"],
     materiality: "medium",
+    materialityReason: "Example production evidence confirms the HBM mix-upgrade thesis.",
+    novelty: "confirmation",
     sentiment: "bullish",
     whatHappened: "Micron began high-volume production of 36GB HBM4 designed for NVIDIA's Vera Rubin platform.",
     whyItMatters: "A qualified HBM4 ramp reduces one system-level deployment risk and supports Micron's position in the highest-value part of memory.",
@@ -346,7 +343,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     threatened: ["Accelerator schedules if qualification or supply slips"],
     watchNext: ["HBM4 customer qualification", "Yield progression", "Calendar 2027 supply commitments"],
     claims: [{ id: "claim-mu-hbm", quote: "HBM4 36GB 12H in high-volume production, designed for NVIDIA Vera Rubin", sourceId: "micron-ir", locator: "March 16, 2026 release, news highlights" }],
-    thesisImpacts: [{ id: "impact-mu-hbm", companyTicker: "MU", direction: "bullish", summary: "High-volume HBM4 production reinforces the durable mix-upgrade thesis.", confidence: "high", horizon: "3–12 months", decision: "proposed" }],
+    thesisImpacts: [{ id: "impact-mu-hbm", companyTicker: "MU", direction: "bullish", summary: "High-volume HBM4 production reinforces the durable mix-upgrade thesis.", confidence: "high", horizon: "3–12 months", thesisDelta: "Raises confidence in HBM mix and production timing.", decision: "proposed" }],
     model: null,
   },
   {
@@ -359,6 +356,8 @@ export const seedUpdates: IntelligenceUpdate[] = [
     layerIds: ["serving", "accelerators"],
     companyTickers: ["NVDA", "AMD"],
     materiality: "medium",
+    materialityReason: "Example software release evidence strengthens full-stack differentiation.",
+    novelty: "new",
     sentiment: "bullish",
     whatHappened: "NVIDIA moved its open-source Dynamo inference orchestration software into production release.",
     whyItMatters: "Serving efficiency can increase useful token output per installed GPU and deepen platform integration beyond hardware.",
@@ -366,7 +365,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     threatened: ["Standalone serving stacks without equivalent hardware integration"],
     watchNext: ["Independent benchmark results", "Production adoption", "Integration with open inference frameworks"],
     claims: [{ id: "claim-nvda-dynamo", quote: "Dynamo boosts inference performance of NVIDIA Blackwell GPUs by up to 7x", sourceId: "nvidia-ir", locator: "Dynamo 1.0 release, news summary" }],
-    thesisImpacts: [{ id: "impact-nvda-dynamo", companyTicker: "NVDA", direction: "bullish", summary: "Production serving software strengthens NVIDIA's full-stack differentiation.", confidence: "medium", horizon: "3–12 months", decision: "proposed" }],
+    thesisImpacts: [{ id: "impact-nvda-dynamo", companyTicker: "NVDA", direction: "bullish", summary: "Production serving software strengthens NVIDIA's full-stack differentiation.", confidence: "medium", horizon: "3–12 months", thesisDelta: "Strengthens the software component of the full-stack thesis.", decision: "proposed" }],
     model: null,
   },
   {
@@ -379,6 +378,8 @@ export const seedUpdates: IntelligenceUpdate[] = [
     layerIds: ["networking"],
     companyTickers: ["AVGO", "ANET", "MRVL"],
     materiality: "medium",
+    materialityReason: "Example deployment evidence broadens the Ethernet opportunity.",
+    novelty: "new",
     sentiment: "bullish",
     whatHappened: "Broadcom introduced a routing chip designed to join AI compute across multiple data-center facilities.",
     whyItMatters: "Cluster scaling is moving from a single rack and building toward campus-scale fabrics, expanding the networking content per accelerator.",
@@ -386,7 +387,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     threatened: ["Architectures unable to scale efficiently beyond one facility"],
     watchNext: ["Customer deployments", "Power per transported bit", "Optical port requirements"],
     claims: [{ id: "claim-avgo-jericho", quote: "Scales 1M+ XPU Clusters Beyond Single Facility Limits", sourceId: "broadcom-ir", locator: "Jericho4 release, subtitle" }],
-    thesisImpacts: [{ id: "impact-anet-jericho", companyTicker: "ANET", direction: "bullish", summary: "Campus-scale AI validates a larger high-speed Ethernet switching opportunity.", confidence: "medium", horizon: "12–24 months", decision: "proposed" }],
+    thesisImpacts: [{ id: "impact-anet-jericho", companyTicker: "ANET", direction: "bullish", summary: "Campus-scale AI validates a larger high-speed Ethernet switching opportunity.", confidence: "medium", horizon: "12–24 months", thesisDelta: "Broadens the expected addressable Ethernet deployment scope.", decision: "proposed" }],
     model: null,
   },
   {
@@ -399,6 +400,8 @@ export const seedUpdates: IntelligenceUpdate[] = [
     layerIds: ["manufacturing", "accelerators", "memory"],
     companyTickers: ["TSM", "NVDA", "AMD", "AVGO", "MU"],
     materiality: "high",
+    materialityReason: "Example packaging evidence reinforces manufacturing scarcity.",
+    novelty: "confirmation",
     sentiment: "neutral",
     whatHappened: "TSMC described AI-related demand as extremely robust and outlined a multiyear capacity response.",
     whyItMatters: "Competing accelerator designs still converge on the same leading-edge manufacturing base, giving foundry demand a broader footing than any one chip vendor.",
@@ -406,7 +409,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     threatened: ["Accelerator ramps that assume unconstrained advanced packaging"],
     watchNext: ["CoWoS capacity additions", "Packaging lead times", "Customer prepayments"],
     claims: [{ id: "claim-tsm-packaging", quote: "AI-related demand continues to be extremely robust.", sourceId: "tsmc-ir", locator: "Q1 2026 earnings call transcript" }],
-    thesisImpacts: [{ id: "impact-tsm-packaging", companyTicker: "TSM", direction: "bullish", summary: "Shared dependence on advanced packaging reinforces TSMC's strategic position.", confidence: "medium", horizon: "12–24 months", decision: "proposed" }],
+    thesisImpacts: [{ id: "impact-tsm-packaging", companyTicker: "TSM", direction: "bullish", summary: "Shared dependence on advanced packaging reinforces TSMC's strategic position.", confidence: "medium", horizon: "12–24 months", thesisDelta: "Strengthens confidence in advanced-packaging scarcity and pricing power.", decision: "proposed" }],
     model: null,
   },
 ];

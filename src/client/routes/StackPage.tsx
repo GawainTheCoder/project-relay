@@ -116,14 +116,14 @@ export function StackPage() {
           {primaryUpdate ? (
             <Link
               className="group mb-7 flex items-center justify-between gap-5 rounded-md border border-relay-border bg-relay-surface px-5 py-4 transition-colors hover:border-relay-border-strong"
-              to={`/updates?update=${encodeURIComponent(primaryUpdate.id)}`}
+              to={`/signals?update=${encodeURIComponent(primaryUpdate.id)}`}
             >
               <div className="min-w-0">
                 <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.1em] text-relay-muted">
                   <span className="size-1.5 rounded-full bg-relay-accent" />
                   {data.brief
                     ? "Today’s most material signal"
-                    : "Latest analyzed update"}
+                    : "Latest analyzed signal"}
                 </div>
                 <p className="mt-2 truncate text-base font-medium">
                   {data.brief?.signal ?? primaryUpdate.title}

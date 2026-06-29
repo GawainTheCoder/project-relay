@@ -10,11 +10,12 @@ import {
   type UpdateFilter,
 } from "../features/updates/UpdateList";
 import { ThesisDecisionPanel } from "../features/updates/ThesisDecisionPanel";
+import { isThesisChangingSignal } from "../lib/signals";
 
 export function UpdatesPage() {
   const { data, error, isLoading, reload, reviewThesisImpact } = useDashboard();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [filter, setFilter] = useState<UpdateFilter>("all");
+  const [filter, setFilter] = useState<UpdateFilter>("material");
   const [query, setQuery] = useState("");
   const [isInspectorOpen, setIsInspectorOpen] = useState(false);
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
@@ -23,19 +24,13 @@ export function UpdatesPage() {
     if (!data) {
       return [];
     }
-    const watchlist = new Set(data.companies.map((company) => company.ticker));
     const normalizedQuery = query.trim().toLowerCase();
     return data.updates.filter((update) => {
-      if (
-        filter === "material" &&
-        !["high", "medium"].includes(update.materiality)
-      ) {
+      const changesThesis = isThesisChangingSignal(update);
+      if (filter === "material" && !changesThesis) {
         return false;
       }
-      if (
-        filter === "watchlist" &&
-        !update.companyTickers.some((ticker) => watchlist.has(ticker))
-      ) {
+      if (filter === "filtered" && changesThesis) {
         return false;
       }
       if (
@@ -58,13 +53,20 @@ export function UpdatesPage() {
   const selectedId = searchParams.get("update") ?? filteredUpdates[0]?.id ?? null;
   const selectedUpdate =
     filteredUpdates.find((update) => update.id === selectedId) ??
-    data?.updates.find((update) => update.id === selectedId) ??
     filteredUpdates[0] ??
     null;
 
   const selectUpdate = useCallback(
     (updateId: string) => {
       setSearchParams({ update: updateId });
+      setSelectedClaimId(null);
+    },
+    [setSearchParams],
+  );
+  const changeFilter = useCallback(
+    (nextFilter: UpdateFilter) => {
+      setFilter(nextFilter);
+      setSearchParams({});
       setSelectedClaimId(null);
     },
     [setSearchParams],
@@ -109,7 +111,7 @@ export function UpdatesPage() {
   }, [filteredUpdates, selectUpdate, selectedUpdate]);
 
   if (isLoading) {
-    return <PageLoading label="Loading research console" />;
+    return <PageLoading label="Loading signals" />;
   }
   if (error || !data) {
     return (
@@ -128,12 +130,12 @@ export function UpdatesPage() {
   };
 
   return (
-    <div className="h-[calc(100vh-5.5rem)] min-h-[680px] lg:h-[calc(100vh-2rem)]">
+    <div className="min-h-[calc(100dvh-3.5rem)] md:h-[calc(100vh-5.5rem)] md:min-h-[680px] lg:h-[calc(100vh-2rem)]">
       <div className="grid h-full min-h-0 md:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(460px,1fr)_340px]">
         <div className="hidden min-h-0 md:block">
           <UpdateList
             filter={filter}
-            onFilterChange={setFilter}
+            onFilterChange={changeFilter}
             onQueryChange={setQuery}
             onSelect={selectUpdate}
             query={query}
@@ -146,7 +148,7 @@ export function UpdatesPage() {
           <div className="h-[260px] border-b border-relay-border md:hidden">
             <UpdateList
               filter={filter}
-              onFilterChange={setFilter}
+              onFilterChange={changeFilter}
               onQueryChange={setQuery}
               onSelect={selectUpdate}
               query={query}
@@ -168,9 +170,9 @@ export function UpdatesPage() {
           ) : (
             <div className="grid h-full place-items-center px-6 text-center">
               <div>
-                <h1 className="text-lg font-semibold">No updates found</h1>
+                <h1 className="text-lg font-semibold">No signals found</h1>
                 <p className="mt-2 text-sm text-relay-muted">
-                  Change the filter or import a new source.
+                  Change the view or add a signal from Sources.
                 </p>
               </div>
             </div>

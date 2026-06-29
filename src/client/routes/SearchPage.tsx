@@ -1,10 +1,9 @@
 import {
   BookOpenText,
   Building2,
-  FileSearch,
-  FileText,
   LoaderCircle,
   Quote,
+  Radar,
   Search,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -16,21 +15,37 @@ import type {
 } from "../../shared/contracts";
 import { searchRelay } from "../lib/api";
 
-const resultIcons: Record<SearchResultType, typeof Search> = {
-  brief: BookOpenText,
-  company: Building2,
-  document: FileSearch,
-  evidence: Quote,
-  update: FileText,
-};
+const supportedResultTypes = new Set<SearchResultType>([
+  "brief",
+  "company",
+  "evidence",
+  "update",
+]);
 
-const resultLabels: Record<SearchResultType, string> = {
-  brief: "Daily brief",
-  company: "Company",
-  document: "Source document",
-  evidence: "Evidence",
-  update: "Update",
-};
+function getResultPresentation(type: SearchResultType) {
+  switch (type) {
+    case "brief":
+      return { Icon: BookOpenText, label: "Daily brief" };
+    case "company":
+      return { Icon: Building2, label: "Thesis" };
+    case "evidence":
+      return { Icon: Quote, label: "Evidence" };
+    case "update":
+      return { Icon: Radar, label: "Signal" };
+    default:
+      return { Icon: Search, label: "Signal" };
+  }
+}
+
+function normalizeResultHref(href: string) {
+  if (href.startsWith("/updates")) {
+    return href.replace("/updates", "/signals");
+  }
+  if (href.startsWith("/companies")) {
+    return href.replace("/companies", "/theses");
+  }
+  return href;
+}
 
 export function SearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -86,17 +101,19 @@ export function SearchPage() {
 
   const cleanQuery = query.trim();
   const visibleResults =
-    cleanQuery.length >= 2 && resultQuery === cleanQuery ? results : [];
+    cleanQuery.length >= 2 && resultQuery === cleanQuery
+      ? results.filter((result) => supportedResultTypes.has(result.type))
+      : [];
 
   return (
     <div className="relay-enter min-h-screen">
       <header className="border-b border-relay-border px-5 py-7 sm:px-8 lg:px-10">
         <div className="mx-auto max-w-[980px]">
           <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
-            Local intelligence index
+            Thesis-aware search
           </p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-            Search everything
+            Search signals
           </h1>
           <div className="mt-6 flex h-12 items-center gap-3 border-b border-relay-border-strong">
             {cleanQuery.length >= 2 && isSearching ? (
@@ -116,7 +133,7 @@ export function SearchPage() {
               className="min-w-0 flex-1 bg-transparent text-base text-relay-text placeholder:text-relay-subtle"
               maxLength={120}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Company, claim, metric, filing, paper…"
+              placeholder="Company, claim, bottleneck, metric…"
               value={query}
             />
             {cleanQuery.length >= 2 ? (
@@ -141,14 +158,13 @@ export function SearchPage() {
           <div className="border-l border-relay-border-strong py-2 pl-5">
             <h2 className="text-sm font-semibold">Start with two characters</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-relay-muted">
-              Relay searches source documents, evidence quotes, analyzed
-              updates, company theses, watch metrics, and daily briefs stored
-              on this machine.
+              Relay searches signals, supporting evidence, company theses,
+              watch metrics, and daily briefs stored on this machine.
             </p>
           </div>
         ) : !isSearching && !visibleResults.length ? (
           <div className="py-20 text-center">
-            <FileSearch
+            <Search
               aria-hidden="true"
               className="mx-auto size-5 text-relay-subtle"
             />
@@ -160,16 +176,16 @@ export function SearchPage() {
         ) : (
           <div className="divide-y divide-relay-border">
             {visibleResults.map((result) => {
-              const Icon = resultIcons[result.type];
+              const { Icon, label } = getResultPresentation(result.type);
               return (
                 <Link
                   className="group grid gap-3 py-5 sm:grid-cols-[120px_minmax(0,1fr)_160px]"
                   key={`${result.type}:${result.id}`}
-                  to={result.href}
+                  to={normalizeResultHref(result.href)}
                 >
                   <span className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
                     <Icon aria-hidden="true" className="size-3.5" />
-                    {resultLabels[result.type]}
+                    {label}
                   </span>
                   <span className="min-w-0">
                     <span className="block text-sm font-medium group-hover:text-relay-accent">

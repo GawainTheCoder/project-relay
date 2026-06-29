@@ -1,6 +1,11 @@
 export {
   analyzeDocument,
   buildIntelligenceUpdate,
+  type AnalysisContext,
+  type AnalysisNovelty,
+  type AnalysisRecentSignal,
+  type AnalysisSourceProfile,
+  type AnalysisWatchlistCompany,
   type AnalyzeDocumentOptions,
 } from "./analyze.js";
 export {
@@ -24,11 +29,13 @@ export {
 export {
   analysisOutputSchema,
   dailyBriefOutputSchema,
+  noveltySchema,
   type AnalysisOutput,
   type DailyBriefOutput,
 } from "./schemas.js";
 export {
   buildDailyBrief,
+  selectBriefEligibleUpdates,
   synthesizeDailyBrief,
   type SynthesizeDailyBriefOptions,
 } from "./synthesize.js";

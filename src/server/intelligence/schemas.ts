@@ -10,6 +10,12 @@ const sentimentSchema = z.enum([
 ]);
 const materialitySchema = z.enum(["high", "medium", "low", "not-material"]);
 const confidenceSchema = z.enum(["high", "medium", "low"]);
+export const noveltySchema = z.enum([
+  "new",
+  "confirmation",
+  "contradiction",
+  "repetition",
+]);
 const layerIdSchema = z.enum(layerIds);
 const shortTextSchema = z.string().trim().min(1).max(500);
 const analysisTextSchema = z.string().trim().min(1).max(4_000);
@@ -20,6 +26,8 @@ export const analysisOutputSchema = z
     layerIds: z.array(layerIdSchema).max(layerIds.length),
     companyTickers: z.array(z.string().trim().min(1).max(24)).max(30),
     materiality: materialitySchema,
+    materialityReason: z.string().trim().min(1).max(1_500),
+    novelty: noveltySchema,
     sentiment: sentimentSchema,
     groundedSummary: analysisTextSchema,
     inference: z
@@ -51,6 +59,7 @@ export const analysisOutputSchema = z
             companyTicker: z.string().trim().min(1).max(24),
             direction: sentimentSchema,
             summary: z.string().trim().min(1).max(1_500),
+            thesisDelta: z.string().trim().min(1).max(1_500),
             confidence: confidenceSchema,
             horizon: z.string().trim().min(1).max(100),
           })

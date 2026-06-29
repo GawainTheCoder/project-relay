@@ -1,266 +1,216 @@
 # Relay
 
-Relay is a personal, evidence-backed AI infrastructure intelligence dashboard.
-It answers one question clearly: **what changed across the AI infrastructure
-stack, why does it matter, and should that change an existing company thesis?**
+Relay is a personal AI-infrastructure signal tracker. It watches a small set of
+trusted sources, extracts exact claims, maps them to infrastructure layers and
+watchlist companies, and decides whether the evidence changes an existing
+thesis.
 
-Relay is not a generic AI news feed. It connects exact source claims to
-infrastructure layers, companies, dependencies, and proposed thesis impacts,
-then produces a selective daily synthesis of the most material signals.
+Relay is deliberately not a filing vault, PDF archive, generic news reader,
+portfolio tracker, or document-management system. Most incoming items should be
+classified as **not material**. A daily brief with “No meaningful change” is a
+successful result.
 
-## The infrastructure map
-
-Modern AI systems depend on much more than model labs or accelerator vendors.
-Relay maps the companies, suppliers, and builders behind the full stack:
+## Product loop
 
 ```mermaid
 flowchart LR
-    LABS["Model labs"] --> CLOUD["Cloud providers"]
+    SOURCES["Trusted feeds, public URLs, excerpts"] --> FILTER["Topic, recency, and duplicate filters"]
+    FILTER --> CLAIMS["Exact source claims"]
+    CLAIMS --> CONTEXT["Compare with theses and recent signals"]
+    CONTEXT --> GATE{"Changes a thesis?"}
+    GATE -- No --> DISMISS["Filtered out"]
+    GATE -- Yes --> SIGNAL["Company and stack signal"]
+    SIGNAL --> BRIEF["Selective daily brief"]
+```
+
+For every candidate Relay separates:
+
+1. **Evidence** — exact quotes verified against normalized source paragraphs.
+2. **Classification** — affected stack layers and watchlist companies.
+3. **Novelty** — new evidence, confirmation, contradiction, or repetition.
+4. **Thesis delta** — the concrete change in confidence, timing, magnitude,
+   bottleneck duration, or competitive position.
+5. **Direction** — bullish, bearish, neutral, or not material for each affected
+   company.
+
+Repetition cannot be material. A not-material item cannot carry an actionable
+thesis impact. A material signal must contain an exact evidence claim and a
+concrete delta for a known watchlist company.
+
+## Product surfaces
+
+- **Today** shows the lead signal, concise synthesis, affected theses, and exact
+  supporting evidence. It also treats “No meaningful change” as a first-class
+  outcome.
+- **Signals** defaults to thesis-changing items. A secondary filtered-out view
+  keeps noise inspectable without making it the product center.
+- **Sources** shows trusted-source health, refreshes enabled public feeds,
+  accepts public article URLs, and accepts manually pasted excerpts.
+- **Theses** contains the 13-company watchlist, confirmation signals, break
+  conditions, watch metrics, and linked signal history.
+- **Search** remains available through `Cmd+K` / `Ctrl+K` and a dedicated route,
+  but searches only signals, evidence, briefs, and theses—not raw source text.
+
+The stack map remains available as contextual infrastructure for signals and
+theses, rather than as a primary navigation destination.
+
+## Source strategy
+
+Source definitions live in one authoritative registry:
+`src/server/ingestion/source-registry.ts`. Each definition records its role,
+authority tier, intake mode, fetch strategy, priority, per-refresh quota,
+coverage, allowed domains, and topic rules.
+
+### Automated public feeds
+
+- The Next Platform
+- vLLM releases
+- SGLang releases
+- TensorRT-LLM releases
+- NVIDIA Dynamo releases
+- arXiv `cs.DC`, behind AI-infrastructure topic, recency, and low-signal filters
+
+Refresh fetches every enabled feed before choosing candidates. It applies
+per-source quotas and round-robin selection so a broad source such as arXiv
+cannot consume the entire analysis budget.
+
+### Public URL sources
+
+Public pages from the watchlist company newsrooms and investor-relations sites,
+SemiAnalysis public posts, LightCounting, TrendForce / DRAMeXchange, Dell’Oro,
+Data Center Dynamics, and Utility Dive can be submitted through **Add signal**.
+Relay uses hardened, credential-free public URL fetching and never bypasses
+access controls.
+
+### Manual context
+
+Paid or contextual material remains explicitly manual. Paste only excerpts you
+are authorized to process from sources such as SemiAnalysis paid research, The
+Information, Stratechery, Latent Space, Dylan Patel interviews, Fabricated
+Knowledge, Chips and Cheese, or ServeTheHome.
+
+Relay does not implement authenticated scraping, paywall bypassing, PDF upload,
+OCR, SEC crawling, Twitter/X ingestion, or generic stock-news collection.
+
+## Daily brief
+
+Brief generation considers only new signals since the latest brief. Code-level
+eligibility excludes not-material items, unsupported claims, rejected impacts,
+and impacts without a concrete thesis delta before synthesis begins.
+
+If nothing qualifies, Relay creates a deterministic “No meaningful change”
+brief without making an OpenAI synthesis request. Otherwise the synthesis model
+can select only supplied update IDs and evidence claim IDs, and Relay validates
+every returned reference before persistence.
+
+## Infrastructure map
+
+Relay uses a ten-layer dependency graph:
+
+```mermaid
+flowchart LR
+    LABS["Model labs"] --> CLOUD["Cloud"]
     LABS --> SERVING["Serving software"]
-    CLOUD --> ACCELERATORS["Accelerators and custom silicon"]
-    ACCELERATORS --> MEMORY["Memory and storage"]
+    CLOUD --> ACCELERATORS["Accelerators"]
+    ACCELERATORS --> MEMORY["Memory"]
     ACCELERATORS --> NETWORKING["Networking"]
-    NETWORKING --> OPTICS["Optics and interconnects"]
+    NETWORKING --> OPTICS["Optics"]
     CLOUD --> POWER["Power and cooling"]
     ACCELERATORS --> MANUFACTURING["Manufacturing and packaging"]
     MEMORY --> MANUFACTURING
     OPTICS --> MANUFACTURING
-    MANUFACTURING --> SUPPLY["Raw materials, suppliers, and builders"]
+    MANUFACTURING --> SUPPLY["Materials, suppliers, and builders"]
     POWER --> SUPPLY
 ```
-
-This is a dependency graph rather than a strictly linear supply chain. A signal
-in one layer can strengthen one company while weakening another. For example,
-tighter optics supply could benefit optical component vendors, constrain
-network deployment, and change the economics of accelerator clusters.
-
-Initial areas of coverage include:
-
-- **Model labs:** OpenAI, Anthropic, Google, Meta
-- **Cloud providers:** AWS, Microsoft Azure, Google Cloud, Oracle
-- **Accelerators and custom silicon:** NVIDIA, AMD, Broadcom, Marvell
-- **Memory:** Micron, SK Hynix, Samsung
-- **Networking:** Arista, Broadcom, Marvell
-- **Optics:** Coherent, Lumentum, Corning
-- **Power and cooling:** Vertiv, Eaton, GE Vernova
-- **Manufacturing and packaging:** TSMC and its upstream suppliers
-- **Serving software:** inference runtimes, compilers, schedulers, and releases
-- **Materials and builders:** substrates, wafers, specialty materials,
-  equipment, construction, and grid infrastructure
 
 The built-in watchlist is NVDA, AMD, AVGO, MRVL, ANET, COHR, LITE, GLW, MU,
 VRT, ETN, GEV, and TSM.
 
-## Current MVP
+## Technical architecture
 
-The repository contains a working local-first application:
-
-- **Today** presents one lead signal, secondary signals, affected theses, and
-  source evidence.
-- **Updates** provides a filterable research console with grounded summaries,
-  materiality, beneficiaries, threats, next signals, exact quotes, and a
-  per-company review decision with structured feedback.
-- **Stack** visualizes layer dependencies and watchlist exposure.
-- **Companies** provides thesis cards and company detail pages with confirmation
-  signals, break conditions, metrics, and linked evidence.
-- **Sources** imports authorized text, HTML, Markdown, and PDF research,
-  refreshes public feeds, exports review examples, and generates daily briefs.
-- **Search** has a dedicated route and a `Cmd+K` / `Ctrl+K` palette. It searches
-  persisted documents, evidence, updates, briefs, theses, and watch metrics.
-
-The responsive dark interface uses a collapsible desktop navigation rail and
-drawer-based inspectors on narrower screens.
-
-## Intelligence workflow
-
-```mermaid
-flowchart TD
-    INPUT["Local file, manual text, public URL, RSS, or Atom"] --> NORMALIZE["Normalize and deduplicate"]
-    NORMALIZE --> ANALYZE["Structured OpenAI analysis"]
-    ANALYZE --> VERIFY["Validate exact quotes against source paragraphs"]
-    VERIFY --> STORE[("Local SQLite")]
-    STORE --> REVIEW["Review update and proposed thesis impact"]
-    REVIEW --> DECISION["Accept, reject, or defer with reason tags"]
-    STORE --> SYNTHESIS["Generate selective daily brief"]
-    SYNTHESIS --> STORE
-```
-
-For live imports, Relay separates:
-
-1. **Source claims** — verbatim quotes validated against normalized source
-   paragraphs and stored with paragraph locators.
-2. **Classification** — affected stack layers and watchlist companies.
-3. **Inference** — what happened, why it matters, who benefits, who is
-   threatened, and what to watch next.
-4. **Assessment** — materiality and sentiment, with confidence and time horizon
-   on proposed company impacts.
-5. **Review state** — each proposed company impact can be accepted, rejected,
-   or deferred with reason tags and a note. Relay snapshots the reviewed
-   analysis and evidence as a stable evaluation example.
-
-An accepted decision records approval on the proposed impact. It does not
-silently rewrite the underlying company thesis.
-
-## Data sources
-
-### Implemented
-
-- **Manual text:** paste an article, transcript, filing excerpt, research note,
-  or other text you are authorized to process. Content is limited to 250,000
-  characters.
-- **Local files:** upload UTF-8 text, Markdown, HTML, or a text-based PDF up to
-  10 MB. Scanned image-only PDFs must be OCR'd before import.
-- **Manual public URL:** Relay fetches public HTML or plain text, extracts the
-  readable article body, and analyzes it. Title and publisher are still required
-  in the current import form.
-- **RSS and Atom:** the public-feed refresh supports both formats and analyzes
-  content supplied in each feed entry.
-
-The enabled feed registry currently includes:
-
-- arXiv `cs.DC`
-- The Next Platform
-- vLLM GitHub release Atom feed
-- SGLang GitHub release Atom feed
-
-Refreshes process at most four entries by default, across all enabled feeds.
-Set `RELAY_REFRESH_MAX_ITEMS` from 1 to 12 to change that cap. Exact duplicate
-documents are deduplicated using their canonical URL and content hash.
-
-### Not automated
-
-Investor-relations pages and SEC EDGAR appear in the source catalog as planned
-or manual sources, but Relay does not automatically crawl them. Import a public
-URL, local PDF, or authorized text and label it as an earnings release, SEC
-filing, transcript, paper, technical release, or other research. There is no
-authenticated/paywalled scraper, automated earnings-call adapter, SEC filing
-crawler, OCR pipeline, or GitHub API integration. GitHub releases currently
-arrive through public Atom feeds only.
-
-Relay never bypasses a paywall or access control. If you import paid research,
-you are responsible for having the right to process it and for keeping it
-private.
-
-## Personal mode and demo data
-
-Relay starts as a clean personal workspace. A new database contains the
-ten-layer map, 13 watchlist companies, and source definitions, but no fabricated
-updates or daily brief. Import research to create the first update.
-
-Set `RELAY_DEMO_DATA=true` only when you want the seven example updates and
-example brief for UI exploration. Switching it back to `false` removes only
-the known fixture updates, the fixture brief, and any generated brief that
-references a fixture update. Personal imports, generated updates, and briefs
-that do not rely on fixture evidence are preserved.
-
-Seed records are product fixtures, not a live market-data feed:
-
-- Seed updates and the seed brief have a `null` model field and are labeled
-  **Seed data** in the interface.
-- Example quotes and conclusions have not been independently verified and must
-  not be treated as current research.
-- Live imports store the configured OpenAI model name and can coexist with demo
-  records.
-- Demo records are inserted only when their IDs are absent; restarting Relay
-  does not erase imports or review decisions.
-
-Because seed and live records coexist, the seed-data banner remains visible
-while any seed update is present.
-
-## Technical stack
-
-- React 19, React Router, Vite, and TypeScript
-- Tailwind CSS 4 with project tokens in `src/client/styles.css`
+- React 19, React Router, Vite, TypeScript, and Tailwind CSS 4
 - Hono on the Node.js HTTP server
-- Node's built-in SQLite driver in WAL mode
+- Node’s built-in SQLite driver in WAL mode
 - OpenAI Responses API with strict Zod structured outputs
-- Mozilla Readability, `pdf-parse`, RSS/Atom parsing, and hardened remote
-  fetching
+- Mozilla Readability, RSS/Atom parsing, and hardened public URL fetching
 - Vitest and ESLint
 
-The application is one TypeScript project. Client routes live under
-`src/client/routes`, reusable product features under `src/client/features`, API
-and services under `src/server`, shared contracts under `src/shared`, and local
-runtime data under `data`.
+Client routes live under `src/client/routes`, reusable UI under
+`src/client/features`, API and services under `src/server`, and shared contracts
+under `src/shared`.
 
-## Requirements
+SQLite remains the private system of record for source provenance, hashes,
+analysis status, signals, exact claims, thesis impacts, lightweight corrections,
+and briefs. Raw source records are internal provenance/cache data and are not
+presented as a document library.
+
+## Requirements and setup
 
 - Node.js 22 or newer
 - npm 10 or newer
-- An OpenAI API key for live source analysis and brief generation
-
-## Local setup
+- An OpenAI API key for live analysis and material daily synthesis
 
 ```bash
 npm install
 cp .env.example .env
-```
-
-Set `OPENAI_API_KEY` in `.env`, then start both the Vite client and Hono API:
-
-```bash
 chmod 600 .env
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The API runs at
-`http://127.0.0.1:8787` and Vite proxies `/api` during development.
+Open `http://127.0.0.1:5173`. The Hono API runs at
+`http://127.0.0.1:8787`; Vite proxies `/api` during development.
 
-Without a valid API key, the catalog and local search still work, but source
-analysis, feed refresh analysis, and brief generation will fail. Import
-metadata and content may still be saved locally before an analysis failure is
-reported.
+Without an API key the reference catalog, existing signals, and local search
+still work. New source analysis fails safely and records a sanitized error.
 
-To build and run the production bundle locally:
+For the production bundle:
 
 ```bash
 npm run build
 NODE_ENV=production npm start
 ```
 
-The production server serves both the API and the built client from
-`http://127.0.0.1:8787`.
-
 ## Environment variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | none | Required for live analysis and synthesis. Keep it server-side and never commit it. |
-| `OPENAI_ANALYSIS_MODEL` | `gpt-5.4-mini` | Structured source analysis model. |
-| `OPENAI_SYNTHESIS_MODEL` | `gpt-5.5` | Structured daily-brief model. |
-| `HOST` | `127.0.0.1` | API bind address. Keep this on loopback unless you add an authentication and TLS boundary. |
+| `OPENAI_API_KEY` | none | Required for live analysis and material synthesis. |
+| `OPENAI_ANALYSIS_MODEL` | `gpt-5.4-mini` | Thesis-aware source analysis model. |
+| `OPENAI_SYNTHESIS_MODEL` | `gpt-5.5` | Selective daily-brief model. |
+| `HOST` | `127.0.0.1` | API bind address. Keep it on loopback without an auth/TLS boundary. |
 | `PORT` | `8787` | API and production web-server port. |
-| `RELAY_ALLOWED_HOSTS` | `127.0.0.1,localhost,::1` | Comma-separated API request-host allowlist. This is not authentication. |
-| `RELAY_REFRESH_MAX_ITEMS` | `4` | Maximum feed entries analyzed per manual refresh; clamped to 1–12. |
-| `RELAY_DATABASE_PATH` | `data/relay.sqlite` | Optional path for the local SQLite database. |
-| `RELAY_DEMO_DATA` | `false` | Set to `true` to load clearly labeled demo updates and a demo brief. |
+| `RELAY_ALLOWED_HOSTS` | `127.0.0.1,localhost,::1` | API request-host allowlist. |
+| `RELAY_REFRESH_MAX_ITEMS` | `6` | Maximum new candidates analyzed per refresh; clamped to 1–12 and raised when needed to give each enabled feed one candidate. |
+| `RELAY_DATABASE_PATH` | `data/relay.sqlite` | Optional local database path. |
+| `RELAY_DEMO_DATA` | `false` | Opt in to clearly labeled UI fixtures. |
 
-Both OpenAI requests use `store: false`. Source content still leaves the local
-machine when Relay sends it to the configured OpenAI model, so do not process
-material whose license or sensitivity prohibits that use.
+Both model requests use `store: false`. Imported text still leaves the local
+machine when sent to OpenAI, so do not process material whose license or
+sensitivity prohibits that use.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
 | `npm run dev` | Run client and API in watch mode. |
-| `npm run backup` | Create a verified, owner-only SQLite snapshot under `backups/relay`. |
-| `npm run dev:web` | Run only the Vite client. |
-| `npm run dev:api` | Run only the API in watch mode. |
-| `npm run test` | Run the Vitest suite once. |
+| `npm run backup` | Create a verified owner-only SQLite snapshot. |
+| `npm run test` | Run the Vitest suite. |
 | `npm run lint` | Run ESLint with zero warnings allowed. |
-| `npm run typecheck` | Type-check the client project. |
-| `npm run build` | Build the client and server. |
-| `npm run start` | Start the compiled server; set `NODE_ENV=production` to serve the built client too. |
-| `npm run check` | Run lint, type-check, tests, and both production builds. |
+| `npm run typecheck` | Run strict TypeScript checks. |
+| `npm run build` | Build client and server. |
+| `npm run start` | Start the compiled server. |
+| `npm run check` | Run lint, type-check, tests, and both builds. |
 
-## Local data, backup, and reset
+## Local data and migrations
 
-The default database is `data/relay.sqlite`; SQLite may also create
-`data/relay.sqlite-wal` and `data/relay.sqlite-shm`. The database, imported
-source text, generated analysis, review decisions, and generated briefs are
-persisted there and ignored by Git. Database files are restricted to the current
-OS user where the filesystem supports Unix permissions.
+The default database is `data/relay.sqlite`; WAL and shared-memory sidecars may
+also exist. These files, `.env`, backups, imported excerpts, and generated
+analysis are ignored by Git and restricted to the current OS user.
+
+Schema changes are additive. Existing source documents and legacy analyses are
+preserved. Deprecated catalog entries are archived rather than used by the
+current product, and new analyses record source provenance plus an analysis
+version.
 
 Create a consistent backup while Relay is running or stopped:
 
@@ -268,69 +218,44 @@ Create a consistent backup while Relay is running or stopped:
 npm run backup
 ```
 
-The command uses SQLite's online backup API, verifies the snapshot with
-`PRAGMA integrity_check`, writes it with owner-only permissions, and never
-overwrites an existing destination. Backups are private and ignored by Git.
-To restore, stop Relay, replace `data/relay.sqlite` with one snapshot, and
-remove stale `-wal` and `-shm` files before restarting.
+The command uses SQLite’s online backup API, runs `PRAGMA integrity_check`,
+writes owner-only files under `backups/relay`, and never overwrites an existing
+snapshot.
 
-To intentionally reset all local research and return to the reference catalog, stop
-Relay and run:
+To intentionally reset local data:
 
 ```bash
 rm -f data/relay.sqlite data/relay.sqlite-wal data/relay.sqlite-shm
 npm run dev
 ```
 
-The next server start recreates the schema and reference catalog. Demo updates
-are added only when `RELAY_DEMO_DATA=true`. There is no in-app restore or reset
-control.
-
 ## Security boundary
 
-- The development servers and API bind to loopback by default.
-- Relay has **no login, user accounts, authorization, or TLS**. Loopback is the
-  access boundary; do not expose it directly to a LAN or the public internet.
-- API writes reject cross-site requests, and API requests must use an allowed
-  hostname. These defenses do not replace authentication.
-- Public URL fetching allows only credential-free HTTP(S), rejects private and
-  reserved destinations, revalidates redirects, pins the validated public IP,
-  limits redirects, body size, content type, and request duration, and reduces
-  SSRF and DNS-rebinding risk.
-- API request bodies are size-limited, including a dedicated 10 MB file ceiling.
-  Uploaded files are parsed in memory and never written using user-controlled
-  filenames. The server applies a restrictive content security policy and
-  other secure response headers.
-- `.env`, credentials, databases, imported documents, and local analysis are
-  ignored by Git. CI uses read-only repository permissions, and Dependabot
-  monitors npm and GitHub Actions dependencies.
+Relay has no login, user accounts, authorization, or TLS. Loopback is the access
+boundary; do not expose it directly to a LAN or the public internet.
 
-Review `SECURITY.md` before changing network exposure or data handling. Never
-commit paid research, API keys, session tokens, generated databases, or source
-material that cannot be redistributed.
+API writes reject cross-site requests, API requests require an allowed hostname,
+and request bodies are size-limited. Public URL fetching accepts only
+credential-free HTTP(S), rejects private and reserved destinations, revalidates
+redirects, pins the validated public address, and limits redirects, content
+types, response size, and duration.
+
+Review [SECURITY.md](./SECURITY.md) before changing network exposure or data
+handling. Never commit paid excerpts, credentials, databases, or generated local
+analysis.
 
 ## Known limitations
 
-- Feed refresh and daily synthesis are manual UI actions; there is no scheduler,
-  job queue, background worker, or automatic retry.
-- Feed analysis uses the text present in RSS/Atom entries and does not
-  automatically fetch each linked full article.
-- Sources are defined in code. The UI cannot add, edit, enable, or disable feed
-  definitions.
-- Authenticated sources, OCR, and automated investor-relations or SEC ingestion
-  are not implemented.
-- Company theses and the watchlist are seeded in code and are read-only in the
-  UI. Accepting an impact changes its review state; it does not update the
-  company thesis or create a thesis-revision history.
-- Reviews apply to one proposed company impact at a time. Relay exports reviewed
-  examples as JSON but does not yet use them to tune prompts automatically.
-- Search is persisted and local, but currently uses ranked, escaped SQLite
-  `LIKE` queries rather than an FTS index or semantic embeddings.
-- Deduplication catches exact normalized URL/content matches, not every
-  syndicated or semantically equivalent report.
-- There is no multi-user access, cloud sync, notification system, portfolio
-  accounting, market-price data, or scheduled backup.
-- Model availability, latency, output quality, and API cost depend on the
-  configured OpenAI account and selected models.
+- Refresh and brief generation are manual actions; there is no scheduler or
+  background job system.
+- Feed refresh analyzes the content supplied by RSS/Atom entries. It does not
+  automatically fetch every linked article.
+- Public pages without reliable feeds remain manual URL sources.
+- Topic filtering and exact URL/content deduplication do not detect every
+  semantically duplicated story.
+- Existing company theses are seeded in code and read-only in the UI.
+- Lightweight feedback does not automatically rewrite or version a thesis.
+- Model availability, cost, latency, and output quality depend on the configured
+  OpenAI account and models.
 
-Relay is a research organization tool, not financial advice.
+Relay is a research signal filter, not financial advice.

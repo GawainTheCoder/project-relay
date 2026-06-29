@@ -17,11 +17,18 @@ import {
 } from "../components/ui/AsyncState";
 import { SentimentBadge } from "../components/ui/StatusBadge";
 import { useDashboard } from "../context/useDashboard";
+import { getSecondarySignalUpdate } from "../lib/briefs";
 import { formatDate, getLayerName } from "../lib/format";
+import {
+  isThesisChangingImpact,
+  isThesisChangingSignal,
+} from "../lib/signals";
 
 export function TodayPage() {
-  const { data, error, isLoading, reload } = useDashboard();
+  const { data, error, isLoading, regenerateBrief, reload } = useDashboard();
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
+  const [isGeneratingBrief, setIsGeneratingBrief] = useState(false);
+  const [briefError, setBriefError] = useState<string | null>(null);
 
   const briefClaims = useMemo(() => {
     if (!data?.brief) {
@@ -43,6 +50,7 @@ export function TodayPage() {
           data.updates.find((update) => update.id === updateId)
             ?.thesisImpacts ?? [],
       )
+      .filter(isThesisChangingImpact)
       .filter(
         (impact, index, impacts) =>
           impacts.findIndex(
@@ -64,16 +72,34 @@ export function TodayPage() {
     );
   }
   const brief = data.brief;
+  const thesisChangingSignalCount = data.updates.filter(
+    isThesisChangingSignal,
+  ).length;
+  const generateBrief = async () => {
+    setIsGeneratingBrief(true);
+    setBriefError(null);
+    try {
+      await regenerateBrief();
+    } catch (caughtError) {
+      setBriefError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Relay could not generate the brief.",
+      );
+    } finally {
+      setIsGeneratingBrief(false);
+    }
+  };
   if (!brief) {
     return (
       <div className="relay-enter min-h-screen">
         <header className="border-b border-relay-border px-5 py-5 sm:px-8 lg:px-10">
           <div className="mx-auto max-w-[1100px]">
             <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
-              Personal workspace
+              AI infrastructure signal tracker
             </p>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              Today’s intelligence
+              Today’s brief
             </h1>
           </div>
         </header>
@@ -84,32 +110,55 @@ export function TodayPage() {
               className="size-5 text-relay-subtle"
             />
             <h2 className="mt-5 text-2xl font-semibold tracking-tight">
-              {data.updates.length
-                ? "Your analysis is ready for synthesis"
-                : "Your workspace is ready"}
+              {thesisChangingSignalCount
+                ? "Thesis-changing signals are ready"
+                : data.updates.length
+                  ? "No meaningful change"
+                  : "No material signals yet"}
             </h2>
             <p className="mt-3 text-sm leading-7 text-relay-muted">
-              {data.updates.length
-                ? `Relay has ${data.updates.length} analyzed update${
-                    data.updates.length === 1 ? "" : "s"
-                  }. Generate a daily brief when you want the lead signal and supporting synthesis.`
-                : "Import a research file, public URL, or pasted note. Relay will analyze it, index the evidence locally, and build the first daily brief when you ask."}
+              {thesisChangingSignalCount
+                ? `Relay found ${thesisChangingSignalCount} signal${
+                    thesisChangingSignalCount === 1 ? "" : "s"
+                  } that changed an infrastructure thesis. Generate today’s brief for the concise synthesis.`
+                : data.updates.length
+                  ? `Relay analyzed ${data.updates.length} signal${
+                      data.updates.length === 1 ? "" : "s"
+                    } and filtered them out as not thesis-changing.`
+                  : "Refresh trusted feeds or add a public article or permitted excerpt. A quiet day with no thesis change is a valid result."}
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
-              <Link
-                className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0]"
-                to="/sources"
-              >
-                {data.updates.length ? "Generate daily brief" : "Import research"}
-                <ArrowRight aria-hidden="true" className="size-3.5" />
-              </Link>
+              {thesisChangingSignalCount ? (
+                <button
+                  className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0] disabled:cursor-wait disabled:opacity-60"
+                  disabled={isGeneratingBrief}
+                  onClick={() => void generateBrief()}
+                  type="button"
+                >
+                  {isGeneratingBrief ? "Generating…" : "Generate daily brief"}
+                  <ArrowRight aria-hidden="true" className="size-3.5" />
+                </button>
+              ) : (
+                <Link
+                  className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0]"
+                  to="/sources"
+                >
+                  Sources
+                  <ArrowRight aria-hidden="true" className="size-3.5" />
+                </Link>
+              )}
               <Link
                 className="inline-flex h-10 items-center rounded-md border border-relay-border px-4 text-sm text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
                 to="/search"
               >
-                Open local search
+                Search signals
               </Link>
             </div>
+            {briefError ? (
+              <p className="mt-4 text-sm text-relay-negative" role="alert">
+                {briefError}
+              </p>
+            ) : null}
           </section>
         </main>
       </div>
@@ -119,6 +168,7 @@ export function TodayPage() {
   const primaryUpdate = data.updates.find(
     (update) => update.id === brief.updateIds[0],
   );
+  const hasBriefSignals = brief.updateIds.length > 0;
 
   return (
     <div className="relay-enter min-h-screen">
@@ -134,11 +184,11 @@ export function TodayPage() {
               })}
             </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              Today’s intelligence
+              Today’s brief
             </h1>
           </div>
           <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-subtle">
-            {data.updates.length} updates monitored
+            {data.updates.length} signals monitored
             <span className="mx-2 text-relay-border-strong">·</span>
             {brief.model ?? "Seed example"}
           </div>
@@ -150,7 +200,7 @@ export function TodayPage() {
           <article className="max-w-4xl">
             <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
               <span className="size-1.5 rounded-full bg-relay-accent" />
-              Most material signal
+              {hasBriefSignals ? "Most material signal" : "Daily conclusion"}
             </div>
             <h2 className="mt-4 max-w-3xl text-3xl font-semibold leading-[1.15] tracking-[-0.025em] sm:text-4xl">
               {brief.title}
@@ -177,11 +227,11 @@ export function TodayPage() {
             {primaryUpdate ? (
               <Link
                 className="group mt-7 flex items-center justify-between gap-5 rounded-md border border-relay-border bg-relay-surface px-5 py-4 transition-colors hover:border-relay-border-strong hover:bg-relay-surface-2"
-                to={`/updates?update=${encodeURIComponent(primaryUpdate.id)}`}
+                to={`/signals?update=${encodeURIComponent(primaryUpdate.id)}`}
               >
                 <div className="min-w-0">
                   <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-muted">
-                    Read the underlying update
+                    Read the underlying signal
                   </span>
                   <p className="mt-1 truncate text-sm font-medium">
                     {primaryUpdate.title}
@@ -211,8 +261,11 @@ export function TodayPage() {
               {brief.secondarySignals.length ? (
                 <ol className="divide-y divide-relay-border">
                   {brief.secondarySignals.map((signal, index) => {
-                    const relatedUpdate = data.updates.find(
-                      (update) => update.id === brief.updateIds[index + 1],
+                    const relatedUpdate = getSecondarySignalUpdate(
+                      brief,
+                      data.updates,
+                      signal,
+                      index,
                     );
                     return (
                       <li
@@ -240,7 +293,7 @@ export function TodayPage() {
                           <Link
                             aria-label={`Open ${relatedUpdate.title}`}
                             className="rounded p-1 text-relay-subtle hover:bg-relay-surface-2 hover:text-relay-accent"
-                            to={`/updates?update=${encodeURIComponent(relatedUpdate.id)}`}
+                            to={`/signals?update=${encodeURIComponent(relatedUpdate.id)}`}
                           >
                             <ChevronRight
                               aria-hidden="true"
@@ -282,7 +335,7 @@ export function TodayPage() {
                   <Link
                     className="group block py-4"
                     key={impact.id}
-                    to={`/companies/${impact.companyTicker}`}
+                    to={`/theses/${impact.companyTicker}`}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-mono text-sm font-semibold">

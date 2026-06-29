@@ -1,11 +1,10 @@
 import {
-  Bell,
   Building2,
   ChevronLeft,
   ChevronRight,
-  FileText,
-  Layers3,
   Menu,
+  Radar,
+  Rss,
   Search,
   Sun,
   X,
@@ -18,11 +17,9 @@ import { useDashboard } from "../../context/useDashboard";
 
 const primaryNavigation = [
   { label: "Today", href: "/", icon: Sun, end: true },
-  { label: "Search", href: "/search", icon: Search, end: false },
-  { label: "Updates", href: "/updates", icon: Bell, end: false },
-  { label: "Stack", href: "/stack", icon: Layers3, end: false },
-  { label: "Companies", href: "/companies", icon: Building2, end: false },
-  { label: "Sources", href: "/sources", icon: FileText, end: false },
+  { label: "Signals", href: "/signals", icon: Radar, end: false },
+  { label: "Sources", href: "/sources", icon: Rss, end: false },
+  { label: "Theses", href: "/theses", icon: Building2, end: false },
 ] as const;
 
 export function AppShell() {
@@ -186,7 +183,7 @@ export function AppShell() {
         </div>
       ) : null}
 
-      <main
+      <div
         className={`min-w-0 transition-[margin] duration-200 ${
           isCollapsed ? "lg:ml-[72px]" : "lg:ml-[196px]"
         }`}
@@ -200,7 +197,7 @@ export function AppShell() {
           </div>
         ) : null}
         <Outlet />
-      </main>
+      </div>
 
       <CommandPalette
         isOpen={isSearchOpen}

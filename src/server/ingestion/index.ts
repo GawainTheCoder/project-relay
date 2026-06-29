@@ -22,22 +22,34 @@ export {
   deduplicateRssEntries,
   fetchRssSource,
   parseRssFeed,
-  PUBLIC_SOURCE_REGISTRY,
 } from "./rss.js";
+export {
+  ACTIVE_AUTOMATED_SOURCES,
+  findSourceById,
+  findSourceForUrl,
+  findSourcesForUrl,
+  PUBLIC_SOURCE_REGISTRY,
+  selectRefreshCandidates,
+  SOURCE_CATALOG_ROWS,
+  sourceEntryMatchesRules,
+  TRUSTED_SOURCE_REGISTRY,
+} from "./source-registry.js";
 export type {
   NormalizedDocument,
   PublicSourceDefinition,
+  RefreshCandidate,
   RssEntry,
+  SourceEntryBatch,
+  SourceAuthorityTier,
+  SourceFetchStrategy,
+  SourceIntakeMode,
   SourceParagraph,
+  SourceTopicRules,
+  TrustedSourceDefinition,
+  TrustedSourceRole,
 } from "./types.js";
 export {
   ingestUrl,
   type UrlIngestionInput,
   type UrlIngestionOptions,
 } from "./url.js";
-export {
-  extractResearchFile,
-  isSupportedResearchFilename,
-  MAX_RESEARCH_FILE_BYTES,
-  researchFileAccept,
-} from "./file.js";

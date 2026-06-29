@@ -11,7 +11,6 @@ import { jsonError, validationDetails } from "./api/errors.js";
 import {
   impactReviewInputSchema,
   importSourceInputSchema,
-  localFileMetadataSchema,
   resourceIdSchema,
   searchQuerySchema,
   tickerSchema,
@@ -21,15 +20,11 @@ import {
   type RelayRepository,
 } from "./db/repository.js";
 import { createImpactReviewRepository } from "./evaluation/index.js";
-import {
-  extractResearchFile,
-  MAX_RESEARCH_FILE_BYTES,
-} from "./ingestion/file.js";
+import { findSourceForUrl } from "./ingestion/source-registry.js";
 import { canonicalizeUrl } from "./ingestion/normalize.js";
 import { LocalSearchService } from "./search/index.js";
 
 const MAX_API_BODY_BYTES = 1_100_000;
-const MAX_FILE_IMPORT_BODY_BYTES = MAX_RESEARCH_FILE_BYTES + 100_000;
 const DEFAULT_ALLOWED_HOSTNAMES = ["127.0.0.1", "::1", "localhost"] as const;
 
 export interface AppServices {
@@ -189,24 +184,7 @@ export function createApp(options: CreateAppOptions = {}): Hono {
         "The request body exceeds Relay's import limit.",
       ),
   });
-  application.use("/api/*", (context, next) =>
-    context.req.path === "/api/sources/file"
-      ? next()
-      : standardBodyLimit(context, next),
-  );
-  application.use(
-    "/api/sources/file",
-    bodyLimit({
-      maxSize: MAX_FILE_IMPORT_BODY_BYTES,
-      onError: (context) =>
-        jsonError(
-          context,
-          413,
-          "PAYLOAD_TOO_LARGE",
-          "Research files must be 10 MB or smaller.",
-        ),
-    }),
-  );
+  application.use("/api/*", standardBodyLimit);
 
   application.get("/api/health", (context) => {
     return context.json({
@@ -310,24 +288,6 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     }
   });
 
-  application.get("/api/reviews", (context) => {
-    return context.json({
-      reviews: getReviewRepository().listReviews(),
-    });
-  });
-
-  application.get("/api/reviews/summary", (context) => {
-    return context.json(getReviewRepository().getSummary());
-  });
-
-  application.get("/api/reviews/export", (context) => {
-    context.header(
-      "Content-Disposition",
-      `attachment; filename="relay-evaluations-${new Date().toISOString().slice(0, 10)}.json"`,
-    );
-    return context.json(getReviewRepository().exportReviewedExamples());
-  });
-
   application.get("/api/companies/:ticker", (context) => {
     const parsedTicker = tickerSchema.safeParse(context.req.param("ticker"));
     if (!parsedTicker.success) {
@@ -381,96 +341,6 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     };
     const result = await processImportedSource({
       activeOperations,
-      input: importedInput,
-      repository: getRepository(),
-      ...(options.services ? { services: options.services } : {}),
-    });
-    if (!result.ok) {
-      return jsonError(
-        context,
-        result.status,
-        result.error.code,
-        result.error.message,
-      );
-    }
-    return context.json(result.payload, result.status);
-  });
-
-  application.post("/api/sources/file", async (context) => {
-    let formData: FormData;
-    try {
-      formData = await context.req.formData();
-    } catch {
-      return jsonError(
-        context,
-        400,
-        "VALIDATION_ERROR",
-        "Upload a research file using multipart form data.",
-      );
-    }
-    const fileValue = formData.get("file");
-    if (!(fileValue instanceof File)) {
-      return jsonError(
-        context,
-        400,
-        "VALIDATION_ERROR",
-        "Choose a research file to import.",
-      );
-    }
-    const parsedMetadata = localFileMetadataSchema.safeParse({
-      title: formText(formData, "title"),
-      publisher: formText(formData, "publisher"),
-      publishedAt: formText(formData, "publishedAt"),
-      sourceKind: formText(formData, "sourceKind"),
-    });
-    if (!parsedMetadata.success) {
-      return jsonError(
-        context,
-        400,
-        "VALIDATION_ERROR",
-        "The research file metadata is invalid.",
-        validationDetails(parsedMetadata.error),
-      );
-    }
-    if (!fileValue.name || fileValue.name.length > 255) {
-      return jsonError(
-        context,
-        400,
-        "VALIDATION_ERROR",
-        "The research filename is invalid.",
-      );
-    }
-
-    let content: string;
-    try {
-      content = await extractResearchFile({
-        data: new Uint8Array(await fileValue.arrayBuffer()),
-        filename: fileValue.name,
-        ...(fileValue.type ? { mimeType: fileValue.type } : {}),
-      });
-    } catch (error) {
-      return jsonError(
-        context,
-        400,
-        "FILE_EXTRACTION_FAILED",
-        error instanceof Error
-          ? error.message
-          : "Relay could not read this research file.",
-      );
-    }
-
-    const importedInput: ImportSourceInput = {
-      title: parsedMetadata.data.title,
-      publisher: parsedMetadata.data.publisher,
-      content,
-      sourceKind: parsedMetadata.data.sourceKind,
-      ...(parsedMetadata.data.publishedAt
-        ? { publishedAt: parsedMetadata.data.publishedAt }
-        : {}),
-    };
-    const result = await processImportedSource({
-      activeOperations,
-      filename: fileValue.name,
       input: importedInput,
       repository: getRepository(),
       ...(options.services ? { services: options.services } : {}),
@@ -572,7 +442,6 @@ export const app = createApp();
 
 async function processImportedSource(input: {
   activeOperations: Set<string>;
-  filename?: string;
   input: ImportSourceInput;
   repository: RelayRepository;
   services?: AppServices;
@@ -582,7 +451,10 @@ async function processImportedSource(input: {
     content:
       input.input.content ??
       `URL import queued for secure retrieval: ${input.input.sourceUrl ?? ""}`,
-    ...(input.filename ? { filename: input.filename } : {}),
+    researchSourceId:
+      (input.input.sourceUrl
+        ? findSourceForUrl(input.input.sourceUrl)?.id
+        : undefined) ?? "manual-imports",
   });
   if (document.duplicate && document.updateId) {
     const existingUpdate = input.repository.getUpdate(document.updateId);
@@ -658,11 +530,6 @@ async function processImportedSource(input: {
   } finally {
     input.activeOperations.delete(operationId);
   }
-}
-
-function formText(formData: FormData, key: string): string {
-  const value = formData.get(key);
-  return typeof value === "string" ? value : "";
 }
 
 function normalizeHostname(value: string): string {

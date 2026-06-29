@@ -1,11 +1,9 @@
 import {
   BookOpenText,
   Building2,
-  FileSearch,
-  FileText,
-  Layers3,
   LoaderCircle,
   Quote,
+  Radar,
   Search,
   X,
 } from "lucide-react";
@@ -17,7 +15,6 @@ import type {
   SearchResultType,
 } from "../../shared/contracts";
 import { useDashboard } from "../context/useDashboard";
-import { getLayerName } from "../lib/format";
 import { searchRelay } from "../lib/api";
 
 interface CommandPaletteProps {
@@ -34,13 +31,37 @@ type PaletteResult = {
   meta?: string;
 };
 
-const persistedIcons: Record<SearchResultType, typeof Search> = {
-  brief: BookOpenText,
-  company: Building2,
-  document: FileSearch,
-  evidence: Quote,
-  update: FileText,
-};
+const supportedResultTypes = new Set<SearchResultType>([
+  "brief",
+  "company",
+  "evidence",
+  "update",
+]);
+
+function getPersistedIcon(type: SearchResultType) {
+  switch (type) {
+    case "brief":
+      return BookOpenText;
+    case "company":
+      return Building2;
+    case "evidence":
+      return Quote;
+    case "update":
+      return Radar;
+    default:
+      return Search;
+  }
+}
+
+function normalizeResultHref(href: string) {
+  if (href.startsWith("/updates")) {
+    return href.replace("/updates", "/signals");
+  }
+  if (href.startsWith("/companies")) {
+    return href.replace("/companies", "/theses");
+  }
+  return href;
+}
 
 export function CommandPalette({
   isOpen,
@@ -111,22 +132,15 @@ export function CommandPalette({
         key: `company-${company.ticker}`,
         label: `${company.ticker} · ${company.name}`,
         description: company.thesis,
-        href: `/companies/${company.ticker}`,
+        href: `/theses/${company.ticker}`,
         icon: Building2,
       })),
       ...data.updates.map((update) => ({
         key: `update-${update.id}`,
         label: update.title,
         description: `${update.publisher} · ${update.companyTickers.join(", ")}`,
-        href: `/updates?update=${encodeURIComponent(update.id)}`,
-        icon: FileText,
-      })),
-      ...data.layers.map((layer) => ({
-        key: `layer-${layer.id}`,
-        label: getLayerName(layer.id),
-        description: layer.description,
-        href: `/stack?layer=${encodeURIComponent(layer.id)}`,
-        icon: Layers3,
+        href: `/signals?update=${encodeURIComponent(update.id)}`,
+        icon: Radar,
       })),
     ];
     return entries.slice(0, 8);
@@ -134,14 +148,16 @@ export function CommandPalette({
 
   const results: PaletteResult[] =
     cleanQuery.length >= 2
-      ? (remoteState.query === cleanQuery ? remoteState.results : []).map((result) => ({
-          key: `${result.type}-${result.id}`,
-          label: result.title,
-          description: result.snippet || result.subtitle,
-          href: result.href,
-          icon: persistedIcons[result.type],
-          meta: result.matchedField,
-        }))
+      ? (remoteState.query === cleanQuery ? remoteState.results : [])
+          .filter((result) => supportedResultTypes.has(result.type))
+          .map((result) => ({
+            key: `${result.type}-${result.id}`,
+            label: result.title,
+            description: result.snippet || result.subtitle,
+            href: normalizeResultHref(result.href),
+            icon: getPersistedIcon(result.type),
+            meta: result.matchedField,
+          }))
       : localResults;
 
   if (!isOpen) {
@@ -194,7 +210,7 @@ export function CommandPalette({
                 }
               }
             }}
-            placeholder="Search documents, evidence, companies, and updates"
+            placeholder="Search signals, evidence, briefs, and theses"
             ref={inputRef}
             value={query}
           />

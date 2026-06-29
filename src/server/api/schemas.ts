@@ -40,7 +40,6 @@ export const importSourceInputSchema = z
     sourceKind: z
       .enum([
         "earnings-release",
-        "sec-filing",
         "transcript",
         "paper",
         "technical",
@@ -80,19 +79,3 @@ export const searchQuerySchema = z.object({
   q: z.string().trim().min(2).max(120),
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
-
-export const localFileMetadataSchema = z
-  .object({
-    title: z.string().trim().min(1).max(500),
-    publisher: z.string().trim().min(1).max(200),
-    publishedAt: z.union([z.literal(""), z.iso.datetime({ offset: true })]),
-    sourceKind: z.enum([
-      "earnings-release",
-      "sec-filing",
-      "transcript",
-      "paper",
-      "technical",
-      "other",
-    ]),
-  })
-  .strict();

@@ -15,6 +15,7 @@ import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { SentimentBadge } from "../components/ui/StatusBadge";
 import { useDashboard } from "../context/useDashboard";
 import { formatDate, getLayerName, titleCase } from "../lib/format";
+import { isThesisChangingImpact, isThesisChangingSignal } from "../lib/signals";
 
 export function CompanyDetailPage() {
   const { ticker = "" } = useParams();
@@ -47,10 +48,10 @@ export function CompanyDetailPage() {
           </h1>
           <Link
             className="mt-5 inline-flex items-center gap-2 text-sm text-relay-accent hover:text-white"
-            to="/companies"
+            to="/theses"
           >
             <ArrowLeft aria-hidden="true" className="size-4" />
-            Back to companies
+            Back to theses
           </Link>
         </section>
       </div>
@@ -58,7 +59,15 @@ export function CompanyDetailPage() {
   }
 
   const evidenceUpdates = data.updates
-    .filter((update) => update.companyTickers.includes(company.ticker))
+    .filter(
+      (update) =>
+        isThesisChangingSignal(update) &&
+        update.thesisImpacts.some(
+          (impact) =>
+            impact.companyTicker === company.ticker &&
+            isThesisChangingImpact(impact),
+        ),
+    )
     .sort(
       (left, right) =>
         new Date(right.publishedAt).getTime() -
@@ -71,7 +80,7 @@ export function CompanyDetailPage() {
         <div className="mx-auto max-w-[1280px]">
           <Link
             className="inline-flex items-center gap-2 text-xs text-relay-muted hover:text-relay-text"
-            to="/companies"
+            to="/theses"
           >
             <ArrowLeft aria-hidden="true" className="size-3.5" />
             Company theses
@@ -88,13 +97,12 @@ export function CompanyDetailPage() {
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 {company.layerIds.map((layerId) => (
-                  <Link
-                    className="font-mono text-[10px] uppercase tracking-[0.08em] text-relay-accent hover:text-white"
+                  <span
+                    className="font-mono text-[10px] uppercase tracking-[0.08em] text-relay-accent"
                     key={layerId}
-                    to={`/stack?layer=${layerId}&company=${company.ticker}`}
                   >
                     {getLayerName(layerId)}
-                  </Link>
+                  </span>
                 ))}
               </div>
             </div>
@@ -208,7 +216,7 @@ export function CompanyDetailPage() {
               </p>
             </div>
             <span className="font-mono text-[10px] text-relay-subtle">
-              {evidenceUpdates.length} updates
+              {evidenceUpdates.length} signals
             </span>
           </div>
           {evidenceUpdates.length ? (
@@ -216,13 +224,14 @@ export function CompanyDetailPage() {
               {evidenceUpdates.map((update) => {
                 const impact = update.thesisImpacts.find(
                   (candidate) =>
-                    candidate.companyTicker === company.ticker,
+                    candidate.companyTicker === company.ticker &&
+                    isThesisChangingImpact(candidate),
                 );
                 return (
                   <Link
                     className="group grid gap-3 py-5 sm:grid-cols-[120px_minmax(0,1fr)_auto]"
                     key={update.id}
-                    to={`/updates?update=${encodeURIComponent(update.id)}`}
+                    to={`/signals?update=${encodeURIComponent(update.id)}`}
                   >
                     <time
                       className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.06em] text-relay-subtle"

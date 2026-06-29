@@ -3,11 +3,9 @@ import type {
   DailyBrief,
   ImpactReview,
   ImpactReviewInput,
-  ImpactReviewSummary,
   ImportSourceInput,
   IntelligenceUpdate,
   SearchResult,
-  SourceKind,
 } from "../../shared/contracts";
 
 export class ApiError extends Error {
@@ -83,29 +81,6 @@ export function importSource(
   });
 }
 
-export interface ImportSourceFileInput {
-  file: File;
-  publisher: string;
-  publishedAt?: string;
-  sourceKind: SourceKind;
-  title: string;
-}
-
-export function importSourceFile(
-  input: ImportSourceFileInput,
-): Promise<ImportSourceResult> {
-  const formData = new FormData();
-  formData.set("file", input.file);
-  formData.set("title", input.title);
-  formData.set("publisher", input.publisher);
-  formData.set("publishedAt", input.publishedAt ?? "");
-  formData.set("sourceKind", input.sourceKind);
-  return requestJson<ImportSourceResult>("/api/sources/file", {
-    method: "POST",
-    body: formData,
-  });
-}
-
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
@@ -135,34 +110,6 @@ export function reviewImpact(
       body: JSON.stringify(input),
     },
   );
-}
-
-export function getReviewSummary(
-  signal?: AbortSignal,
-): Promise<ImpactReviewSummary> {
-  return requestJson<ImpactReviewSummary>("/api/reviews/summary", {
-    ...(signal ? { signal } : {}),
-  });
-}
-
-export async function downloadReviewExport(): Promise<void> {
-  const response = await fetch("/api/reviews/export", {
-    headers: { Accept: "application/json" },
-  });
-  if (!response.ok) {
-    throw new ApiError("The evaluation export could not be created.", response.status);
-  }
-  const blob = await response.blob();
-  const disposition = response.headers.get("content-disposition");
-  const filename =
-    disposition?.match(/filename="([^"]+)"/)?.[1] ??
-    "relay-evaluations.json";
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 export interface RefreshSourcesResult {

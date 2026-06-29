@@ -5,6 +5,7 @@ import type { IntelligenceUpdate } from "../../shared/contracts.js";
 import { EvidenceValidationError } from "./errors.js";
 import {
   buildDailyBrief,
+  selectBriefEligibleUpdates,
   synthesizeDailyBrief,
 } from "./synthesize.js";
 import type { DailyBriefOutput } from "./schemas.js";
@@ -22,6 +23,9 @@ function makeUpdate(): IntelligenceUpdate {
     layerIds: ["optics"],
     companyTickers: ["COHR"],
     materiality: "high",
+    materialityReason:
+      "New order evidence raises confidence in an optical bottleneck.",
+    novelty: "new",
     sentiment: "bullish",
     whatHappened: "Orders doubled.",
     whyItMatters: "Optics may constrain cluster deployment.",
@@ -36,7 +40,19 @@ function makeUpdate(): IntelligenceUpdate {
         locator: "P1",
       },
     ],
-    thesisImpacts: [],
+    thesisImpacts: [
+      {
+        id: "impact_1",
+        companyTicker: "COHR",
+        direction: "bullish",
+        summary: "Order acceleration supports pricing power.",
+        thesisDelta:
+          "The thesis moves from expected demand to realized order acceleration.",
+        confidence: "medium",
+        horizon: "6-12 months",
+        decision: "proposed",
+      },
+    ],
     model: "gpt-5.4-mini",
   };
 }
@@ -63,6 +79,29 @@ describe("synthesizeDailyBrief", () => {
     expect(brief.citationClaimIds).toEqual([]);
   });
 
+  it("returns deterministic no-change when all updates fail the thesis gate", async () => {
+    const update = makeUpdate();
+    update.materiality = "not-material";
+    update.sentiment = "not-material";
+    update.thesisImpacts = [];
+    const client = mockClient({
+      title: "Should not run",
+      summary: "Should not run",
+      signal: "Should not run",
+      secondarySignals: [],
+      updateIds: [],
+      citationClaimIds: [],
+    });
+
+    const brief = await synthesizeDailyBrief([update], {
+      client,
+      now: () => NOW,
+    });
+
+    expect(brief.title).toBe("No meaningful change");
+    expect(client.responses.parse).not.toHaveBeenCalled();
+  });
+
   it("builds an evidence-linked daily synthesis", async () => {
     const output: DailyBriefOutput = {
       title: "Optics moved to the foreground",
@@ -77,6 +116,15 @@ describe("synthesizeDailyBrief", () => {
     const brief = await synthesizeDailyBrief([makeUpdate()], {
       client,
       now: () => NOW,
+      sourceProfilesByUpdateId: {
+        update_1: {
+          id: "example-research",
+          name: "Example Research",
+          role: "primary",
+          authorityTier: "specialist",
+          priority: 90,
+        },
+      },
     });
 
     expect(brief).toEqual(
@@ -91,6 +139,7 @@ describe("synthesizeDailyBrief", () => {
       expect.objectContaining({
         model: "gpt-5.5",
         store: false,
+        input: expect.stringContaining('"authorityTier":"specialist"'),
       }),
     );
   });
@@ -141,6 +190,66 @@ describe("synthesizeDailyBrief", () => {
         now: () => NOW,
       }),
     ).rejects.toBeInstanceOf(EvidenceValidationError);
+  });
+});
+
+describe("selectBriefEligibleUpdates", () => {
+  it("requires material evidence and a non-rejected concrete thesis delta", () => {
+    const eligible = makeUpdate();
+    const noClaims = {
+      ...makeUpdate(),
+      id: "update_no_claims",
+      claims: [],
+    };
+    const noDelta = {
+      ...makeUpdate(),
+      id: "update_no_delta",
+      thesisImpacts: makeUpdate().thesisImpacts.map((impact) => ({
+        ...impact,
+        thesisDelta: "",
+      })),
+    };
+    const rejected = {
+      ...makeUpdate(),
+      id: "update_rejected",
+      thesisImpacts: makeUpdate().thesisImpacts.map((impact) => ({
+        ...impact,
+        decision: "rejected" as const,
+      })),
+    };
+    const repeated = {
+      ...makeUpdate(),
+      id: "update_repeated",
+      novelty: "repetition" as const,
+    };
+
+    expect(
+      selectBriefEligibleUpdates([
+        eligible,
+        noClaims,
+        noDelta,
+        rejected,
+        repeated,
+      ]),
+    ).toEqual([eligible]);
+  });
+
+  it("removes rejected impacts and their company tags before synthesis", () => {
+    const update = makeUpdate();
+    update.companyTickers = ["COHR", "VRT"];
+    update.thesisImpacts.push({
+      ...update.thesisImpacts[0]!,
+      id: "impact_rejected",
+      companyTicker: "VRT",
+      decision: "rejected",
+    });
+
+    const [eligible] = selectBriefEligibleUpdates([update]);
+
+    expect(eligible?.companyTickers).toEqual(["COHR"]);
+    expect(
+      eligible?.thesisImpacts.map((impact) => impact.companyTicker),
+    ).toEqual(["COHR"]);
   });
 });
 

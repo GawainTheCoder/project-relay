@@ -10,122 +10,246 @@ import {
   analyzeDocument,
   analyzeImportedSource as analyzePastedSource,
   analyzeUrlSource,
+  selectBriefEligibleUpdates,
+  type AnalysisContext,
+  type AnalysisSourceProfile,
   synthesizeDailyBrief,
 } from "./intelligence/index.js";
 import {
+  ACTIVE_AUTOMATED_SOURCES,
   deduplicateRssEntries,
   fetchRssSource,
+  findSourceById,
+  findSourceForUrl,
   normalizeRssEntry,
-  PUBLIC_SOURCE_REGISTRY,
+  selectRefreshCandidates,
+  type SourceEntryBatch,
+  type TrustedSourceDefinition,
 } from "./ingestion/index.js";
 
-const DEFAULT_REFRESH_MAX_ITEMS = 4;
+const DEFAULT_REFRESH_MAX_ITEMS = 6;
 const MAX_REFRESH_ITEMS = 12;
 
 export function createAppServices(repository: RelayRepository): AppServices {
   return {
-    analyzeImportedSource: (input) => analyzeImportedSource(input),
+    analyzeImportedSource: (input) =>
+      analyzeImportedSource(repository, input),
     refreshSources: () => refreshPublicSources(repository),
     generateBrief: () => generateDailyBrief(repository),
   };
 }
 
 export async function analyzeImportedSource(
+  repository: RelayRepository,
   input: ImportSourceInput,
 ): Promise<IntelligenceUpdate> {
+  const source =
+    (input.sourceUrl ? findSourceForUrl(input.sourceUrl) : undefined) ??
+    findSourceById("manual-imports");
+  const context = buildAnalysisContext(repository, source);
   if (input.content?.trim()) {
-    return analyzePastedSource(input);
+    return analyzePastedSource(input, { analysis: { context } });
   }
   if (!input.sourceUrl) {
     throw new Error("Provide pasted source content or a public source URL.");
   }
-  return analyzeUrlSource({
-    url: input.sourceUrl,
-    title: input.title,
-    publisher: input.publisher,
-    ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}),
-  });
+  return analyzeUrlSource(
+    {
+      url: input.sourceUrl,
+      title: input.title,
+      publisher: input.publisher,
+      ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}),
+    },
+    { analysis: { context } },
+  );
 }
 
 export async function refreshPublicSources(
   repository: RelayRepository,
 ): Promise<{ imported: number; analyzed: number; errors: string[] }> {
-  const maxItems = refreshLimit();
   let imported = 0;
   let analyzed = 0;
   let processed = 0;
   const errors: string[] = [];
+  const enabledSourceIds = new Set(
+    repository
+      .listSources()
+      .filter((source) => source.enabled)
+      .map((source) => source.id),
+  );
+  const activeSources = ACTIVE_AUTOMATED_SOURCES.filter((source) =>
+    enabledSourceIds.has(source.id),
+  );
+  const maxItems = Math.max(refreshLimit(), activeSources.length);
+  const outcomes = await Promise.all(
+    activeSources.map(async (source) => {
+      repository.recordSourceSync(source.id, "syncing");
+      try {
+        const entries = deduplicateRssEntries(
+          await fetchRssSource(source),
+        ).toSorted(
+          (left, right) =>
+            Date.parse(right.publishedAt) - Date.parse(left.publishedAt),
+        );
+        repository.recordSourceSync(source.id, "ready");
+        return { batch: { source, entries } satisfies SourceEntryBatch };
+      } catch (error) {
+        repository.recordSourceSync(source.id, "error");
+        return { error: `${source.name}: ${safeMessage(error)}` };
+      }
+    }),
+  );
+  const batches: SourceEntryBatch[] = [];
+  outcomes.forEach((outcome) => {
+    if ("batch" in outcome) {
+      batches.push(outcome.batch);
+    } else {
+      errors.push(outcome.error);
+    }
+  });
 
-  for (const source of PUBLIC_SOURCE_REGISTRY.filter(
-    (item) => item.enabledByDefault,
-  )) {
+  const schedule = selectRefreshCandidates(batches, {
+    limit: activeSources.reduce(
+      (total, source) => total + source.perRefreshQuota,
+      0,
+    ),
+  });
+  for (const { entry, source } of schedule) {
     if (processed >= maxItems) {
       break;
     }
+    const document = repository.persistSourceDocument({
+      title: entry.title,
+      publisher: entry.publisher,
+      sourceUrl: entry.sourceUrl,
+      publishedAt: entry.publishedAt,
+      content: entry.content,
+      researchSourceId: source.id,
+    });
+    if (document.duplicate && document.status === "analyzed") {
+      continue;
+    }
 
-    repository.recordSourceSync(source.id, "syncing");
+    processed += 1;
+    imported += document.duplicate ? 0 : 1;
     try {
-      const entries = deduplicateRssEntries(
-        await fetchRssSource(source),
-      ).toSorted(
-        (left, right) =>
-          Date.parse(right.publishedAt) - Date.parse(left.publishedAt),
-      );
-
-      for (const entry of entries) {
-        if (processed >= maxItems) {
-          break;
-        }
-
-        const input = {
-          title: entry.title,
-          publisher: entry.publisher,
-          sourceUrl: entry.sourceUrl,
-          publishedAt: entry.publishedAt,
-          content: entry.content,
-          researchSourceId: source.id,
-        };
-        const document = repository.persistSourceDocument(input);
-        if (document.duplicate && document.status === "analyzed") {
-          continue;
-        }
-
-        processed += 1;
-        imported += document.duplicate ? 0 : 1;
-        try {
-          const normalized = normalizeRssEntry(entry, {
-            sourceType: source.type,
-          });
-          const update = await analyzeDocument(normalized);
-          const persisted = repository.persistAnalyzedUpdate(update);
-          repository.markSourceDocumentAnalyzed(document.id, persisted.id);
-          analyzed += 1;
-        } catch (error) {
-          repository.markSourceDocumentError(document.id, safeMessage(error));
-          errors.push(`${source.name}: ${safeMessage(error)}`);
-        }
-      }
-
-      repository.recordSourceSync(source.id, "ready");
+      const normalized = normalizeRssEntry(entry, {
+        sourceType: source.type,
+      });
+      const update = await analyzeDocument(normalized, {
+        context: buildAnalysisContext(repository, source),
+      });
+      const persisted = repository.persistAnalyzedUpdate(update);
+      repository.markSourceDocumentAnalyzed(document.id, persisted.id);
+      analyzed += 1;
     } catch (error) {
-      repository.recordSourceSync(source.id, "error");
+      repository.markSourceDocumentError(document.id, safeMessage(error));
       errors.push(`${source.name}: ${safeMessage(error)}`);
     }
   }
-
   return { imported, analyzed, errors };
 }
 
 export async function generateDailyBrief(
   repository: RelayRepository,
 ): Promise<DailyBrief> {
-  const updates = repository.listUpdates(30);
-  if (!updates.length) {
-    throw new Error(
-      "Import and analyze at least one source before generating a brief.",
-    );
+  const latestBrief = repository.getDashboard().brief;
+  const newUpdates = latestBrief
+    ? repository.listUpdatesIngestedAfter(latestBrief.generatedAt)
+    : repository.listAllUpdates();
+  const today = new Date().toISOString().slice(0, 10);
+  if (
+    latestBrief?.date === today &&
+    selectBriefEligibleUpdates(newUpdates).length === 0
+  ) {
+    return latestBrief;
   }
-  return synthesizeDailyBrief(updates);
+  const previousBriefUpdates =
+    latestBrief?.date === today
+      ? latestBrief.updateIds
+          .map((updateId) => repository.getUpdate(updateId))
+          .filter((update): update is IntelligenceUpdate => update !== null)
+      : [];
+  const updates = [
+    ...new Map(
+      [...previousBriefUpdates, ...newUpdates].map((update) => [
+        update.id,
+        update,
+      ]),
+    ).values(),
+  ];
+  const sourceProfilesByUpdateId: Record<
+    string,
+    Pick<
+      AnalysisSourceProfile,
+      "id" | "name" | "role" | "authorityTier" | "priority"
+    >
+  > = {};
+  updates.forEach((update) => {
+    const sourceId = repository.getResearchSourceIdForUpdate(update.id);
+    const source = sourceId ? findSourceById(sourceId) : undefined;
+    if (source) {
+      sourceProfilesByUpdateId[update.id] = {
+        id: source.id,
+        name: source.name,
+        role: source.role,
+        authorityTier: source.authorityTier,
+        priority: source.priority,
+      };
+    }
+  });
+  return synthesizeDailyBrief(updates, {
+    sourceProfilesByUpdateId,
+  });
+}
+
+function buildAnalysisContext(
+  repository: RelayRepository,
+  source: TrustedSourceDefinition | undefined,
+): AnalysisContext {
+  return {
+    watchlistCompanies: repository.listCompanies().map((company) => ({
+      ticker: company.ticker,
+      thesis: company.thesis,
+      provesRight: company.provesRight,
+      breaksThesis: company.breaksThesis,
+      watchMetrics: company.watchMetrics,
+    })),
+    recentSignals: repository.listUpdates(20).map((update) => ({
+      id: update.id,
+      title: update.title,
+      publishedAt: update.publishedAt,
+      companyTickers: update.companyTickers,
+      materiality: update.materiality,
+      whatHappened: update.whatHappened,
+      thesisImpacts: update.thesisImpacts.map((impact) => ({
+        companyTicker: impact.companyTicker,
+        direction: impact.direction,
+        thesisDelta: impact.thesisDelta,
+      })),
+    })),
+    sourceProfile: source
+      ? {
+          id: source.id,
+          name: source.name,
+          role: source.role,
+          authorityTier: source.authorityTier,
+          priority: source.priority,
+          layerIds: source.layerIds,
+          companyTickers: source.companyTickers,
+        }
+      : null,
+  };
+}
+
+export function resolveResearchSourceId(input: ImportSourceInput): string {
+  if (input.sourceUrl) {
+    const source = findSourceForUrl(input.sourceUrl);
+    if (source) {
+      return source.id;
+    }
+  }
+  return "manual-imports";
 }
 
 function refreshLimit(): number {

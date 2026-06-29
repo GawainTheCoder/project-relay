@@ -1,9 +1,9 @@
 import {
   Check,
-  FileText,
   Link2,
   LoaderCircle,
-  Upload,
+  Quote,
+  Radar,
   X,
 } from "lucide-react";
 import {
@@ -17,8 +17,8 @@ import type {
   ImportSourceInput,
   SourceKind,
 } from "../../../shared/contracts";
-import { importSource, importSourceFile } from "../../lib/api";
 import { Button } from "../../components/ui/Button";
+import { importSource } from "../../lib/api";
 
 interface ImportSourceDialogProps {
   isOpen: boolean;
@@ -26,22 +26,23 @@ interface ImportSourceDialogProps {
   onImported: () => Promise<void>;
 }
 
+type IntakeMode = "url" | "excerpt";
+
 export function ImportSourceDialog({
   isOpen,
   onClose,
   onImported,
 }: ImportSourceDialogProps) {
+  const [mode, setMode] = useState<IntakeMode>("url");
   const [title, setTitle] = useState("");
   const [publisher, setPublisher] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
   const [content, setContent] = useState("");
-  const [file, setFile] = useState<File | null>(null);
   const [sourceKind, setSourceKind] = useState<SourceKind>("other");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -77,53 +78,43 @@ export function ImportSourceDialog({
       setError("Title and publisher are required.");
       return;
     }
-    if (!file && !cleanUrl && cleanContent.length < 20) {
-      setError(
-        "Choose a file, add a source URL, or paste at least 20 characters.",
-      );
+    if (mode === "url" && !cleanUrl) {
+      setError("Add a public article URL.");
+      return;
+    }
+    if (mode === "excerpt" && cleanContent.length < 20) {
+      setError("Paste at least 20 characters from the source.");
       return;
     }
 
     const input: ImportSourceInput = {
       title: cleanTitle,
       publisher: cleanPublisher,
-      ...(cleanUrl ? { sourceUrl: cleanUrl } : {}),
-      ...(cleanContent ? { content: cleanContent } : {}),
+      ...(mode === "url" ? { sourceUrl: cleanUrl } : { content: cleanContent }),
       sourceKind,
     };
 
     setIsSubmitting(true);
     try {
-      const result = file
-        ? await importSourceFile({
-            file,
-            publisher: cleanPublisher,
-            sourceKind,
-            title: cleanTitle,
-          })
-        : await importSource(input);
+      const result = await importSource(input);
       setSuccess(
         result.duplicate
-          ? "This source was already in Relay. The existing analysis was kept."
+          ? "This signal is already tracked. Relay kept the existing analysis."
           : result.update
-            ? "Source imported and analyzed."
-            : "Source accepted. Analysis is running in the background.",
+            ? "Signal added and analyzed."
+            : "Signal added. Analysis is pending.",
       );
       await onImported();
       setTitle("");
       setPublisher("");
       setSourceUrl("");
       setContent("");
-      setFile(null);
       setSourceKind("other");
-      if (fileRef.current) {
-        fileRef.current.value = "";
-      }
     } catch (caughtError) {
       setError(
         caughtError instanceof Error
           ? caughtError.message
-          : "The source could not be imported.",
+          : "The signal could not be added.",
       );
     } finally {
       setIsSubmitting(false);
@@ -132,7 +123,7 @@ export function ImportSourceDialog({
 
   return (
     <div
-      aria-labelledby="import-source-title"
+      aria-labelledby="add-signal-title"
       aria-modal="true"
       className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"
       onMouseDown={(event) => {
@@ -147,16 +138,16 @@ export function ImportSourceDialog({
           <div>
             <h2
               className="text-lg font-semibold tracking-tight"
-              id="import-source-title"
+              id="add-signal-title"
             >
-              Import research
+              Add signal
             </h2>
             <p className="mt-1 text-sm text-relay-muted">
-              Add a file, URL, or text you are authorized to use.
+              Analyze a public article or a permitted source excerpt.
             </p>
           </div>
           <button
-            aria-label="Close import"
+            aria-label="Close add signal"
             className="rounded p-1.5 text-relay-muted hover:bg-relay-raised hover:text-relay-text"
             disabled={isSubmitting}
             onClick={onClose}
@@ -168,15 +159,56 @@ export function ImportSourceDialog({
 
         <form onSubmit={submit}>
           <div className="space-y-5 p-5">
+            <div
+              aria-label="Signal source"
+              className="grid grid-cols-2 gap-1 rounded-md bg-relay-deep p-1"
+              role="group"
+            >
+              <button
+                aria-pressed={mode === "url"}
+                className={`flex items-center justify-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
+                  mode === "url"
+                    ? "bg-relay-raised text-relay-text"
+                    : "text-relay-muted hover:text-relay-text"
+                }`}
+                onClick={() => {
+                  setMode("url");
+                  setError(null);
+                  setSuccess(null);
+                }}
+                type="button"
+              >
+                <Link2 aria-hidden="true" className="size-3.5" />
+                Public URL
+              </button>
+              <button
+                aria-pressed={mode === "excerpt"}
+                className={`flex items-center justify-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
+                  mode === "excerpt"
+                    ? "bg-relay-raised text-relay-text"
+                    : "text-relay-muted hover:text-relay-text"
+                }`}
+                onClick={() => {
+                  setMode("excerpt");
+                  setError(null);
+                  setSuccess(null);
+                }}
+                type="button"
+              >
+                <Quote aria-hidden="true" className="size-3.5" />
+                Pasted excerpt
+              </button>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
                 <span className="text-xs font-medium text-relay-muted">
-                  Title
+                  Signal title
                 </span>
                 <input
                   className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm placeholder:text-relay-subtle focus:border-relay-accent"
                   onChange={(event) => setTitle(event.target.value)}
-                  placeholder="Research title"
+                  placeholder="What changed?"
                   ref={titleRef}
                   required
                   value={title}
@@ -189,7 +221,7 @@ export function ImportSourceDialog({
                 <input
                   className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm placeholder:text-relay-subtle focus:border-relay-accent"
                   onChange={(event) => setPublisher(event.target.value)}
-                  placeholder="Company or author"
+                  placeholder="Publication or author"
                   required
                   value={publisher}
                 />
@@ -198,7 +230,7 @@ export function ImportSourceDialog({
 
             <label className="block">
               <span className="text-xs font-medium text-relay-muted">
-                Source type
+                Signal type
               </span>
               <select
                 className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm text-relay-text focus:border-relay-accent"
@@ -208,75 +240,52 @@ export function ImportSourceDialog({
                 value={sourceKind}
               >
                 <option value="other">Article or research note</option>
-                <option value="earnings-release">Earnings release</option>
-                <option value="sec-filing">SEC filing</option>
-                <option value="transcript">Transcript</option>
-                <option value="paper">Paper</option>
+                <option value="earnings-release">
+                  Official company update
+                </option>
                 <option value="technical">Technical release</option>
+                <option value="paper">Research paper</option>
+                <option value="transcript">Interview or transcript</option>
               </select>
             </label>
 
-            <label className="block rounded-md border border-dashed border-relay-border-strong bg-relay-deep p-4 transition-colors hover:border-relay-accent/60">
-              <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
-                <Upload aria-hidden="true" className="size-3.5" />
-                Local research file
-              </span>
-              <input
-                accept=".pdf,.txt,.md,.html,.htm"
-                className="mt-3 block w-full text-xs text-relay-muted file:mr-3 file:rounded file:border-0 file:bg-relay-raised file:px-3 file:py-2 file:text-xs file:text-relay-text"
-                onChange={(event) => {
-                  const nextFile = event.target.files?.[0] ?? null;
-                  setFile(nextFile);
-                  if (nextFile && !title.trim()) {
-                    setTitle(
-                      nextFile.name.replace(/\.(pdf|txt|md|html?|htm)$/i, ""),
-                    );
-                  }
-                }}
-                ref={fileRef}
-                type="file"
-              />
-              <span className="mt-2 block text-[10px] leading-4 text-relay-subtle">
-                PDF, text, Markdown, or HTML · 10 MB max · scanned PDFs need
-                OCR first
-              </span>
-            </label>
-
-            <label className="block">
-              <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
-                <Link2 aria-hidden="true" className="size-3.5" />
-                Source URL
-              </span>
-              <input
-                className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm placeholder:text-relay-subtle focus:border-relay-accent"
-                onChange={(event) => setSourceUrl(event.target.value)}
-                placeholder="https://…"
-                type="url"
-                value={sourceUrl}
-              />
-            </label>
-
-            <div className="flex items-center gap-3 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-              <span className="h-px flex-1 bg-relay-border" />
-              Or paste text directly
-              <span className="h-px flex-1 bg-relay-border" />
-            </div>
-
-            <label className="block">
-              <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
-                <FileText aria-hidden="true" className="size-3.5" />
-                Source content
-              </span>
-              <textarea
-                className="mt-2 min-h-44 w-full resize-y rounded-md border border-relay-border bg-relay-deep px-3 py-3 text-sm leading-6 placeholder:text-relay-subtle focus:border-relay-accent"
-                onChange={(event) => setContent(event.target.value)}
-                placeholder="Paste an article, transcript, filing excerpt, or research note…"
-                value={content}
-              />
-              <span className="mt-1 block text-right font-mono text-[9px] text-relay-subtle">
-                {content.trim().length} characters
-              </span>
-            </label>
+            {mode === "url" ? (
+              <label className="block">
+                <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
+                  <Link2 aria-hidden="true" className="size-3.5" />
+                  Public article URL
+                </span>
+                <input
+                  className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm placeholder:text-relay-subtle focus:border-relay-accent"
+                  onChange={(event) => setSourceUrl(event.target.value)}
+                  placeholder="https://…"
+                  required
+                  type="url"
+                  value={sourceUrl}
+                />
+                <span className="mt-2 block text-[10px] leading-4 text-relay-subtle">
+                  Use a public article page. Authenticated or paywalled sources
+                  should be added as a permitted excerpt.
+                </span>
+              </label>
+            ) : (
+              <label className="block">
+                <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
+                  <Quote aria-hidden="true" className="size-3.5" />
+                  Source excerpt
+                </span>
+                <textarea
+                  className="mt-2 min-h-52 w-full resize-y rounded-md border border-relay-border bg-relay-deep px-3 py-3 text-sm leading-6 placeholder:text-relay-subtle focus:border-relay-accent"
+                  onChange={(event) => setContent(event.target.value)}
+                  placeholder="Paste the specific passage that contains the signal…"
+                  required
+                  value={content}
+                />
+                <span className="mt-1 block text-right font-mono text-[9px] text-relay-subtle">
+                  {content.trim().length} characters
+                </span>
+              </label>
+            )}
 
             {error ? (
               <p
@@ -311,9 +320,9 @@ export function ImportSourceDialog({
                   className="size-3.5 animate-spin"
                 />
               ) : (
-                <FileText aria-hidden="true" className="size-3.5" />
+                <Radar aria-hidden="true" className="size-3.5" />
               )}
-              {isSubmitting ? "Analyzing source" : "Import and analyze"}
+              {isSubmitting ? "Analyzing signal" : "Add and analyze"}
             </Button>
           </footer>
         </form>

@@ -55,6 +55,7 @@ export interface ImpactReviewSnapshot {
     summary: string;
     confidence: string;
     horizon: string;
+    thesisDelta: string;
   };
   claims: ImpactReviewClaimSnapshot[];
 }
@@ -400,6 +401,7 @@ export class ImpactReviewRepository {
             impact.summary AS impact_summary,
             impact.confidence,
             impact.horizon,
+            impact.thesis_delta,
             update_record.title,
             update_record.publisher,
             update_record.source_url,
@@ -464,6 +466,7 @@ export class ImpactReviewRepository {
         summary: text(snapshotRow.impact_summary, "impact_summary"),
         confidence: text(snapshotRow.confidence, "confidence"),
         horizon: text(snapshotRow.horizon, "horizon"),
+        thesisDelta: text(snapshotRow.thesis_delta, "thesis_delta"),
       },
       claims,
     };

@@ -18,22 +18,48 @@ const intelligenceMocks = vi.hoisted(() => ({
   analyzeDocument: vi.fn(),
   analyzeImportedSource: vi.fn(),
   analyzeUrlSource: vi.fn(),
+  selectBriefEligibleUpdates: vi.fn((updates: IntelligenceUpdate[]) =>
+    updates.filter(
+      (update) =>
+        update.materiality !== "not-material" &&
+        update.novelty !== "repetition" &&
+        update.thesisImpacts.some(
+          (impact) =>
+            impact.direction !== "not-material" &&
+            impact.decision !== "rejected" &&
+            impact.review?.decision !== "rejected" &&
+            impact.thesisDelta.trim().length > 0,
+        ),
+    ),
+  ),
   synthesizeDailyBrief: vi.fn(),
 }));
 
 const ingestionMocks = vi.hoisted(() => ({
-  deduplicateRssEntries: vi.fn(),
-  fetchRssSource: vi.fn(),
-  normalizeRssEntry: vi.fn(),
-  PUBLIC_SOURCE_REGISTRY: [
+  ACTIVE_AUTOMATED_SOURCES: [
     {
       id: "arxiv-distributed-systems",
       name: "Mock arXiv",
       type: "paper",
+      role: "primary",
+      authorityTier: "specialist",
+      layerIds: ["serving"],
+      companyTickers: [],
+      intakeMode: "feed",
+      fetchStrategy: "rss",
       url: "https://example.com/feed.xml",
+      allowedDomains: ["example.com"],
       enabledByDefault: true,
+      priority: 72,
+      perRefreshQuota: 1,
     },
   ],
+  deduplicateRssEntries: vi.fn(),
+  fetchRssSource: vi.fn(),
+  findSourceById: vi.fn(),
+  findSourceForUrl: vi.fn(),
+  normalizeRssEntry: vi.fn(),
+  selectRefreshCandidates: vi.fn(),
 }));
 
 vi.mock("../intelligence/index.js", () => intelligenceMocks);
@@ -52,6 +78,33 @@ describe("Relay service integration with mocked external boundaries", () => {
   beforeEach(() => {
     repository = createRelayRepository(":memory:");
     vi.clearAllMocks();
+    ingestionMocks.findSourceById.mockReturnValue({
+      id: "manual-imports",
+      name: "Other manual excerpts",
+      type: "manual",
+      role: "context",
+      authorityTier: "unknown",
+      layerIds: [],
+      companyTickers: [],
+      intakeMode: "manual-excerpt",
+      fetchStrategy: "manual",
+      url: null,
+      allowedDomains: [],
+      enabledByDefault: false,
+      priority: 50,
+      perRefreshQuota: 0,
+    });
+    ingestionMocks.findSourceForUrl.mockReturnValue(undefined);
+    ingestionMocks.selectRefreshCandidates.mockImplementation(
+      (batches: Array<{ source: unknown; entries: RssEntry[] }>) =>
+        batches.flatMap((batch) =>
+          batch.entries.map((entry) => ({
+            source: batch.source,
+            entry,
+            score: 1,
+          })),
+        ),
+    );
   });
 
   afterEach(() => {
@@ -68,8 +121,21 @@ describe("Relay service integration with mocked external boundaries", () => {
     const update = makeUpdate(repository, "manual-service-analysis");
     intelligenceMocks.analyzeImportedSource.mockResolvedValue(update);
 
-    await expect(analyzeImportedSource(input)).resolves.toEqual(update);
-    expect(intelligenceMocks.analyzeImportedSource).toHaveBeenCalledWith(input);
+    await expect(analyzeImportedSource(repository, input)).resolves.toEqual(
+      update,
+    );
+    expect(intelligenceMocks.analyzeImportedSource).toHaveBeenCalledWith(
+      input,
+      expect.objectContaining({
+        analysis: {
+          context: expect.objectContaining({
+            watchlistCompanies: expect.arrayContaining([
+              expect.objectContaining({ ticker: "NVDA" }),
+            ]),
+          }),
+        },
+      }),
+    );
     expect(intelligenceMocks.analyzeUrlSource).not.toHaveBeenCalled();
   });
 
@@ -83,19 +149,26 @@ describe("Relay service integration with mocked external boundaries", () => {
     const update = makeUpdate(repository, "url-service-analysis");
     intelligenceMocks.analyzeUrlSource.mockResolvedValue(update);
 
-    await expect(analyzeImportedSource(input)).resolves.toEqual(update);
-    expect(intelligenceMocks.analyzeUrlSource).toHaveBeenCalledWith({
-      url: input.sourceUrl,
-      title: input.title,
-      publisher: input.publisher,
-      publishedAt: input.publishedAt,
-    });
+    await expect(analyzeImportedSource(repository, input)).resolves.toEqual(
+      update,
+    );
+    expect(intelligenceMocks.analyzeUrlSource).toHaveBeenCalledWith(
+      {
+        url: input.sourceUrl,
+        title: input.title,
+        publisher: input.publisher,
+        publishedAt: input.publishedAt,
+      },
+      expect.objectContaining({
+        analysis: { context: expect.any(Object) },
+      }),
+    );
     expect(intelligenceMocks.analyzeImportedSource).not.toHaveBeenCalled();
   });
 
   it("rejects an import that reaches the service without content or a URL", async () => {
     await expect(
-      analyzeImportedSource({
+      analyzeImportedSource(repository, {
         title: "Incomplete source",
         publisher: "Personal research",
       }),
@@ -141,12 +214,21 @@ describe("Relay service integration with mocked external boundaries", () => {
       errors: [],
     });
     expect(ingestionMocks.fetchRssSource).toHaveBeenCalledWith(
-      ingestionMocks.PUBLIC_SOURCE_REGISTRY[0],
+      ingestionMocks.ACTIVE_AUTOMATED_SOURCES[0],
     );
     expect(ingestionMocks.normalizeRssEntry).toHaveBeenCalledWith(entry, {
       sourceType: "paper",
     });
-    expect(intelligenceMocks.analyzeDocument).toHaveBeenCalledWith(document);
+    expect(intelligenceMocks.analyzeDocument).toHaveBeenCalledWith(
+      document,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          sourceProfile: expect.objectContaining({
+            id: "arxiv-distributed-systems",
+          }),
+        }),
+      }),
+    );
     expect(repository.getUpdate(update.id)).toEqual(update);
     expect(
       repository
@@ -172,6 +254,9 @@ describe("Relay service integration with mocked external boundaries", () => {
       model: "mock-synthesis-model",
     };
     intelligenceMocks.synthesizeDailyBrief.mockResolvedValue(generatedBrief);
+    repository.persistAnalyzedUpdate(
+      makeUpdate(repository, "fresh-service-update"),
+    );
     const services = createAppServices(repository);
     if (!services.generateBrief) {
       throw new Error("Expected createAppServices to configure synthesis.");
@@ -183,13 +268,192 @@ describe("Relay service integration with mocked external boundaries", () => {
       intelligenceMocks.synthesizeDailyBrief.mock.calls[0]?.[0] as
         | IntelligenceUpdate[]
         | undefined;
-    expect(updates).toHaveLength(7);
-    expect(updates?.map((update) => update.id)).toContain("vrt-fy25-q4");
+    expect(updates).toHaveLength(1);
+    expect(updates?.map((update) => update.id)).toContain(
+      "fresh-service-update",
+    );
 
     await expect(generateDailyBrief(repository)).resolves.toEqual(
       generatedBrief,
     );
     expect(intelligenceMocks.synthesizeDailyBrief).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns an existing same-day brief when no newer signals exist", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const existing: DailyBrief = {
+      id: "meaningful-today-brief",
+      date: today,
+      title: "Power remains constrained",
+      summary: "A meaningful same-day synthesis.",
+      signal: "Power delivery remains the binding bottleneck.",
+      secondarySignals: [],
+      updateIds: [],
+      citationClaimIds: [],
+      generatedAt: new Date().toISOString(),
+      model: "mock-synthesis-model",
+    };
+    repository.persistDailyBrief(existing);
+
+    await expect(generateDailyBrief(repository)).resolves.toEqual(existing);
+    expect(intelligenceMocks.synthesizeDailyBrief).not.toHaveBeenCalled();
+  });
+
+  it("preserves a same-day meaningful brief when newer signals are only noise", async () => {
+    const generatedAt = new Date();
+    const existing: DailyBrief = {
+      id: "meaningful-brief-before-noise",
+      date: generatedAt.toISOString().slice(0, 10),
+      title: "Power remains constrained",
+      summary: "A meaningful same-day synthesis.",
+      signal: "Power delivery remains the binding bottleneck.",
+      secondarySignals: [],
+      updateIds: [],
+      citationClaimIds: [],
+      generatedAt: generatedAt.toISOString(),
+      model: "mock-synthesis-model",
+    };
+    repository.persistDailyBrief(existing);
+    repository.persistAnalyzedUpdate({
+      ...makeUpdate(repository, "new-repetition"),
+      ingestedAt: new Date(generatedAt.getTime() + 1_000).toISOString(),
+      materiality: "not-material",
+      materialityReason: "The item repeats evidence already in the thesis.",
+      novelty: "repetition",
+      sentiment: "not-material",
+      thesisImpacts: [],
+    });
+
+    await expect(generateDailyBrief(repository)).resolves.toEqual(existing);
+    expect(intelligenceMocks.synthesizeDailyBrief).not.toHaveBeenCalled();
+  });
+
+  it("carries prior same-day brief signals into synthesis with a new material signal", async () => {
+    const generatedAt = new Date();
+    const priorUpdate = repository.getUpdate("vrt-fy25-q4");
+    if (!priorUpdate) {
+      throw new Error("Expected prior update fixture.");
+    }
+    repository.persistDailyBrief({
+      id: "meaningful-brief-before-new-signal",
+      date: generatedAt.toISOString().slice(0, 10),
+      title: "Power remains constrained",
+      summary: "The prior signal must remain in the daily window.",
+      signal: "Power delivery remains the binding bottleneck.",
+      secondarySignals: [],
+      updateIds: [priorUpdate.id],
+      citationClaimIds: [priorUpdate.claims[0]!.id],
+      generatedAt: generatedAt.toISOString(),
+      model: "mock-synthesis-model",
+    });
+    const newUpdate = {
+      ...makeUpdate(repository, "new-material-signal"),
+      ingestedAt: new Date(generatedAt.getTime() + 1_000).toISOString(),
+    };
+    repository.persistAnalyzedUpdate(newUpdate);
+    const generated: DailyBrief = {
+      id: "merged-same-day-brief",
+      date: generatedAt.toISOString().slice(0, 10),
+      title: "Power and networking moved",
+      summary: "Both same-day signals were considered.",
+      signal: "The new signal extends rather than erases the prior brief.",
+      secondarySignals: [],
+      updateIds: [priorUpdate.id, newUpdate.id],
+      citationClaimIds: [
+        priorUpdate.claims[0]!.id,
+        newUpdate.claims[0]!.id,
+      ],
+      generatedAt: new Date(generatedAt.getTime() + 2_000).toISOString(),
+      model: "mock-synthesis-model",
+    };
+    intelligenceMocks.synthesizeDailyBrief.mockResolvedValue(generated);
+
+    await expect(generateDailyBrief(repository)).resolves.toEqual(generated);
+    const updates =
+      intelligenceMocks.synthesizeDailyBrief.mock.calls[0]?.[0] as
+        | IntelligenceUpdate[]
+        | undefined;
+    expect(updates?.map((update) => update.id)).toEqual([
+      priorUpdate.id,
+      newUpdate.id,
+    ]);
+  });
+
+  it("does not cap the first brief generation at 100 signals", async () => {
+    repository.database.prepare("DELETE FROM daily_briefs").run();
+    for (let index = 0; index < 101; index += 1) {
+      repository.persistAnalyzedUpdate(
+        makeUpdate(repository, `initial-signal-${index}`),
+      );
+    }
+    const generated: DailyBrief = {
+      id: "uncapped-initial-brief",
+      date: "2026-06-29",
+      title: "All initial signals considered",
+      summary: "The first synthesis received the complete corpus.",
+      signal: "No first-run signal was dropped by a fixed limit.",
+      secondarySignals: [],
+      updateIds: [],
+      citationClaimIds: [],
+      generatedAt: "2026-06-29T12:00:00.000Z",
+      model: "mock-synthesis-model",
+    };
+    intelligenceMocks.synthesizeDailyBrief.mockResolvedValue(generated);
+
+    await expect(generateDailyBrief(repository)).resolves.toEqual(generated);
+    const updates =
+      intelligenceMocks.synthesizeDailyBrief.mock.calls[0]?.[0] as
+        | IntelligenceUpdate[]
+        | undefined;
+    expect(updates?.length).toBeGreaterThan(100);
+    expect(
+      updates?.filter((update) => update.id.startsWith("initial-signal-")),
+    ).toHaveLength(101);
+  });
+
+  it("includes every signal ingested after the brief cursor regardless of publication date", async () => {
+    const cursor = new Date("2026-06-27T23:00:00.000Z");
+    repository.persistDailyBrief({
+      id: "cursor-brief",
+      date: "2026-06-27",
+      title: "Cursor brief",
+      summary: " establishes the synthesis cursor.",
+      signal: "The next run must include every newly ingested signal.",
+      secondarySignals: [],
+      updateIds: [],
+      citationClaimIds: [],
+      generatedAt: cursor.toISOString(),
+      model: "mock-synthesis-model",
+    });
+    for (let index = 0; index < 35; index += 1) {
+      repository.persistAnalyzedUpdate({
+        ...makeUpdate(repository, `cursor-signal-${index}`),
+        publishedAt: `2025-01-${String((index % 28) + 1).padStart(2, "0")}T00:00:00.000Z`,
+        ingestedAt: new Date(cursor.getTime() + (index + 1) * 1_000).toISOString(),
+      });
+    }
+    const generated: DailyBrief = {
+      id: "all-cursor-signals-brief",
+      date: "2026-06-29",
+      title: "All signals considered",
+      summary: "The complete post-cursor set reached synthesis.",
+      signal: "No backdated signal was skipped.",
+      secondarySignals: [],
+      updateIds: [],
+      citationClaimIds: [],
+      generatedAt: "2026-06-29T12:00:00.000Z",
+      model: "mock-synthesis-model",
+    };
+    intelligenceMocks.synthesizeDailyBrief.mockResolvedValue(generated);
+
+    await expect(generateDailyBrief(repository)).resolves.toEqual(generated);
+    const updates =
+      intelligenceMocks.synthesizeDailyBrief.mock.calls[0]?.[0] as
+        | IntelligenceUpdate[]
+        | undefined;
+    expect(updates).toHaveLength(35);
+    expect(updates?.[0]?.id).toBe("cursor-signal-0");
+    expect(updates?.[34]?.id).toBe("cursor-signal-34");
   });
 });
 
@@ -205,6 +469,7 @@ function makeUpdate(
     ...seed,
     id,
     title: `Service update ${id}`,
+    ingestedAt: "2026-06-28T05:00:00.000Z",
     claims: seed.claims.slice(0, 1).map((claim) => ({
       ...claim,
       id: `claim-${id}`,
