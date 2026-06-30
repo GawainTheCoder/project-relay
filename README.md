@@ -1,72 +1,95 @@
 # Relay
 
-Relay is a personal AI-infrastructure signal tracker. It watches a small set of
-trusted sources, extracts exact claims, maps them to infrastructure layers and
-watchlist companies, and decides whether the evidence changes an existing
-thesis.
+Relay is a personal, versioned thesis system for the AI-infrastructure stack.
+It watches a small set of trusted sources, preserves their exact claims as an
+immutable evidence ledger, and evaluates whether that evidence changes a
+company or macro infrastructure thesis.
 
 Relay is deliberately not a filing vault, PDF archive, generic news reader,
 portfolio tracker, or document-management system. Most incoming items should be
-classified as **not material**. A daily brief with “No meaningful change” is a
-successful result.
+classified as **not material** or reinforce the current mental model without
+changing it. A daily brief with “No meaningful change” is a successful result.
+
+The core product question is:
+
+> **What thesis did this update?**
+
+Articles and signals provide provenance; they are not the end product. Relay's
+primary output is a small set of reviewable changes to the owner's understanding
+of the stack.
 
 ## Product loop
 
 ```mermaid
 flowchart LR
     SOURCES["Trusted feeds, public URLs, excerpts"] --> FILTER["Topic, recency, and duplicate filters"]
-    FILTER --> CLAIMS["Exact source claims"]
-    CLAIMS --> CONTEXT["Compare with theses and recent signals"]
-    CONTEXT --> GATE{"Changes a thesis?"}
-    GATE -- No --> DISMISS["Filtered out"]
-    GATE -- Yes --> SIGNAL["Company and stack signal"]
-    SIGNAL --> BRIEF["Selective daily brief"]
+    FILTER --> SIGNAL["Immutable signal and exact claims"]
+    SIGNAL --> EVALUATE["Evaluate company and macro theses"]
+    EVALUATE --> PROPOSAL{"Thesis outcome"}
+    PROPOSAL -- "Unchanged" --> LEDGER["Retain as evidence"]
+    PROPOSAL -- "Reinforced, weakened, contradicted, revised" --> REVIEW["Owner review"]
+    REVIEW -- Accept --> VERSION["New current thesis version"]
+    REVIEW -- "Reject or defer" --> HISTORY["Auditable evaluation history"]
+    LEDGER --> BRIEF["What changed in my understanding?"]
+    VERSION --> BRIEF
+    HISTORY --> BRIEF
 ```
 
-For every candidate Relay separates:
+Relay deliberately separates source analysis from thesis evaluation:
 
-1. **Evidence** — exact quotes verified against normalized source paragraphs.
-2. **Classification** — affected stack layers and watchlist companies.
-3. **Novelty** — new evidence, confirmation, contradiction, or repetition.
-4. **Thesis delta** — the concrete change in confidence, timing, magnitude,
-   bottleneck duration, or competitive position.
-5. **Direction** — bullish, bearish, neutral, or not material for each affected
-   company.
+1. **Signal** — an immutable record of the source, exact quotes verified against
+   normalized source paragraphs, and source-level classification.
+2. **Thesis** — a durable company or macro claim with confidence, unknowns,
+   and explicit strengthening and weakening conditions.
+3. **Evaluation** — a model-proposed outcome that cites supplied claims and
+   explains the evidence-to-thesis reasoning.
+4. **Review** — an owner decision to accept, reject, or defer the proposal.
+5. **Version** — the new current thesis state created only when an accepted
+   evaluation actually changes the thesis.
 
-Repetition cannot be material. A not-material item cannot carry an actionable
-thesis impact. A material signal must contain an exact evidence claim and a
-concrete delta for a known watchlist company.
+Valid evaluation outcomes are `unchanged`, `reinforced`, `weakened`,
+`contradicted`, and `revised`. Relay does not force every signal to update a
+thesis. Confidence can move by at most 10 points per evaluation, and a revision
+to thesis text requires evidence from at least two independent source
+provenances. The model proposes changes; it never silently rewrites the current
+thesis.
 
 ## Product surfaces
 
-- **Today** shows the lead signal, concise synthesis, affected theses, and exact
-  supporting evidence. It also treats “No meaningful change” as a first-class
-  outcome.
-- **Briefs** keeps a dated archive of prior daily conclusions with their
-  underlying signals and stored evidence citations.
-- **Signals** defaults to thesis-changing items. A secondary filtered-out view
-  keeps noise inspectable without making it the product center.
+- **Today** answers “What changed in my understanding?” It separates the
+  largest thesis update from evidence that accumulated without changing a
+  thesis, and treats “No meaningful change” as a first-class outcome.
+- **Theses** (`/theses`) is the primary workspace. Company and Macro tabs show
+  the current thesis, confidence, evidence counts, and pending-review count.
+  `/theses/:beliefId` shows supporting, opposing, and contextual evidence;
+  unknowns; strengthening and weakening conditions; pending evaluations; and
+  accepted version history.
+- **Evidence** (`/signals`) is the immutable source-derived signal ledger. It
+  remains inspectable for provenance and review without being the product
+  center.
+- **Briefs** keeps a dated archive of mental-model conclusions with their
+  underlying thesis evaluations, signals, and exact evidence citations.
 - **Sources** shows trusted-source health, refreshes enabled public feeds,
   identifies every item handled by the latest refresh, accepts public article
   URLs and manually pasted excerpts, and lets the owner add or remove feeds.
-- **Theses** contains the starting 13-company watchlist, confirmation signals,
-  break conditions, watch metrics, linked signal history, and owner-managed
-  company theses.
 - **Search** remains available through `Cmd+K` / `Ctrl+K` and a dedicated route,
-  but searches only signals, evidence, briefs, and theses—not raw source text.
+  but searches only theses, signals, exact evidence, and briefs—not raw source
+  text.
 
-The stack map remains available as contextual infrastructure for signals and
-theses, rather than as a primary navigation destination.
+The stack map remains available as context linking macro and company theses to
+the infrastructure dependency graph. Legacy `/beliefs` and `/companies` routes
+redirect to `/theses`.
 
 ## Managing your tracker
 
-Relay starts with the focused AI-infrastructure watchlist and source catalog,
-but both are owner-managed:
+Relay starts with a focused AI-infrastructure watchlist, six macro theses, and
+a trusted-source catalog:
 
-- Use **Theses → Add thesis** to define a company, infrastructure layers, core
-  thesis, confirmation criteria, disconfirming criteria, watch metrics, and
-  initial confidence. Selecting any thesis row opens its full detail directly.
-- Use **Remove** on a thesis detail page to take it off the active watchlist.
+- Use **Theses → Add company thesis** to define a company, infrastructure
+  layers, current thesis, confirmation criteria, disconfirming criteria, watch
+  metrics, and initial confidence. Selecting any thesis opens its full detail.
+- Use **Remove thesis** on a company thesis detail page to take it off the active
+  watchlist.
   Relay archives the company instead of deleting historical signals or evidence.
 - Use **Sources → Add source** to add an RSS, release, or research feed. Added
   feeds participate in the same normalization, deduplication, topic filtering,
@@ -79,12 +102,36 @@ but both are owner-managed:
 
 After **Refresh**, the result ledger names every feed item Relay handled and
 marks it as **New**, **Analyzed**, **Already tracked**, or **Error**. Analyzed
-items link directly to their signal, so aggregate counts such as “1 new, 1
-analyzed” always map back to a specific title and source.
+items link directly to their evidence record, so aggregate counts such as “1
+new, 1 analyzed” always map back to a specific title and source.
 
-After **Generate brief**, use **Open brief** to go directly to the current
-synthesis. The **Briefs** route preserves prior dated briefs, their underlying
-signals, and any stored evidence citations.
+## Thesis evaluation and review
+
+Thesis evaluation is intentionally a separate, manual operation. Refreshing or
+adding a source records evidence; it does not silently change a thesis. The
+current API workflow is:
+
+```bash
+# Evaluate evidence added since the latest evaluation batch.
+curl -X POST http://127.0.0.1:8787/api/theses/evaluate
+
+# Inspect the resulting proposal in GET /api/theses/:id, then decide it.
+curl -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"accepted","note":"Evidence clears the change threshold."}' \
+  http://127.0.0.1:8787/api/thesis-evaluations/EVALUATION_ID/review
+```
+
+Reviews accept `accepted`, `rejected`, or `deferred`. Accepting a changed
+evaluation transactionally creates a new thesis version and links its exact
+evidence into the durable ledger. Accepting an `unchanged` evaluation records
+the decision without creating a redundant version. Rejected and deferred
+proposals remain auditable, and stale proposals cannot overwrite a thesis that
+has advanced since they were created.
+
+After evaluation and review, use **Generate understanding readout** on Today. The
+**Briefs** route preserves prior dated conclusions, their underlying
+evaluations and signals, and stored evidence citations.
 
 ## Source strategy
 
@@ -126,15 +173,24 @@ OCR, SEC crawling, Twitter/X ingestion, or generic stock-news collection.
 
 ## Daily brief
 
-Brief generation considers only new signals since the latest brief. Code-level
-eligibility excludes not-material items, unsupported claims, rejected impacts,
-and impacts without a concrete thesis delta before synthesis begins.
+The daily brief is a mental-model readout, not a news summary. It prioritizes:
 
-If nothing qualifies, Relay creates a deterministic “No meaningful change”
-brief without making an OpenAI synthesis request. Otherwise the synthesis model
-can select only supplied update IDs and evidence claim IDs, and Relay validates
-every returned reference before persistence. Each dated brief remains available
-through the brief archive.
+- accepted thesis changes,
+- pending changes clearly labeled as proposals,
+- confidence movement and contradictions,
+- multi-source synthesis when independent evidence chains converge, and
+- evidence that was evaluated without changing the current thesis.
+
+Brief generation considers only evidence and evaluations in the current brief
+window. Code-level eligibility excludes unsupported claims and rejected
+proposals. The synthesis model can select only supplied evaluation, signal, and
+evidence-claim IDs, and Relay validates every returned reference before
+persistence.
+
+If nothing clears the threshold, Relay creates a deterministic “No meaningful
+change” brief without making an OpenAI synthesis request. The underlying
+evidence remains available for future comparison. Each dated brief and its
+evaluation links remain available through the brief archive.
 
 ## Infrastructure map
 
@@ -164,7 +220,8 @@ VRT, ETN, GEV, and TSM.
 - React 19, React Router, Vite, TypeScript, and Tailwind CSS 4
 - Hono on the Node.js HTTP server
 - Node’s built-in SQLite driver in WAL mode
-- OpenAI Responses API with strict Zod structured outputs
+- OpenAI Responses API with strict Zod structured outputs for source analysis,
+  thesis evaluation, and thesis-first brief synthesis
 - Mozilla Readability, RSS/Atom parsing, and hardened public URL fetching
 - Vitest and ESLint
 
@@ -176,6 +233,10 @@ Owner-management and history APIs include:
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/theses?kind=company\|macro&status=active\|archived\|all` | List versioned theses. |
+| `GET` | `/api/theses/:id` | Read current state, evidence, evaluations, and version history. |
+| `POST` | `/api/theses/evaluate` | Evaluate newer evidence against active company and macro theses. |
+| `POST` | `/api/thesis-evaluations/:id/review` | Accept, reject, or defer a proposed thesis update. |
 | `POST` | `/api/companies` | Add or restore a company thesis. |
 | `DELETE` | `/api/companies/:ticker` | Archive a company thesis. |
 | `POST` | `/api/sources` | Add an RSS, release, or research feed. |
@@ -185,15 +246,17 @@ Owner-management and history APIs include:
 | `GET` | `/api/briefs/:id` | Read one persisted brief. |
 
 SQLite remains the private system of record for source provenance, hashes,
-analysis status, signals, exact claims, thesis impacts, lightweight corrections,
-and briefs. Raw source records are internal provenance/cache data and are not
-presented as a document library.
+analysis status, immutable signals, exact claims, theses, thesis versions,
+evaluation proposals and reviews, evidence links, and briefs. Raw source
+records are internal provenance/cache data and are not presented as a document
+library.
 
 ## Requirements and setup
 
 - Node.js 22 or newer
 - npm 10 or newer
-- An OpenAI API key for live analysis and material daily synthesis
+- An OpenAI API key for live source analysis, thesis evaluation, and material
+  daily synthesis
 
 ```bash
 npm install
@@ -205,8 +268,9 @@ npm run dev
 Open `http://127.0.0.1:5173`. The Hono API runs at
 `http://127.0.0.1:8787`; Vite proxies `/api` during development.
 
-Without an API key the reference catalog, existing signals, and local search
-still work. New source analysis fails safely and records a sanitized error.
+Without an API key the seeded theses, source catalog, existing evidence, and
+local search still work. New source analysis and thesis evaluation fail safely;
+source-analysis failures record a sanitized error.
 
 For the production bundle:
 
@@ -219,9 +283,10 @@ NODE_ENV=production npm start
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | none | Required for live analysis and material synthesis. |
-| `OPENAI_ANALYSIS_MODEL` | `gpt-5.4-mini` | Thesis-aware source analysis model. |
-| `OPENAI_SYNTHESIS_MODEL` | `gpt-5.5` | Selective daily-brief model. |
+| `OPENAI_API_KEY` | none | Required for live source analysis, thesis evaluation, and material synthesis. |
+| `OPENAI_ANALYSIS_MODEL` | `gpt-5.4-mini` | Source analysis and exact-evidence extraction model. |
+| `OPENAI_THESIS_EVALUATION_MODEL` | `gpt-5.5` | Company and macro thesis-evaluation model. |
+| `OPENAI_SYNTHESIS_MODEL` | `gpt-5.5` | Understanding-first daily-readout model. |
 | `OPENAI_STORE_RESPONSES` | `true` | Store Responses with searchable Relay metadata in the OpenAI Platform. Set `false` for sensitive sources. |
 | `HOST` | `127.0.0.1` | API bind address. Keep it on loopback without an auth/TLS boundary. |
 | `PORT` | `8787` | API and production web-server port. |
@@ -230,8 +295,9 @@ NODE_ENV=production npm start
 | `RELAY_DATABASE_PATH` | `data/relay.sqlite` | Optional local database path. |
 | `RELAY_DEMO_DATA` | `false` | Opt in to clearly labeled UI fixtures. |
 
-Both model requests store their Responses and attach searchable metadata for the
-Relay operation, environment, source/update identifiers, and brief inputs.
+Model requests store their Responses and attach searchable metadata for the
+Relay operation, environment, source/update or evaluation identifiers, and
+brief inputs.
 OpenAI retains stored Response application state for at least 30 days. Set
 `OPENAI_STORE_RESPONSES=false` before processing sensitive sources that should
 not appear in Platform logs. Imported text always leaves the local machine when
@@ -257,10 +323,12 @@ The default database is `data/relay.sqlite`; WAL and shared-memory sidecars may
 also exist. These files, `.env`, backups, imported excerpts, and generated
 analysis are ignored by Git and restricted to the current OS user.
 
-Schema changes are additive. Existing source documents and legacy analyses are
-preserved. Removed companies and sources are archived so prior evidence remains
-valid, owner-added feeds survive catalog reseeding, and new analyses record
-source provenance plus an analysis version.
+Schema changes are additive. Existing company rows are backfilled into
+version-one company theses, while macro theses are seeded independently.
+Existing source documents and legacy analyses are preserved. Removed companies
+and sources are archived so prior evidence remains valid, owner-added feeds
+survive catalog reseeding, and new analyses record source provenance plus an
+analysis version.
 
 Create a consistent backup while Relay is running or stopped:
 
@@ -298,14 +366,21 @@ analysis.
 
 - Refresh and brief generation are manual actions; there is no scheduler or
   background job system.
+- Thesis evaluation is also manual. Refreshing or importing a source does not
+  automatically evaluate or change theses.
 - Feed refresh analyzes the content supplied by RSS/Atom entries. It does not
   automatically fetch every linked article.
 - Public pages without reliable feeds remain manual URL sources.
 - Topic filtering and exact URL/content deduplication do not detect every
   semantically duplicated story.
-- Existing company theses are seeded in code and read-only in the UI.
-- Lightweight feedback does not automatically rewrite or version a thesis.
+- Company theses can be added and archived in the UI, but macro theses are
+  currently seeded in code and cannot yet be created or edited in the UI.
+- Pending thesis evaluations are visible in thesis detail and can be accepted,
+  rejected, or deferred in the UI.
+- Confidence is a reviewable heuristic score, not a calibrated probability.
+- Source independence is approximated from Relay's source provenance IDs; it
+  cannot prove that two publishers did not rely on the same upstream report.
 - Model availability, cost, latency, and output quality depend on the configured
   OpenAI account and models.
 
-Relay is a research signal filter, not financial advice.
+Relay is a research thesis system, not financial advice.

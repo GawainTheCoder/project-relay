@@ -9,6 +9,7 @@ export type SearchResultType =
   | "brief"
   | "company"
   | "evidence"
+  | "thesis"
   | "update";
 
 export interface SearchResult {
@@ -59,6 +60,7 @@ export class LocalSearchService {
     );
 
     const candidates = [
+      ...this.searchTheses(query, tokens, candidateLimit),
       ...this.searchUpdates(query, tokens, candidateLimit),
       ...this.searchEvidence(query, tokens, candidateLimit),
       ...this.searchCompanies(query, tokens, candidateLimit),
@@ -147,6 +149,95 @@ export class LocalSearchService {
         title: requiredText(updateRow, "title"),
         subtitle: requiredText(updateRow, "publisher"),
         href: `/signals?update=${encodeURIComponent(requiredText(updateRow, "id"))}`,
+        fields,
+        query,
+        tokens,
+      });
+    });
+  }
+
+  private searchTheses(
+    query: string,
+    tokens: string[],
+    limit: number,
+  ): RankedSearchResult[] {
+    const searchableExpression = `
+      COALESCE(t.title, '') || ' ' ||
+      COALESCE(v.belief, '') || ' ' ||
+      COALESCE(v.unknowns_json, '') || ' ' ||
+      COALESCE(v.strengthening_conditions_json, '') || ' ' ||
+      COALESCE(v.weakening_conditions_json, '') || ' ' ||
+      COALESCE((
+        SELECT GROUP_CONCAT(company_ticker, ' ')
+        FROM thesis_companies
+        WHERE thesis_id = t.id
+      ), '') || ' ' ||
+      COALESCE((
+        SELECT GROUP_CONCAT(layer_id, ' ')
+        FROM thesis_layers
+        WHERE thesis_id = t.id
+      ), '')
+    `;
+    const thesisRows = this.queryRows(
+      `
+        SELECT
+          t.id,
+          t.type,
+          t.title,
+          v.belief,
+          v.confidence,
+          v.unknowns_json,
+          v.strengthening_conditions_json,
+          v.weakening_conditions_json,
+          COALESCE((
+            SELECT GROUP_CONCAT(company_ticker, ' ')
+            FROM thesis_companies
+            WHERE thesis_id = t.id
+          ), '') AS companies,
+          COALESCE((
+            SELECT GROUP_CONCAT(layer_id, ' ')
+            FROM thesis_layers
+            WHERE thesis_id = t.id
+          ), '') AS layers
+        FROM theses t
+        JOIN thesis_versions v ON v.id = t.current_version_id
+        WHERE t.status = 'active'
+          AND ${tokenWhere(searchableExpression, tokens)}
+        ORDER BY t.type, t.title
+        LIMIT ?
+      `,
+      [...toPatterns(tokens), limit],
+    );
+
+    return thesisRows.map((thesisRow) => {
+      const thesisId = requiredText(thesisRow, "id");
+      const fields: SearchField[] = [
+        field("thesis title", thesisRow.title, 132),
+        field("current thesis", thesisRow.belief, 120),
+        field("companies", thesisRow.companies, 96),
+        field("stack layers", thesisRow.layers, 92),
+        field("unknowns", thesisRow.unknowns_json, 86),
+        field(
+          "strengthening conditions",
+          thesisRow.strengthening_conditions_json,
+          82,
+        ),
+        field(
+          "weakening conditions",
+          thesisRow.weakening_conditions_json,
+          82,
+        ),
+      ];
+      const confidence =
+        typeof thesisRow.confidence === "number"
+          ? Math.round(thesisRow.confidence)
+          : 0;
+      return buildResult({
+        type: "thesis",
+        id: thesisId,
+        title: requiredText(thesisRow, "title"),
+        subtitle: `${titleCase(requiredText(thesisRow, "type"))} thesis · ${confidence}/100 confidence`,
+        href: `/theses/${encodeURIComponent(thesisId)}`,
         fields,
         query,
         tokens,
@@ -490,6 +581,14 @@ function normalizeDisplayText(value: string): string {
     .replaceAll('"', "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function titleCase(value: string): string {
+  return value
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 function toSearchResult(candidate: RankedSearchResult): SearchResult {

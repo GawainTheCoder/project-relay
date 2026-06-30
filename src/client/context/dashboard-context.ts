@@ -4,7 +4,10 @@ import type {
   DashboardPayload,
   ImpactReviewInput,
 } from "../../shared/contracts";
-import type { RefreshSourcesResult } from "../lib/api";
+import type {
+  EvaluateBeliefsResult,
+  RefreshSourcesResult,
+} from "../lib/api";
 
 export interface DashboardContextValue {
   data: DashboardPayload | null;
@@ -15,6 +18,7 @@ export interface DashboardContextValue {
     impactId: string,
     input: ImpactReviewInput,
   ) => Promise<void>;
+  evaluateAllBeliefs: () => Promise<EvaluateBeliefsResult>;
   refreshAllSources: () => Promise<RefreshSourcesResult>;
   regenerateBrief: () => Promise<void>;
 }

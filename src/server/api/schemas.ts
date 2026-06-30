@@ -4,6 +4,9 @@ import {
   impactReviewDecisions,
   impactReviewReasonTags,
   layerIds,
+  thesisEvaluationReviewStatuses,
+  thesisKinds,
+  thesisStatuses,
 } from "../../shared/contracts.js";
 import { MAX_MANUAL_DOCUMENT_CHARS } from "../ingestion/normalize.js";
 
@@ -64,6 +67,13 @@ export const briefListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
 
+export const thesisListQuerySchema = z
+  .object({
+    kind: z.enum(thesisKinds).optional(),
+    status: z.union([z.enum(thesisStatuses), z.literal("all")]).default("active"),
+  })
+  .strict();
+
 export const importSourceInputSchema = z
   .object({
     title: z.string().trim().min(1).max(500),
@@ -107,6 +117,17 @@ export const impactReviewInputSchema = z
       path: ["note"],
     },
   );
+
+export const thesisEvaluationReviewInputSchema = z
+  .object({
+    decision: z.enum(
+      thesisEvaluationReviewStatuses.filter(
+        (status) => status !== "pending",
+      ) as ["accepted", "rejected", "deferred"],
+    ),
+    note: z.string().trim().max(2_000).optional(),
+  })
+  .strict();
 
 export const searchQuerySchema = z.object({
   q: z.string().trim().min(2).max(120),

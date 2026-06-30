@@ -18,6 +18,7 @@ const intelligenceMocks = vi.hoisted(() => ({
   analyzeDocument: vi.fn(),
   analyzeImportedSource: vi.fn(),
   analyzeUrlSource: vi.fn(),
+  evaluateTheses: vi.fn(),
   selectBriefEligibleUpdates: vi.fn((updates: IntelligenceUpdate[]) =>
     updates.filter(
       (update) =>
@@ -32,6 +33,7 @@ const intelligenceMocks = vi.hoisted(() => ({
         ),
     ),
   ),
+  synthesizeBeliefBrief: vi.fn(),
   synthesizeDailyBrief: vi.fn(),
 }));
 
@@ -68,6 +70,7 @@ vi.mock("../ingestion/index.js", () => ingestionMocks);
 import {
   analyzeImportedSource,
   createAppServices,
+  evaluatePendingTheses,
   generateDailyBrief,
   refreshPublicSources,
 } from "../services.js";
@@ -360,6 +363,225 @@ describe("Relay service integration with mocked external boundaries", () => {
       generatedBrief,
     );
     expect(intelligenceMocks.synthesizeDailyBrief).toHaveBeenCalledTimes(2);
+  });
+
+  it("builds source-aware thesis evaluation input and persists proposals", async () => {
+    ingestionMocks.findSourceById.mockImplementation((id: string) =>
+      id === "vertiv-ir"
+        ? {
+            id,
+            name: "Vertiv investor relations",
+            type: "investor-relations",
+            role: "primary",
+            authorityTier: "first-party",
+            layerIds: ["power-cooling"],
+            companyTickers: ["VRT"],
+            intakeMode: "public-url",
+            fetchStrategy: "html",
+            url: "https://investors.vertiv.com/",
+            allowedDomains: ["investors.vertiv.com"],
+            enabledByDefault: true,
+            priority: 95,
+            perRefreshQuota: 0,
+          }
+        : undefined,
+    );
+    intelligenceMocks.evaluateTheses.mockImplementation(
+      async (input: {
+        theses: Array<{
+          id: string;
+          currentVersion: {
+            id: string;
+            belief: string;
+            confidenceScore: number;
+            unknowns: string[];
+            strengthenConditions: string[];
+            weakenConditions: string[];
+          };
+        }>;
+        signals: Array<{
+          id: string;
+          claims: Array<{ id: string }>;
+        }>;
+      }) => {
+        const thesis = input.theses[0];
+        const signal = input.signals.find(
+          (candidate) => candidate.id === "vrt-fy25-q4",
+        );
+        if (!thesis || !signal?.claims[0]) {
+          throw new Error("Expected evaluation fixtures.");
+        }
+        return {
+          evaluatedAt: "2026-06-30T08:00:00.000Z",
+          model: "mock-evaluation-model",
+          evaluations: [
+            {
+              id: "service-thesis-evaluation",
+              thesisId: thesis.id,
+              previousVersionId: thesis.currentVersion.id,
+              outcome: "unchanged" as const,
+              proposedBelief: null,
+              proposedConfidenceScore:
+                thesis.currentVersion.confidenceScore,
+              confidenceDelta: 0,
+              rationale:
+                "The new operating evidence is consistent with the belief but does not clear the change threshold.",
+              supportingEvidence: [
+                {
+                  signalId: signal.id,
+                  claimIds: [signal.claims[0].id],
+                  reason: "The exact claim supports the existing belief.",
+                },
+              ],
+              opposingEvidence: [],
+              signalIds: [signal.id],
+              claimIds: [signal.claims[0].id],
+              independentSourceCount: 1,
+              unknowns: thesis.currentVersion.unknowns,
+              strengthenConditions:
+                thesis.currentVersion.strengthenConditions,
+              weakenConditions:
+                thesis.currentVersion.weakenConditions,
+              evaluatedAt: "2026-06-30T08:00:00.000Z",
+              model: "mock-evaluation-model",
+            },
+          ],
+        };
+      },
+    );
+
+    const result = await evaluatePendingTheses(repository);
+
+    expect(result).toMatchObject({
+      evaluatedAt: "2026-06-30T08:00:00.000Z",
+      model: "mock-evaluation-model",
+      evaluations: [
+        {
+          id: "service-thesis-evaluation",
+          reviewStatus: "pending",
+          outcome: "unchanged",
+          signalIds: ["vrt-fy25-q4"],
+          claimIds: ["claim-vrt-backlog"],
+        },
+      ],
+    });
+    expect(intelligenceMocks.evaluateTheses).toHaveBeenCalledWith(
+      expect.objectContaining({
+        theses: expect.arrayContaining([
+          expect.objectContaining({
+            type: expect.stringMatching(/company|macro/),
+            currentVersion: expect.objectContaining({
+              confidenceScore: expect.any(Number),
+            }),
+          }),
+        ]),
+        signals: expect.arrayContaining([
+          expect.objectContaining({
+            id: "vrt-fy25-q4",
+            sourceProvenance: {
+              id: "vertiv-ir",
+              publisher: "Vertiv investor relations",
+              authorityTier: "first-party",
+            },
+            claims: [
+              expect.objectContaining({ id: "claim-vrt-backlog" }),
+            ],
+          }),
+        ]),
+      }),
+    );
+    expect(
+      repository.getThesisEvaluation("service-thesis-evaluation"),
+    ).toEqual(result.evaluations[0]);
+  });
+
+  it("does not repeatedly evaluate a signal batch that produced no proposals", async () => {
+    const expectedCursor = repository
+      .listAllUpdates()
+      .reduce(
+        (latest, update) =>
+          update.ingestedAt > latest ? update.ingestedAt : latest,
+        "",
+      );
+    intelligenceMocks.evaluateTheses.mockResolvedValue({
+      evaluatedAt: "2026-06-30T08:00:00.000Z",
+      model: "mock-evaluation-model",
+      evaluations: [],
+    });
+
+    await expect(evaluatePendingTheses(repository)).resolves.toMatchObject({
+      evaluations: [],
+    });
+    expect(repository.getLatestThesisEvaluationRunCursor()).toBe(
+      expectedCursor,
+    );
+
+    await expect(evaluatePendingTheses(repository)).resolves.toMatchObject({
+      evaluations: [],
+    });
+    expect(intelligenceMocks.evaluateTheses).toHaveBeenLastCalledWith(
+      expect.objectContaining({ signals: [] }),
+    );
+  });
+
+  it("generates the daily brief from belief evaluations when they exist", async () => {
+    const thesis = repository.getThesis("company-vrt");
+    const update = repository.getUpdate("vrt-fy25-q4");
+    const claim = update?.claims[0];
+    if (!thesis || !update || !claim) {
+      throw new Error("Expected belief brief fixtures.");
+    }
+    const evaluation = repository.persistThesisEvaluation({
+      id: "belief-brief-evaluation",
+      thesisId: thesis.id,
+      outcome: "reinforced",
+      summary: "Power constraints became more durable.",
+      rationale:
+        "The exact backlog evidence raises confidence without changing the belief text.",
+      proposedBelief: thesis.currentVersion.belief,
+      proposedConfidenceScore: Math.min(
+        100,
+        thesis.currentVersion.confidenceScore + 5,
+      ),
+      proposedUnknowns: thesis.currentVersion.unknowns,
+      proposedStrengtheningConditions:
+        thesis.currentVersion.strengtheningConditions,
+      proposedWeakeningConditions:
+        thesis.currentVersion.weakeningConditions,
+      signalIds: [update.id],
+      evidence: [
+        {
+          claimId: claim.id,
+          stance: "supports",
+          rationale: "Backlog supports the duration of the constraint.",
+        },
+      ],
+      model: "mock-evaluation-model",
+    });
+    const generated: DailyBrief = {
+      id: "belief-centered-brief",
+      date: "2026-06-30",
+      title: "Power confidence moved",
+      summary: "The mental model changed at the power layer.",
+      signal: "Confidence in a durable constraint increased.",
+      secondarySignals: [],
+      updateIds: [update.id],
+      citationClaimIds: [claim.id],
+      thesisEvaluationIds: [evaluation.id],
+      generatedAt: "2026-06-30T10:00:00.000Z",
+      model: "mock-synthesis-model",
+    };
+    intelligenceMocks.synthesizeBeliefBrief.mockResolvedValue(generated);
+
+    await expect(generateDailyBrief(repository)).resolves.toEqual(generated);
+    expect(intelligenceMocks.synthesizeBeliefBrief).toHaveBeenCalledWith(
+      [expect.objectContaining({ id: evaluation.id })],
+      expect.arrayContaining([
+        expect.objectContaining({ id: thesis.id }),
+      ]),
+      [expect.objectContaining({ id: update.id })],
+    );
+    expect(intelligenceMocks.synthesizeDailyBrief).not.toHaveBeenCalled();
   });
 
   it("returns an existing same-day brief when no newer signals exist", async () => {

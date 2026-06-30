@@ -83,3 +83,69 @@ export const dailyBriefOutputSchema = z
   .strict();
 
 export type DailyBriefOutput = z.infer<typeof dailyBriefOutputSchema>;
+
+export const thesisEvaluationOutcomeSchema = z.enum([
+  "unchanged",
+  "reinforced",
+  "weakened",
+  "contradicted",
+  "revised",
+]);
+
+export const MAX_THESIS_CONFIDENCE_DELTA = 10;
+
+const thesisEvidenceReferenceSchema = z
+  .object({
+    signalId: z.string().trim().min(1).max(128),
+    claimIds: z
+      .array(z.string().trim().min(1).max(128))
+      .min(1)
+      .max(24),
+    reason: z.string().trim().min(1).max(1_500),
+  })
+  .strict();
+
+export const thesisEvaluationOutputSchema = z
+  .object({
+    evaluations: z
+      .array(
+        z
+          .object({
+            thesisId: z.string().trim().min(1).max(128),
+            previousVersionId: z.string().trim().min(1).max(128),
+            outcome: thesisEvaluationOutcomeSchema,
+            proposedBelief: z
+              .string()
+              .trim()
+              .min(1)
+              .max(4_000)
+              .nullable(),
+            proposedConfidenceScore: z.number().int().min(0).max(100),
+            confidenceDelta: z
+              .number()
+              .int()
+              .min(-MAX_THESIS_CONFIDENCE_DELTA)
+              .max(MAX_THESIS_CONFIDENCE_DELTA),
+            rationale: z.string().trim().min(1).max(4_000),
+            supportingEvidence: z
+              .array(thesisEvidenceReferenceSchema)
+              .max(30),
+            opposingEvidence: z
+              .array(thesisEvidenceReferenceSchema)
+              .max(30),
+            unknowns: z.array(shortTextSchema).max(30),
+            strengthenConditions: z.array(shortTextSchema).max(30),
+            weakenConditions: z.array(shortTextSchema).max(30),
+          })
+          .strict(),
+      )
+      .max(50),
+  })
+  .strict();
+
+export type ThesisEvaluationOutput = z.infer<
+  typeof thesisEvaluationOutputSchema
+>;
+export type ThesisEvaluationOutcome = z.infer<
+  typeof thesisEvaluationOutcomeSchema
+>;

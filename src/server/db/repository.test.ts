@@ -5,16 +5,21 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DailyBrief, IntelligenceUpdate } from "../../shared/contracts.js";
+import type {
+  DailyBrief,
+  IntelligenceUpdate,
+  ThesisEvaluationInput,
+} from "../../shared/contracts.js";
 
 import { createImpactReviewRepository } from "../evaluation/index.js";
 import { SOURCE_CATALOG_ROWS } from "../ingestion/source-registry.js";
 import {
   createRelayRepository,
-  type RelayRepository,
+  RelayRepository,
 } from "./repository.js";
 
 describe("RelayRepository", () => {
@@ -40,6 +45,340 @@ describe("RelayRepository", () => {
     const secondRepositoryView = repository.getDashboard();
     expect(secondRepositoryView.companies).toHaveLength(13);
     expect(secondRepositoryView.updates).toHaveLength(7);
+  });
+
+  it("seeds company and macro theses as first-class versioned beliefs", () => {
+    const theses = repository.listTheses();
+    const companyTheses = repository.listTheses({ kind: "company" });
+    const macroTheses = repository.listTheses({ kind: "macro" });
+
+    expect(theses).toHaveLength(19);
+    expect(companyTheses).toHaveLength(13);
+    expect(macroTheses).toHaveLength(6);
+    expect(repository.getThesis("company-nvda")).toMatchObject({
+      kind: "company",
+      companyTickers: ["NVDA"],
+      currentVersion: {
+        version: 1,
+        confidenceScore: 85,
+      },
+    });
+    expect(repository.getThesis("macro-networking-bottleneck")).toMatchObject({
+      kind: "macro",
+      layerIds: ["accelerators", "networking", "optics"],
+      currentVersion: {
+        version: 1,
+        confidenceScore: 70,
+      },
+    });
+  });
+
+  it("additively backfills legacy company theses when the belief migration runs", () => {
+    const database = new DatabaseSync(":memory:");
+    database.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+      INSERT INTO schema_migrations (version, applied_at) VALUES
+        (1, '2026-01-01T00:00:00.000Z'),
+        (2, '2026-01-01T00:00:00.000Z'),
+        (3, '2026-01-01T00:00:00.000Z'),
+        (4, '2026-01-01T00:00:00.000Z'),
+        (5, '2026-01-01T00:00:00.000Z');
+
+      CREATE TABLE stack_layers (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        sort_order INTEGER NOT NULL UNIQUE
+      );
+      CREATE TABLE companies (
+        ticker TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        thesis TEXT NOT NULL,
+        why_it_matters TEXT NOT NULL,
+        proves_right_json TEXT NOT NULL,
+        breaks_thesis_json TEXT NOT NULL,
+        watch_metrics_json TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE company_layers (
+        company_ticker TEXT NOT NULL,
+        layer_id TEXT NOT NULL,
+        PRIMARY KEY (company_ticker, layer_id)
+      );
+      CREATE TABLE intelligence_updates (id TEXT PRIMARY KEY);
+      CREATE TABLE evidence_claims (
+        id TEXT PRIMARY KEY,
+        update_id TEXT NOT NULL,
+        quote TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        locator TEXT NOT NULL
+      );
+      CREATE TABLE daily_briefs (id TEXT PRIMARY KEY);
+      INSERT INTO stack_layers VALUES (
+        'memory', 'Memory', 'Memory systems', 1
+      );
+      INSERT INTO companies VALUES (
+        'TEST',
+        'Legacy Memory Company',
+        'Legacy description',
+        'HBM remains structurally constrained.',
+        'It supplies a bottleneck.',
+        '["Lead times stay elevated"]',
+        '["Supply exceeds demand"]',
+        '["HBM pricing"]',
+        'medium',
+        '2026-06-01T00:00:00.000Z',
+        0
+      );
+      INSERT INTO company_layers VALUES ('TEST', 'memory');
+    `);
+    const legacyRepository = new RelayRepository(database);
+    try {
+      expect(legacyRepository.getThesis("company-test")).toMatchObject({
+        kind: "company",
+        title: "Legacy Memory Company",
+        companyTickers: ["TEST"],
+        layerIds: ["memory"],
+        currentVersion: {
+          belief: "HBM remains structurally constrained.",
+          confidenceScore: 60,
+          strengtheningConditions: ["Lead times stay elevated"],
+          weakeningConditions: ["Supply exceeds demand"],
+        },
+      });
+    } finally {
+      legacyRepository.close();
+    }
+  });
+
+  it("creates a version and evidence ledger entry only when a changed evaluation is accepted", () => {
+    const input = buildEvaluation(repository, {
+      id: "evaluation-nvda-reinforced",
+      outcome: "reinforced",
+      proposedConfidenceScore: 88,
+    });
+    const pending = repository.persistThesisEvaluation(input);
+
+    expect(pending).toMatchObject({
+      id: input.id,
+      reviewStatus: "pending",
+      previousConfidenceScore: 85,
+      proposedConfidenceScore: 88,
+      confidenceDelta: 3,
+      signalIds: ["nvda-fy26-q4"],
+      claimIds: ["claim-nvda-dc"],
+    });
+    expect(repository.getThesis("company-nvda")?.versions).toHaveLength(1);
+
+    const accepted = repository.reviewThesisEvaluation(pending.id, {
+      decision: "accepted",
+      note: "Independent demand evidence warrants a small confidence increase.",
+    });
+    const thesis = repository.getThesis("company-nvda");
+
+    expect(accepted.reviewStatus).toBe("accepted");
+    expect(accepted.acceptedVersionId).not.toBe(pending.previousVersionId);
+    expect(thesis?.currentVersion).toMatchObject({
+      version: 2,
+      confidenceScore: 88,
+      createdByEvaluationId: pending.id,
+    });
+    expect(thesis?.evidence).toEqual([
+      expect.objectContaining({
+        claimId: "claim-nvda-dc",
+        stance: "supports",
+        linkedByEvaluationId: pending.id,
+      }),
+    ]);
+  });
+
+  it("preserves accepted unchanged evaluations without creating a thesis version", () => {
+    const current = repository.getThesis("company-nvda")?.currentVersion;
+    if (!current) {
+      throw new Error("Seed thesis missing");
+    }
+    const evaluation = repository.persistThesisEvaluation({
+      ...buildEvaluation(repository, {
+        id: "evaluation-nvda-unchanged",
+        outcome: "unchanged",
+        proposedConfidenceScore: current.confidenceScore,
+      }),
+      proposedBelief: current.belief,
+      proposedUnknowns: current.unknowns,
+      proposedStrengtheningConditions: current.strengtheningConditions,
+      proposedWeakeningConditions: current.weakeningConditions,
+    });
+
+    const accepted = repository.reviewThesisEvaluation(evaluation.id, {
+      decision: "accepted",
+    });
+    const thesis = repository.getThesis("company-nvda");
+
+    expect(accepted).toMatchObject({
+      reviewStatus: "accepted",
+      acceptedVersionId: current.id,
+      confidenceDelta: 0,
+    });
+    expect(thesis?.versions).toHaveLength(1);
+    expect(thesis?.currentVersion.id).toBe(current.id);
+    expect(thesis?.evidence).toHaveLength(1);
+  });
+
+  it("keeps rejected evaluations auditable without changing belief state or evidence", () => {
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-nvda-rejected",
+        outcome: "reinforced",
+        proposedConfidenceScore: 90,
+      }),
+    );
+
+    const rejected = repository.reviewThesisEvaluation(evaluation.id, {
+      decision: "rejected",
+      note: "The source is not independent of existing evidence.",
+    });
+    const thesis = repository.getThesis("company-nvda");
+
+    expect(rejected).toMatchObject({
+      reviewStatus: "rejected",
+      acceptedVersionId: null,
+    });
+    expect(thesis?.versions).toHaveLength(1);
+    expect(thesis?.evidence).toEqual([]);
+  });
+
+  it("rejects stale evaluations after another proposal advances the thesis", () => {
+    const first = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-nvda-first",
+        outcome: "reinforced",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    const stale = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-nvda-stale",
+        outcome: "reinforced",
+        proposedConfidenceScore: 88,
+      }),
+    );
+
+    repository.reviewThesisEvaluation(first.id, { decision: "accepted" });
+    expect(() =>
+      repository.reviewThesisEvaluation(stale.id, {
+        decision: "accepted",
+      }),
+    ).toThrow("This evaluation is stale because the thesis has changed.");
+  });
+
+  it("links daily briefs to exact thesis evaluations", () => {
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-for-brief",
+        outcome: "reinforced",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    const brief: DailyBrief = {
+      id: "belief-centered-brief",
+      date: "2026-06-30",
+      title: "What changed in the mental model",
+      summary: "One belief gained modest confidence.",
+      signal: "NVIDIA demand evidence reinforced the platform thesis.",
+      secondarySignals: [],
+      updateIds: ["nvda-fy26-q4"],
+      citationClaimIds: ["claim-nvda-dc"],
+      thesisEvaluationIds: [evaluation.id],
+      generatedAt: "2026-06-30T12:00:00.000Z",
+      model: "test-model",
+    };
+
+    expect(repository.persistDailyBrief(brief)).toEqual(brief);
+    expect(repository.getBrief(brief.id)?.thesisEvaluationIds).toEqual([
+      evaluation.id,
+    ]);
+  });
+
+  it("advances the processed-signal cursor when an evaluation run produces no proposals", () => {
+    expect(repository.getLatestThesisEvaluationRunCursor()).toBeNull();
+
+    const emptyRun = repository.recordThesisEvaluationRun({
+      id: "evaluation-run-empty",
+      signalIngestionCursor: "2026-06-29T12:00:00.000Z",
+      signalCount: 3,
+      evaluationCount: 0,
+      model: "test-evaluation-model",
+      completedAt: "2026-06-30T12:00:00.000Z",
+    });
+
+    expect(emptyRun).toEqual({
+      id: "evaluation-run-empty",
+      signalIngestionCursor: "2026-06-29T12:00:00.000Z",
+      signalCount: 3,
+      evaluationCount: 0,
+      model: "test-evaluation-model",
+      completedAt: "2026-06-30T12:00:00.000Z",
+    });
+    expect(repository.getLatestThesisEvaluationRunCursor()).toBe(
+      "2026-06-29T12:00:00.000Z",
+    );
+
+    repository.recordThesisEvaluationRun({
+      id: "evaluation-run-later",
+      signalIngestionCursor: "2026-06-30T08:00:00.000Z",
+      signalCount: 1,
+      evaluationCount: 1,
+      completedAt: "2026-06-30T12:05:00.000Z",
+    });
+    expect(repository.getLatestThesisEvaluationRunCursor()).toBe(
+      "2026-06-30T08:00:00.000Z",
+    );
+    expect(() =>
+      repository.recordThesisEvaluationRun({
+        signalIngestionCursor: "2026-06-28T08:00:00.000Z",
+        signalCount: 1,
+        evaluationCount: 0,
+      }),
+    ).toThrow("cannot move the signal cursor backwards");
+  });
+
+  it("lists evaluations reviewed after the requested timestamp", () => {
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-reviewed-later",
+        outcome: "reinforced",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    repository.database
+      .prepare(`
+        UPDATE thesis_evaluations
+        SET created_at = '2026-01-01T00:00:00.000Z'
+        WHERE id = ?
+      `)
+      .run(evaluation.id);
+
+    expect(
+      repository.listThesisEvaluationsSince(
+        "2026-06-01T00:00:00.000Z",
+      ),
+    ).toEqual([]);
+
+    repository.reviewThesisEvaluation(evaluation.id, {
+      decision: "rejected",
+      note: "Not enough independent evidence.",
+    });
+    expect(
+      repository
+        .listThesisEvaluationsSince("2026-06-01T00:00:00.000Z")
+        .map((item) => item.id),
+    ).toEqual([evaluation.id]);
   });
 
   it("starts with a clean personal workspace when demo data is disabled", () => {
@@ -442,3 +781,38 @@ describe("RelayRepository", () => {
     expect(stored.error_message).toContain("[REDACTED]");
   });
 });
+
+function buildEvaluation(
+  repository: RelayRepository,
+  overrides: Partial<ThesisEvaluationInput> = {},
+): ThesisEvaluationInput {
+  const thesis = repository.getThesis(
+    overrides.thesisId ?? "company-nvda",
+  );
+  if (!thesis) {
+    throw new Error("Seed thesis missing");
+  }
+  return {
+    thesisId: thesis.id,
+    outcome: "reinforced",
+    summary: "New demand evidence modestly reinforces the current belief.",
+    rationale:
+      "The cited result is consistent with durable platform demand but does not justify rewriting the belief.",
+    proposedBelief: thesis.currentVersion.belief,
+    proposedConfidenceScore: thesis.currentVersion.confidenceScore + 2,
+    proposedUnknowns: thesis.currentVersion.unknowns,
+    proposedStrengtheningConditions:
+      thesis.currentVersion.strengtheningConditions,
+    proposedWeakeningConditions: thesis.currentVersion.weakeningConditions,
+    signalIds: ["nvda-fy26-q4"],
+    evidence: [
+      {
+        claimId: "claim-nvda-dc",
+        stance: "supports",
+        rationale: "Reported data-center growth supports durable demand.",
+      },
+    ],
+    model: "test-evaluation-model",
+    ...overrides,
+  };
+}

@@ -11,6 +11,7 @@ import type {
   ImpactReviewInput,
 } from "../../shared/contracts";
 import {
+  evaluateBeliefs,
   generateBrief,
   getDashboard,
   refreshSources,
@@ -90,6 +91,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     return result;
   }, [loadDashboard]);
 
+  const evaluateAllBeliefs = useCallback(async () => {
+    const result = await evaluateBeliefs();
+    await loadDashboard();
+    return result;
+  }, [loadDashboard]);
+
   const regenerateBrief = useCallback(async () => {
     const brief = await generateBrief();
     setData((current) => (current ? { ...current, brief } : current));
@@ -99,6 +106,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     () => ({
       data,
       error,
+      evaluateAllBeliefs,
       isLoading,
       reload,
       reviewThesisImpact,
@@ -109,6 +117,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       data,
       reviewThesisImpact,
       error,
+      evaluateAllBeliefs,
       isLoading,
       regenerateBrief,
       reload,

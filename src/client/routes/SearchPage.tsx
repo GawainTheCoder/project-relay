@@ -1,9 +1,9 @@
 import {
   BookOpenText,
-  Building2,
+  BrainCircuit,
+  Database,
   LoaderCircle,
   Quote,
-  Radar,
   Search,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -19,6 +19,7 @@ const supportedResultTypes = new Set<SearchResultType>([
   "brief",
   "company",
   "evidence",
+  "thesis",
   "update",
 ]);
 
@@ -27,11 +28,13 @@ function getResultPresentation(type: SearchResultType) {
     case "brief":
       return { Icon: BookOpenText, label: "Daily brief" };
     case "company":
-      return { Icon: Building2, label: "Thesis" };
+      return { Icon: BrainCircuit, label: "Thesis" };
     case "evidence":
       return { Icon: Quote, label: "Evidence" };
+    case "thesis":
+      return { Icon: BrainCircuit, label: "Thesis" };
     case "update":
-      return { Icon: Radar, label: "Signal" };
+      return { Icon: Database, label: "Evidence record" };
     default:
       return { Icon: Search, label: "Signal" };
   }
@@ -43,6 +46,9 @@ function normalizeResultHref(href: string) {
   }
   if (href.startsWith("/companies")) {
     return href.replace("/companies", "/theses");
+  }
+  if (href.startsWith("/beliefs")) {
+    return href.replace("/beliefs", "/theses");
   }
   return href;
 }
@@ -113,7 +119,7 @@ export function SearchPage() {
             Thesis-aware search
           </p>
           <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-            Search signals
+            Search Relay
           </h1>
           <div className="mt-6 flex h-12 items-center gap-3 border-b border-relay-border-strong">
             {cleanQuery.length >= 2 && isSearching ? (
@@ -158,8 +164,8 @@ export function SearchPage() {
           <div className="border-l border-relay-border-strong py-2 pl-5">
             <h2 className="text-sm font-semibold">Start with two characters</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-relay-muted">
-              Relay searches signals, supporting evidence, company theses,
-              watch metrics, and daily briefs stored on this machine.
+              Relay searches theses, source-backed evidence, watch conditions,
+              and daily mental-model briefs stored on this machine.
             </p>
           </div>
         ) : !isSearching && !visibleResults.length ? (

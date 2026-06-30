@@ -14,6 +14,15 @@ import type {
   ResearchSourceInput,
   SourceKind,
   StackLayer,
+  Thesis,
+  ThesisEvaluation,
+  ThesisEvaluationInput,
+  ThesisEvaluationReviewInput,
+  ThesisEvidence,
+  ThesisInput,
+  ThesisStatus,
+  ThesisType,
+  ThesisVersion,
 } from "../../shared/contracts.js";
 
 import {
@@ -30,7 +39,36 @@ interface CatalogSeed {
   companies: Company[];
   layers: StackLayer[];
   sources: ResearchSource[];
+  theses?: ThesisInput[];
   updates: IntelligenceUpdate[];
+}
+
+export interface ThesisListFilters {
+  kind?: ThesisType | undefined;
+  status?: ThesisStatus | "all" | undefined;
+}
+
+export interface ThesisEvaluationListFilters {
+  thesisId?: string | undefined;
+  reviewStatus?: ThesisEvaluation["reviewStatus"] | undefined;
+}
+
+export interface ThesisEvaluationRun {
+  id: string;
+  signalIngestionCursor: string;
+  signalCount: number;
+  evaluationCount: number;
+  model: string | null;
+  completedAt: string;
+}
+
+export interface ThesisEvaluationRunInput {
+  id?: string | undefined;
+  signalIngestionCursor: string;
+  signalCount: number;
+  evaluationCount: number;
+  model?: string | null | undefined;
+  completedAt?: string | undefined;
 }
 
 export interface SourceDocumentInput {
@@ -78,6 +116,14 @@ function text(row: SqlRow, key: string): string {
 function nullableText(row: SqlRow, key: string): string | null {
   const value = row[key];
   return typeof value === "string" ? value : null;
+}
+
+function numeric(row: SqlRow, key: string): number {
+  const value = row[key];
+  if (typeof value !== "number") {
+    throw new TypeError(`Expected ${key} to be numeric`);
+  }
+  return value;
 }
 
 function rows(value: unknown): SqlRow[] {
@@ -182,6 +228,12 @@ export class RelayRepository {
         .run(...catalog.sources.map((source) => source.id));
     });
 
+    catalog.theses?.forEach((thesis) => {
+      const id = thesis.id;
+      if (!id || !this.getThesis(id)) {
+        this.createThesis(thesis);
+      }
+    });
     catalog.updates.forEach((update) => {
       if (!this.getUpdate(update.id)) {
         this.persistAnalyzedUpdate(update);
@@ -345,6 +397,31 @@ export class RelayRepository {
       input.layerIds.forEach((layerId) => insertLayer.run(ticker, layerId));
     });
 
+    const thesisId = `company-${ticker.toLowerCase()}`;
+    const existingThesis = this.getThesis(thesisId);
+    if (!existingThesis) {
+      this.createThesis({
+        id: thesisId,
+        kind: "company",
+        title: input.name,
+        belief: input.thesis,
+        confidenceScore: confidenceToScore(input.confidence),
+        unknowns: [],
+        strengtheningConditions: input.provesRight,
+        weakeningConditions: input.breaksThesis,
+        companyTickers: [ticker],
+        layerIds: input.layerIds,
+      });
+    } else if (existingThesis.status === "archived") {
+      this.database
+        .prepare(`
+          UPDATE theses
+          SET status = 'active', updated_at = ?
+          WHERE id = ?
+        `)
+        .run(updatedAt, thesisId);
+    }
+
     const company = this.getCompany(ticker);
     if (!company) {
       throw new Error(`Failed to reload company ${ticker}`);
@@ -353,14 +430,702 @@ export class RelayRepository {
   }
 
   archiveCompany(ticker: string): boolean {
+    const normalizedTicker = ticker.toUpperCase();
+    const updatedAt = new Date().toISOString();
+    let changed = false;
+    this.withTransaction(() => {
+      const result = this.database
+        .prepare(`
+          UPDATE companies
+          SET archived = 1, updated_at = ?
+          WHERE ticker = ? AND archived = 0
+        `)
+        .run(updatedAt, normalizedTicker);
+      changed = result.changes > 0;
+      if (changed) {
+        this.database
+          .prepare(`
+            UPDATE theses
+            SET status = 'archived', updated_at = ?
+            WHERE type = 'company'
+              AND id IN (
+                SELECT thesis_id
+                FROM thesis_companies
+                WHERE company_ticker = ?
+              )
+          `)
+          .run(updatedAt, normalizedTicker);
+      }
+    });
+    return changed;
+  }
+
+  listTheses(filters: ThesisListFilters = {}): Thesis[] {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (filters.kind) {
+      clauses.push("type = ?");
+      values.push(filters.kind);
+    }
+    if (filters.status !== "all") {
+      clauses.push("status = ?");
+      values.push(filters.status ?? "active");
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    return rows(
+      this.database
+        .prepare(`
+          SELECT id
+          FROM theses
+          ${where}
+          ORDER BY type, title, id
+        `)
+        .all(...values),
+    )
+      .map((thesisRow) => this.getThesis(text(thesisRow, "id")))
+      .filter((thesis): thesis is Thesis => thesis !== null);
+  }
+
+  getThesis(id: string): Thesis | null {
+    const thesisRow = row(
+      this.database.prepare("SELECT * FROM theses WHERE id = ?").get(id),
+    );
+    if (!thesisRow) {
+      return null;
+    }
+    const currentVersionId = nullableText(thesisRow, "current_version_id");
+    if (!currentVersionId) {
+      throw new Error(`Thesis ${id} has no current version`);
+    }
+    const versionRow = row(
+      this.database
+        .prepare("SELECT * FROM thesis_versions WHERE id = ?")
+        .get(currentVersionId),
+    );
+    if (!versionRow) {
+      throw new Error(`Thesis ${id} references a missing current version`);
+    }
+    const companyRows = rows(
+      this.database
+        .prepare(`
+          SELECT company_ticker
+          FROM thesis_companies
+          WHERE thesis_id = ?
+          ORDER BY company_ticker
+        `)
+        .all(id),
+    );
+    const layerRows = rows(
+      this.database
+        .prepare(`
+          SELECT layer_id
+          FROM thesis_layers
+          WHERE thesis_id = ?
+          ORDER BY layer_id
+        `)
+        .all(id),
+    );
+    return {
+      id,
+      kind: text(thesisRow, "type") as Thesis["kind"],
+      title: text(thesisRow, "title"),
+      status: text(thesisRow, "status") as Thesis["status"],
+      currentVersion: this.mapThesisVersion(versionRow),
+      versions: this.getThesisHistory(id),
+      companyTickers: companyRows.map((companyRow) =>
+        text(companyRow, "company_ticker"),
+      ),
+      layerIds: layerRows.map(
+        (layerRow) => text(layerRow, "layer_id") as Thesis["layerIds"][number],
+      ),
+      evidence: this.listThesisEvidence(id),
+      evaluations: this.listThesisEvaluations({ thesisId: id }),
+      createdAt: text(thesisRow, "created_at"),
+      updatedAt: text(thesisRow, "updated_at"),
+    };
+  }
+
+  getThesisDetail(id: string): Thesis | null {
+    return this.getThesis(id);
+  }
+
+  getThesisHistory(thesisId: string): ThesisVersion[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM thesis_versions
+          WHERE thesis_id = ?
+          ORDER BY version DESC
+        `)
+        .all(thesisId),
+    ).map((versionRow) => this.mapThesisVersion(versionRow));
+  }
+
+  listThesisEvidence(thesisId: string): ThesisEvidence[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT
+            evidence.*,
+            claim.update_id,
+            claim.quote,
+            claim.source_id,
+            claim.locator
+          FROM thesis_evidence AS evidence
+          INNER JOIN evidence_claims AS claim ON claim.id = evidence.claim_id
+          WHERE evidence.thesis_id = ?
+          ORDER BY evidence.linked_at DESC, evidence.claim_id
+        `)
+        .all(thesisId),
+    ).map((evidenceRow) => ({
+      thesisId: text(evidenceRow, "thesis_id"),
+      claimId: text(evidenceRow, "claim_id"),
+      updateId: text(evidenceRow, "update_id"),
+      stance: text(
+        evidenceRow,
+        "stance",
+      ) as ThesisEvidence["stance"],
+      rationale: text(evidenceRow, "rationale"),
+      linkedAt: text(evidenceRow, "linked_at"),
+      linkedByEvaluationId: nullableText(
+        evidenceRow,
+        "linked_by_evaluation_id",
+      ),
+      claim: {
+        id: text(evidenceRow, "claim_id"),
+        quote: text(evidenceRow, "quote"),
+        sourceId: text(evidenceRow, "source_id"),
+        locator: text(evidenceRow, "locator"),
+      },
+    }));
+  }
+
+  createThesis(input: ThesisInput): Thesis {
+    assertThesisState(input);
+    if (!input.title.trim()) {
+      throw new TypeError("A thesis title cannot be empty.");
+    }
+    const id = input.id?.trim() || `thesis-${randomUUID()}`;
+    const versionId = `${id}-v1`;
+    const createdAt = new Date().toISOString();
+    const companyTickers = uniqueStrings(
+      input.companyTickers.map((ticker) => ticker.toUpperCase()),
+    );
+    const layerIds = uniqueStrings(input.layerIds);
+    if (input.kind === "company" && companyTickers.length === 0) {
+      throw new TypeError(
+        "A company thesis must reference at least one company.",
+      );
+    }
+    this.assertKnownThesisAssociations(companyTickers, layerIds);
+
+    this.withTransaction(() => {
+      this.database
+        .prepare(`
+          INSERT INTO theses (
+            id, type, title, status, current_version_id, created_at, updated_at
+          ) VALUES (?, ?, ?, 'active', NULL, ?, ?)
+        `)
+        .run(id, input.kind, input.title.trim(), createdAt, createdAt);
+      this.database
+        .prepare(`
+          INSERT INTO thesis_versions (
+            id, thesis_id, version, belief, confidence, unknowns_json,
+            strengthening_conditions_json, weakening_conditions_json,
+            created_at, created_by_evaluation_id
+          ) VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, NULL)
+        `)
+        .run(
+          versionId,
+          id,
+          input.belief.trim(),
+          input.confidenceScore,
+          JSON.stringify(normalizeTextList(input.unknowns)),
+          JSON.stringify(normalizeTextList(input.strengtheningConditions)),
+          JSON.stringify(normalizeTextList(input.weakeningConditions)),
+          createdAt,
+        );
+      this.database
+        .prepare("UPDATE theses SET current_version_id = ? WHERE id = ?")
+        .run(versionId, id);
+      const insertCompany = this.database.prepare(`
+        INSERT INTO thesis_companies (thesis_id, company_ticker) VALUES (?, ?)
+      `);
+      companyTickers.forEach((ticker) => insertCompany.run(id, ticker));
+      const insertLayer = this.database.prepare(`
+        INSERT INTO thesis_layers (thesis_id, layer_id) VALUES (?, ?)
+      `);
+      layerIds.forEach((layerId) => insertLayer.run(id, layerId));
+    });
+
+    const thesis = this.getThesis(id);
+    if (!thesis) {
+      throw new Error(`Failed to reload thesis ${id}`);
+    }
+    return thesis;
+  }
+
+  archiveThesis(id: string): boolean {
     const result = this.database
       .prepare(`
-        UPDATE companies
-        SET archived = 1, updated_at = ?
-        WHERE ticker = ? AND archived = 0
+        UPDATE theses
+        SET status = 'archived', updated_at = ?
+        WHERE id = ? AND status = 'active'
       `)
-      .run(new Date().toISOString(), ticker.toUpperCase());
+      .run(new Date().toISOString(), id);
     return result.changes > 0;
+  }
+
+  persistThesisEvaluation(
+    input: ThesisEvaluationInput,
+  ): ThesisEvaluation {
+    if (input.id) {
+      const existing = this.getThesisEvaluation(input.id);
+      if (existing) {
+        return existing;
+      }
+    }
+    const thesis = this.getThesis(input.thesisId);
+    if (!thesis || thesis.status !== "active") {
+      throw new RangeError(`Unknown active thesis: ${input.thesisId}`);
+    }
+    const proposal = {
+      belief: input.proposedBelief,
+      confidenceScore: input.proposedConfidenceScore,
+      unknowns: input.proposedUnknowns,
+      strengtheningConditions: input.proposedStrengtheningConditions,
+      weakeningConditions: input.proposedWeakeningConditions,
+    };
+    assertThesisState(proposal);
+    if (!input.summary.trim() || !input.rationale.trim()) {
+      throw new TypeError("Thesis evaluations require a summary and rationale.");
+    }
+
+    const signalIds = uniqueStrings(input.signalIds);
+    const evidence = input.evidence.map((item) => ({
+      claimId: item.claimId.trim(),
+      stance: item.stance,
+      rationale: item.rationale.trim(),
+    }));
+    if (new Set(evidence.map((item) => item.claimId)).size !== evidence.length) {
+      throw new TypeError("A claim can appear only once in a thesis evaluation.");
+    }
+    if (signalIds.length === 0 && evidence.length === 0) {
+      throw new TypeError(
+        "Thesis evaluations must reference at least one signal or evidence claim.",
+      );
+    }
+    const knownSignal = this.database.prepare(
+      "SELECT 1 FROM intelligence_updates WHERE id = ?",
+    );
+    signalIds.forEach((signalId) => {
+      if (!knownSignal.get(signalId)) {
+        throw new RangeError(`Unknown signal: ${signalId}`);
+      }
+    });
+    const claimRow = this.database.prepare(
+      "SELECT update_id FROM evidence_claims WHERE id = ?",
+    );
+    evidence.forEach((item) => {
+      if (!item.claimId || !item.rationale) {
+        throw new TypeError(
+          "Evaluation evidence requires a claim and rationale.",
+        );
+      }
+      const knownClaim = row(claimRow.get(item.claimId));
+      if (!knownClaim) {
+        throw new RangeError(`Unknown evidence claim: ${item.claimId}`);
+      }
+      const updateId = text(knownClaim, "update_id");
+      if (!signalIds.includes(updateId)) {
+        signalIds.push(updateId);
+      }
+    });
+
+    const previous = thesis.currentVersion;
+    const stateChanged = !sameThesisState(previous, proposal);
+    const confidenceDelta =
+      proposal.confidenceScore - previous.confidenceScore;
+    const beliefChanged =
+      proposal.belief.trim() !== previous.belief.trim();
+    const surroundingFieldsChanged =
+      !sameTextSet(proposal.unknowns, previous.unknowns) ||
+      !sameTextSet(
+        proposal.strengtheningConditions,
+        previous.strengtheningConditions,
+      ) ||
+      !sameTextSet(
+        proposal.weakeningConditions,
+        previous.weakeningConditions,
+      );
+    if (Math.abs(confidenceDelta) > 10) {
+      throw new RangeError(
+        "A thesis confidence change cannot exceed 10 points per evaluation.",
+      );
+    }
+    if (input.outcome === "unchanged" && stateChanged) {
+      throw new TypeError(
+        "An unchanged evaluation cannot propose a different thesis state.",
+      );
+    }
+    if (input.outcome !== "unchanged" && !stateChanged) {
+      throw new TypeError(
+        "A changed evaluation must propose a different thesis state.",
+      );
+    }
+    if (
+      input.outcome !== "revised" &&
+      (beliefChanged || surroundingFieldsChanged)
+    ) {
+      throw new TypeError(
+        "Only a revised evaluation can change thesis text or surrounding fields.",
+      );
+    }
+    if (input.outcome === "revised" && !beliefChanged) {
+      throw new TypeError(
+        "A revised evaluation must propose different thesis text.",
+      );
+    }
+    if (
+      input.outcome === "reinforced" &&
+      (confidenceDelta <= 0 ||
+        !evidence.some((item) => item.stance === "supports"))
+    ) {
+      throw new TypeError(
+        "A reinforced thesis requires supporting evidence and higher confidence.",
+      );
+    }
+    if (
+      (input.outcome === "weakened" ||
+        input.outcome === "contradicted") &&
+      (confidenceDelta >= 0 ||
+        !evidence.some((item) => item.stance === "opposes"))
+    ) {
+      throw new TypeError(
+        "A weakened or contradicted thesis requires opposing evidence and lower confidence.",
+      );
+    }
+
+    const id = input.id?.trim() || `thesis-evaluation-${randomUUID()}`;
+    const createdAt = new Date().toISOString();
+    this.withTransaction(() => {
+      this.database
+        .prepare(`
+          INSERT INTO thesis_evaluations (
+            id, thesis_id, previous_version_id, accepted_version_id, outcome,
+            summary, rationale, proposed_belief, previous_confidence,
+            proposed_confidence, proposed_unknowns_json,
+            proposed_strengthening_conditions_json,
+            proposed_weakening_conditions_json, review_status, review_note,
+            model, created_at, reviewed_at
+          ) VALUES (
+            ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL
+          )
+        `)
+        .run(
+          id,
+          thesis.id,
+          previous.id,
+          input.outcome,
+          input.summary.trim(),
+          input.rationale.trim(),
+          proposal.belief.trim(),
+          previous.confidenceScore,
+          proposal.confidenceScore,
+          JSON.stringify(normalizeTextList(proposal.unknowns)),
+          JSON.stringify(
+            normalizeTextList(proposal.strengtheningConditions),
+          ),
+          JSON.stringify(normalizeTextList(proposal.weakeningConditions)),
+          input.model ?? null,
+          createdAt,
+        );
+      const insertSignal = this.database.prepare(`
+        INSERT INTO thesis_evaluation_updates (evaluation_id, update_id)
+        VALUES (?, ?)
+      `);
+      signalIds.forEach((signalId) => insertSignal.run(id, signalId));
+      const insertEvidence = this.database.prepare(`
+        INSERT INTO thesis_evaluation_evidence (
+          evaluation_id, claim_id, stance, rationale
+        ) VALUES (?, ?, ?, ?)
+      `);
+      evidence.forEach((item) =>
+        insertEvidence.run(id, item.claimId, item.stance, item.rationale),
+      );
+    });
+
+    const evaluation = this.getThesisEvaluation(id);
+    if (!evaluation) {
+      throw new Error(`Failed to reload thesis evaluation ${id}`);
+    }
+    return evaluation;
+  }
+
+  getThesisEvaluation(id: string): ThesisEvaluation | null {
+    const evaluationRow = row(
+      this.database
+        .prepare("SELECT * FROM thesis_evaluations WHERE id = ?")
+        .get(id),
+    );
+    return evaluationRow ? this.mapThesisEvaluation(evaluationRow) : null;
+  }
+
+  listThesisEvaluations(
+    filters: ThesisEvaluationListFilters = {},
+  ): ThesisEvaluation[] {
+    const clauses: string[] = [];
+    const values: string[] = [];
+    if (filters.thesisId) {
+      clauses.push("thesis_id = ?");
+      values.push(filters.thesisId);
+    }
+    if (filters.reviewStatus) {
+      clauses.push("review_status = ?");
+      values.push(filters.reviewStatus);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    return rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM thesis_evaluations
+          ${where}
+          ORDER BY created_at DESC, id
+        `)
+        .all(...values),
+    ).map((evaluationRow) => this.mapThesisEvaluation(evaluationRow));
+  }
+
+  listRecentThesisEvaluations(limit = 50): ThesisEvaluation[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM thesis_evaluations
+          ORDER BY created_at DESC, id
+          LIMIT ?
+        `)
+        .all(limit),
+    ).map((evaluationRow) => this.mapThesisEvaluation(evaluationRow));
+  }
+
+  listThesisEvaluationsSince(timestamp: string): ThesisEvaluation[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM thesis_evaluations
+          WHERE created_at > ? OR reviewed_at > ?
+          ORDER BY MAX(created_at, COALESCE(reviewed_at, created_at)), id
+        `)
+        .all(timestamp, timestamp),
+    ).map((evaluationRow) => this.mapThesisEvaluation(evaluationRow));
+  }
+
+  getLatestThesisEvaluationRunCursor(): string | null {
+    const latest = row(
+      this.database
+        .prepare(`
+          SELECT signal_ingestion_cursor
+          FROM thesis_evaluation_runs
+          ORDER BY signal_ingestion_cursor DESC, completed_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(),
+    );
+    return latest ? text(latest, "signal_ingestion_cursor") : null;
+  }
+
+  recordThesisEvaluationRun(
+    input: ThesisEvaluationRunInput,
+  ): ThesisEvaluationRun {
+    assertIsoTimestamp(
+      input.signalIngestionCursor,
+      "signal ingestion cursor",
+    );
+    if (
+      !Number.isInteger(input.signalCount) ||
+      input.signalCount < 0 ||
+      !Number.isInteger(input.evaluationCount) ||
+      input.evaluationCount < 0
+    ) {
+      throw new RangeError(
+        "Evaluation run counts must be non-negative integers.",
+      );
+    }
+    const latestCursor = this.getLatestThesisEvaluationRunCursor();
+    if (
+      latestCursor &&
+      input.signalIngestionCursor.localeCompare(latestCursor) < 0
+    ) {
+      throw new RangeError(
+        "An evaluation run cannot move the signal cursor backwards.",
+      );
+    }
+    const id = input.id?.trim() || `thesis-evaluation-run-${randomUUID()}`;
+    const completedAt = input.completedAt ?? new Date().toISOString();
+    assertIsoTimestamp(completedAt, "evaluation completion time");
+    this.database
+      .prepare(`
+        INSERT INTO thesis_evaluation_runs (
+          id, signal_ingestion_cursor, signal_count, evaluation_count,
+          model, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        input.signalIngestionCursor,
+        input.signalCount,
+        input.evaluationCount,
+        input.model ?? null,
+        completedAt,
+      );
+    return {
+      id,
+      signalIngestionCursor: input.signalIngestionCursor,
+      signalCount: input.signalCount,
+      evaluationCount: input.evaluationCount,
+      model: input.model ?? null,
+      completedAt,
+    };
+  }
+
+  getLatestThesisEvaluationAt(): string | null {
+    const latest = row(
+      this.database
+        .prepare(`
+          SELECT created_at
+          FROM thesis_evaluations
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1
+        `)
+        .get(),
+    );
+    return latest ? text(latest, "created_at") : null;
+  }
+
+  reviewThesisEvaluation(
+    id: string,
+    input: ThesisEvaluationReviewInput,
+  ): ThesisEvaluation {
+    const evaluation = this.getThesisEvaluation(id);
+    if (!evaluation) {
+      throw new RangeError(`Unknown thesis evaluation: ${id}`);
+    }
+    if (
+      evaluation.reviewStatus === "accepted" ||
+      evaluation.reviewStatus === "rejected"
+    ) {
+      if (evaluation.reviewStatus === input.decision) {
+        return evaluation;
+      }
+      throw new TypeError(
+        `A ${evaluation.reviewStatus} thesis evaluation is final.`,
+      );
+    }
+
+    const reviewedAt = new Date().toISOString();
+    const reviewNote = input.note?.trim() || null;
+    this.withTransaction(() => {
+      let acceptedVersionId: string | null = null;
+      if (input.decision === "accepted") {
+        const thesis = this.getThesis(evaluation.thesisId);
+        if (!thesis || thesis.status !== "active") {
+          throw new RangeError(
+            `Unknown active thesis: ${evaluation.thesisId}`,
+          );
+        }
+        if (thesis.currentVersion.id !== evaluation.previousVersionId) {
+          throw new TypeError(
+            "This evaluation is stale because the thesis has changed.",
+          );
+        }
+        const proposal = {
+          belief: evaluation.proposedBelief,
+          confidenceScore: evaluation.proposedConfidenceScore,
+          unknowns: evaluation.proposedUnknowns,
+          strengtheningConditions:
+            evaluation.proposedStrengtheningConditions,
+          weakeningConditions: evaluation.proposedWeakeningConditions,
+        };
+        if (sameThesisState(thesis.currentVersion, proposal)) {
+          acceptedVersionId = thesis.currentVersion.id;
+        } else {
+          const versionNumber = thesis.currentVersion.version + 1;
+          acceptedVersionId = `thesis-version-${randomUUID()}`;
+          this.database
+            .prepare(`
+              INSERT INTO thesis_versions (
+                id, thesis_id, version, belief, confidence, unknowns_json,
+                strengthening_conditions_json, weakening_conditions_json,
+                created_at, created_by_evaluation_id
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `)
+            .run(
+              acceptedVersionId,
+              thesis.id,
+              versionNumber,
+              proposal.belief,
+              proposal.confidenceScore,
+              JSON.stringify(proposal.unknowns),
+              JSON.stringify(proposal.strengtheningConditions),
+              JSON.stringify(proposal.weakeningConditions),
+              reviewedAt,
+              evaluation.id,
+            );
+          this.database
+            .prepare(`
+              UPDATE theses
+              SET current_version_id = ?, updated_at = ?
+              WHERE id = ?
+            `)
+            .run(acceptedVersionId, reviewedAt, thesis.id);
+        }
+        const linkEvidence = this.database.prepare(`
+          INSERT INTO thesis_evidence (
+            thesis_id, claim_id, stance, rationale, linked_at,
+            linked_by_evaluation_id
+          ) VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT(thesis_id, claim_id) DO UPDATE SET
+            stance = excluded.stance,
+            rationale = excluded.rationale,
+            linked_at = excluded.linked_at,
+            linked_by_evaluation_id = excluded.linked_by_evaluation_id
+        `);
+        evaluation.evidence.forEach((item) =>
+          linkEvidence.run(
+            thesis.id,
+            item.claimId,
+            item.stance,
+            item.rationale,
+            reviewedAt,
+            evaluation.id,
+          ),
+        );
+      }
+      this.database
+        .prepare(`
+          UPDATE thesis_evaluations
+          SET review_status = ?, review_note = ?, reviewed_at = ?,
+              accepted_version_id = ?
+          WHERE id = ?
+        `)
+        .run(
+          input.decision,
+          reviewNote,
+          reviewedAt,
+          acceptedVersionId,
+          evaluation.id,
+        );
+    });
+
+    const reviewed = this.getThesisEvaluation(id);
+    if (!reviewed) {
+      throw new Error(`Failed to reload thesis evaluation ${id}`);
+    }
+    return reviewed;
   }
 
   listSources(): ResearchSource[] {
@@ -768,6 +1533,16 @@ export class RelayRepository {
         .prepare("SELECT claim_id FROM brief_claims WHERE brief_id = ? ORDER BY claim_id")
         .all(id),
     );
+    const evaluationIds = rows(
+      this.database
+        .prepare(`
+          SELECT evaluation_id
+          FROM brief_thesis_evaluations
+          WHERE brief_id = ?
+          ORDER BY sort_order
+        `)
+        .all(id),
+    ).map((evaluationRow) => text(evaluationRow, "evaluation_id"));
 
     return {
       id: text(briefRow, "id"),
@@ -781,6 +1556,9 @@ export class RelayRepository {
       ),
       updateIds: updateRows.map((updateRow) => text(updateRow, "update_id")),
       citationClaimIds: claimRows.map((claimRow) => text(claimRow, "claim_id")),
+      ...(evaluationIds.length > 0
+        ? { thesisEvaluationIds: evaluationIds }
+        : {}),
       generatedAt: text(briefRow, "generated_at"),
       model: nullableText(briefRow, "model"),
     };
@@ -822,11 +1600,19 @@ export class RelayRepository {
     const insertClaim = this.database.prepare(`
       INSERT INTO brief_claims (brief_id, claim_id) VALUES (?, ?)
     `);
+    const insertEvaluation = this.database.prepare(`
+      INSERT INTO brief_thesis_evaluations (
+        brief_id, evaluation_id, sort_order
+      ) VALUES (?, ?, ?)
+    `);
     const knownUpdate = this.database.prepare(
       "SELECT 1 FROM intelligence_updates WHERE id = ?",
     );
     const knownClaim = this.database.prepare(
       "SELECT 1 FROM evidence_claims WHERE id = ?",
+    );
+    const knownEvaluation = this.database.prepare(
+      "SELECT 1 FROM thesis_evaluations WHERE id = ?",
     );
 
     this.withTransaction(() => {
@@ -849,6 +1635,9 @@ export class RelayRepository {
       this.database
         .prepare("DELETE FROM brief_claims WHERE brief_id = ?")
         .run(brief.id);
+      this.database
+        .prepare("DELETE FROM brief_thesis_evaluations WHERE brief_id = ?")
+        .run(brief.id);
       brief.updateIds.forEach((updateId, index) => {
         if (knownUpdate.get(updateId)) {
           insertUpdate.run(brief.id, updateId, index);
@@ -857,6 +1646,11 @@ export class RelayRepository {
       brief.citationClaimIds.forEach((claimId) => {
         if (knownClaim.get(claimId)) {
           insertClaim.run(brief.id, claimId);
+        }
+      });
+      (brief.thesisEvaluationIds ?? []).forEach((evaluationId, index) => {
+        if (knownEvaluation.get(evaluationId)) {
+          insertEvaluation.run(brief.id, evaluationId, index);
         }
       });
     });
@@ -986,6 +1780,133 @@ export class RelayRepository {
       .run(status, new Date().toISOString(), sourceId);
   }
 
+  private mapThesisVersion(versionRow: SqlRow): ThesisVersion {
+    return {
+      id: text(versionRow, "id"),
+      thesisId: text(versionRow, "thesis_id"),
+      version: numeric(versionRow, "version"),
+      belief: text(versionRow, "belief"),
+      confidenceScore: numeric(versionRow, "confidence"),
+      unknowns: parseJson<string[]>(versionRow.unknowns_json, []),
+      strengtheningConditions: parseJson<string[]>(
+        versionRow.strengthening_conditions_json,
+        [],
+      ),
+      weakeningConditions: parseJson<string[]>(
+        versionRow.weakening_conditions_json,
+        [],
+      ),
+      createdAt: text(versionRow, "created_at"),
+      createdByEvaluationId: nullableText(
+        versionRow,
+        "created_by_evaluation_id",
+      ),
+    };
+  }
+
+  private mapThesisEvaluation(evaluationRow: SqlRow): ThesisEvaluation {
+    const id = text(evaluationRow, "id");
+    const signalIds = rows(
+      this.database
+        .prepare(`
+          SELECT update_id
+          FROM thesis_evaluation_updates
+          WHERE evaluation_id = ?
+          ORDER BY update_id
+        `)
+        .all(id),
+    ).map((signalRow) => text(signalRow, "update_id"));
+    const evidence = rows(
+      this.database
+        .prepare(`
+          SELECT claim_id, stance, rationale
+          FROM thesis_evaluation_evidence
+          WHERE evaluation_id = ?
+          ORDER BY claim_id
+        `)
+        .all(id),
+    ).map((evidenceRow) => ({
+      claimId: text(evidenceRow, "claim_id"),
+      stance: text(
+        evidenceRow,
+        "stance",
+      ) as ThesisEvaluation["evidence"][number]["stance"],
+      rationale: text(evidenceRow, "rationale"),
+    }));
+    const previousConfidenceScore = numeric(
+      evaluationRow,
+      "previous_confidence",
+    );
+    const proposedConfidenceScore = numeric(
+      evaluationRow,
+      "proposed_confidence",
+    );
+    return {
+      id,
+      thesisId: text(evaluationRow, "thesis_id"),
+      previousVersionId: text(evaluationRow, "previous_version_id"),
+      acceptedVersionId: nullableText(evaluationRow, "accepted_version_id"),
+      outcome: text(
+        evaluationRow,
+        "outcome",
+      ) as ThesisEvaluation["outcome"],
+      summary: text(evaluationRow, "summary"),
+      rationale: text(evaluationRow, "rationale"),
+      proposedBelief: text(evaluationRow, "proposed_belief"),
+      previousConfidenceScore,
+      proposedConfidenceScore,
+      confidenceDelta:
+        Math.round(
+          (proposedConfidenceScore - previousConfidenceScore) * 10,
+        ) / 10,
+      proposedUnknowns: parseJson<string[]>(
+        evaluationRow.proposed_unknowns_json,
+        [],
+      ),
+      proposedStrengtheningConditions: parseJson<string[]>(
+        evaluationRow.proposed_strengthening_conditions_json,
+        [],
+      ),
+      proposedWeakeningConditions: parseJson<string[]>(
+        evaluationRow.proposed_weakening_conditions_json,
+        [],
+      ),
+      signalIds,
+      claimIds: evidence.map((item) => item.claimId),
+      evidence,
+      reviewStatus: text(
+        evaluationRow,
+        "review_status",
+      ) as ThesisEvaluation["reviewStatus"],
+      reviewNote: nullableText(evaluationRow, "review_note"),
+      model: nullableText(evaluationRow, "model"),
+      createdAt: text(evaluationRow, "created_at"),
+      reviewedAt: nullableText(evaluationRow, "reviewed_at"),
+    };
+  }
+
+  private assertKnownThesisAssociations(
+    companyTickers: string[],
+    layerIds: string[],
+  ): void {
+    const knownCompany = this.database.prepare(
+      "SELECT 1 FROM companies WHERE ticker = ?",
+    );
+    companyTickers.forEach((ticker) => {
+      if (!knownCompany.get(ticker)) {
+        throw new RangeError(`Unknown company: ${ticker}`);
+      }
+    });
+    const knownLayer = this.database.prepare(
+      "SELECT 1 FROM stack_layers WHERE id = ?",
+    );
+    layerIds.forEach((layerId) => {
+      if (!knownLayer.get(layerId)) {
+        throw new RangeError(`Unknown stack layer: ${layerId}`);
+      }
+    });
+  }
+
   private mapCompany(companyRow: SqlRow): Company {
     const ticker = text(companyRow, "ticker");
     const layerRows = rows(
@@ -1095,6 +2016,93 @@ function mapImpactReview(reviewRow: SqlRow): ImpactReview {
     createdAt: text(reviewRow, "created_at"),
     updatedAt: text(reviewRow, "updated_at"),
   };
+}
+
+interface ThesisState {
+  belief: string;
+  confidenceScore: number;
+  unknowns: string[];
+  strengtheningConditions: string[];
+  weakeningConditions: string[];
+}
+
+function assertThesisState(state: ThesisState): void {
+  if (!state.belief.trim()) {
+    throw new TypeError("A thesis statement cannot be empty.");
+  }
+  if (
+    !Number.isFinite(state.confidenceScore) ||
+    state.confidenceScore < 0 ||
+    state.confidenceScore > 100
+  ) {
+    throw new RangeError("Thesis confidence must be between 0 and 100.");
+  }
+  for (const items of [
+    state.unknowns,
+    state.strengtheningConditions,
+    state.weakeningConditions,
+  ]) {
+    if (items.some((item) => !item.trim())) {
+      throw new TypeError("Thesis lists cannot contain empty items.");
+    }
+  }
+}
+
+function sameThesisState(left: ThesisState, right: ThesisState): boolean {
+  return (
+    left.belief.trim() === right.belief.trim() &&
+    left.confidenceScore === right.confidenceScore &&
+    sameTextSet(left.unknowns, right.unknowns) &&
+    sameTextSet(
+      left.strengtheningConditions,
+      right.strengtheningConditions,
+    ) &&
+    sameTextSet(left.weakeningConditions, right.weakeningConditions)
+  );
+}
+
+function sameTextSet(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const normalizedLeft = left.map(normalizeComparableText).sort();
+  const normalizedRight = right.map(normalizeComparableText).sort();
+  return normalizedLeft.every(
+    (value, index) => value === normalizedRight[index],
+  );
+}
+
+function normalizeComparableText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+}
+
+function normalizeTextList(items: string[]): string[] {
+  return uniqueStrings(items);
+}
+
+function uniqueStrings(items: readonly string[]): string[] {
+  return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
+}
+
+function confidenceToScore(confidence: Company["confidence"]): number {
+  switch (confidence) {
+    case "high":
+      return 85;
+    case "medium":
+      return 60;
+    case "low":
+      return 35;
+  }
+}
+
+function assertIsoTimestamp(value: string, label: string): void {
+  const parsed = new Date(value);
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString() !== value
+  ) {
+    throw new TypeError(`Invalid ISO timestamp for ${label}.`);
+  }
 }
 
 function assertSignalInvariants(update: IntelligenceUpdate): void {
