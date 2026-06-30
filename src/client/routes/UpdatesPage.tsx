@@ -111,7 +111,7 @@ export function UpdatesPage() {
   }, [filteredUpdates, selectUpdate, selectedUpdate]);
 
   if (isLoading) {
-    return <PageLoading label="Loading signals" />;
+    return <PageLoading label="Loading evidence ledger" />;
   }
   if (error || !data) {
     return (
@@ -170,9 +170,9 @@ export function UpdatesPage() {
           ) : (
             <div className="grid h-full place-items-center px-6 text-center">
               <div>
-                <h1 className="text-lg font-semibold">No signals found</h1>
+                <h1 className="text-lg font-semibold">No evidence found</h1>
                 <p className="mt-2 text-sm text-relay-muted">
-                  Change the view or add a signal from Sources.
+                  Change the view or import source material from Sources.
                 </p>
               </div>
             </div>

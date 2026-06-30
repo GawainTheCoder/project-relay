@@ -248,6 +248,196 @@ const migrations = [
     CREATE INDEX IF NOT EXISTS research_sources_archived_user_added_idx
       ON research_sources(archived, user_added, name);
   `,
+  `
+    CREATE TABLE IF NOT EXISTS theses (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL CHECK (type IN ('company', 'macro')),
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active'
+        CHECK (status IN ('active', 'archived')),
+      current_version_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS theses_type_status_idx
+      ON theses(type, status, title);
+
+    CREATE TABLE IF NOT EXISTS thesis_versions (
+      id TEXT PRIMARY KEY,
+      thesis_id TEXT NOT NULL REFERENCES theses(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL CHECK (version > 0),
+      belief TEXT NOT NULL,
+      confidence REAL NOT NULL CHECK (confidence >= 0 AND confidence <= 100),
+      unknowns_json TEXT NOT NULL,
+      strengthening_conditions_json TEXT NOT NULL,
+      weakening_conditions_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      created_by_evaluation_id TEXT,
+      UNIQUE (thesis_id, version)
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_versions_thesis_idx
+      ON thesis_versions(thesis_id, version DESC);
+
+    CREATE TABLE IF NOT EXISTS thesis_companies (
+      thesis_id TEXT NOT NULL REFERENCES theses(id) ON DELETE CASCADE,
+      company_ticker TEXT NOT NULL REFERENCES companies(ticker) ON DELETE CASCADE,
+      PRIMARY KEY (thesis_id, company_ticker)
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_companies_company_idx
+      ON thesis_companies(company_ticker, thesis_id);
+
+    CREATE TABLE IF NOT EXISTS thesis_layers (
+      thesis_id TEXT NOT NULL REFERENCES theses(id) ON DELETE CASCADE,
+      layer_id TEXT NOT NULL REFERENCES stack_layers(id) ON DELETE CASCADE,
+      PRIMARY KEY (thesis_id, layer_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_layers_layer_idx
+      ON thesis_layers(layer_id, thesis_id);
+
+    CREATE TABLE IF NOT EXISTS thesis_evaluations (
+      id TEXT PRIMARY KEY,
+      thesis_id TEXT NOT NULL REFERENCES theses(id) ON DELETE CASCADE,
+      previous_version_id TEXT NOT NULL REFERENCES thesis_versions(id),
+      accepted_version_id TEXT REFERENCES thesis_versions(id),
+      outcome TEXT NOT NULL CHECK (
+        outcome IN (
+          'unchanged', 'reinforced', 'weakened', 'contradicted', 'revised'
+        )
+      ),
+      summary TEXT NOT NULL,
+      rationale TEXT NOT NULL,
+      proposed_belief TEXT NOT NULL,
+      previous_confidence REAL NOT NULL
+        CHECK (previous_confidence >= 0 AND previous_confidence <= 100),
+      proposed_confidence REAL NOT NULL
+        CHECK (proposed_confidence >= 0 AND proposed_confidence <= 100),
+      proposed_unknowns_json TEXT NOT NULL,
+      proposed_strengthening_conditions_json TEXT NOT NULL,
+      proposed_weakening_conditions_json TEXT NOT NULL,
+      review_status TEXT NOT NULL DEFAULT 'pending' CHECK (
+        review_status IN ('pending', 'accepted', 'rejected', 'deferred')
+      ),
+      review_note TEXT,
+      model TEXT,
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_evaluations_thesis_idx
+      ON thesis_evaluations(thesis_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS thesis_evaluations_review_idx
+      ON thesis_evaluations(review_status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS thesis_evaluation_runs (
+      id TEXT PRIMARY KEY,
+      signal_ingestion_cursor TEXT NOT NULL,
+      signal_count INTEGER NOT NULL CHECK (signal_count >= 0),
+      evaluation_count INTEGER NOT NULL CHECK (evaluation_count >= 0),
+      model TEXT,
+      completed_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_evaluation_runs_cursor_idx
+      ON thesis_evaluation_runs(signal_ingestion_cursor DESC, completed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS thesis_evaluation_updates (
+      evaluation_id TEXT NOT NULL
+        REFERENCES thesis_evaluations(id) ON DELETE CASCADE,
+      update_id TEXT NOT NULL
+        REFERENCES intelligence_updates(id),
+      PRIMARY KEY (evaluation_id, update_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS thesis_evaluation_evidence (
+      evaluation_id TEXT NOT NULL
+        REFERENCES thesis_evaluations(id) ON DELETE CASCADE,
+      claim_id TEXT NOT NULL REFERENCES evidence_claims(id),
+      stance TEXT NOT NULL CHECK (stance IN ('supports', 'opposes', 'context')),
+      rationale TEXT NOT NULL,
+      PRIMARY KEY (evaluation_id, claim_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_evaluation_evidence_claim_idx
+      ON thesis_evaluation_evidence(claim_id, evaluation_id);
+
+    CREATE TABLE IF NOT EXISTS thesis_evidence (
+      thesis_id TEXT NOT NULL REFERENCES theses(id) ON DELETE CASCADE,
+      claim_id TEXT NOT NULL REFERENCES evidence_claims(id),
+      stance TEXT NOT NULL CHECK (stance IN ('supports', 'opposes', 'context')),
+      rationale TEXT NOT NULL,
+      linked_at TEXT NOT NULL,
+      linked_by_evaluation_id TEXT REFERENCES thesis_evaluations(id),
+      PRIMARY KEY (thesis_id, claim_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_evidence_claim_idx
+      ON thesis_evidence(claim_id, thesis_id);
+
+    CREATE TABLE IF NOT EXISTS brief_thesis_evaluations (
+      brief_id TEXT NOT NULL REFERENCES daily_briefs(id) ON DELETE CASCADE,
+      evaluation_id TEXT NOT NULL
+        REFERENCES thesis_evaluations(id) ON DELETE CASCADE,
+      sort_order INTEGER NOT NULL,
+      PRIMARY KEY (brief_id, evaluation_id)
+    );
+
+    INSERT OR IGNORE INTO theses (
+      id, type, title, status, current_version_id, created_at, updated_at
+    )
+    SELECT
+      'company-' || lower(ticker),
+      'company',
+      name,
+      CASE WHEN archived = 1 THEN 'archived' ELSE 'active' END,
+      NULL,
+      updated_at,
+      updated_at
+    FROM companies;
+
+    INSERT OR IGNORE INTO thesis_versions (
+      id, thesis_id, version, belief, confidence, unknowns_json,
+      strengthening_conditions_json, weakening_conditions_json,
+      created_at, created_by_evaluation_id
+    )
+    SELECT
+      'company-' || lower(ticker) || '-v1',
+      'company-' || lower(ticker),
+      1,
+      thesis,
+      CASE confidence
+        WHEN 'high' THEN 85
+        WHEN 'medium' THEN 60
+        ELSE 35
+      END,
+      '[]',
+      proves_right_json,
+      breaks_thesis_json,
+      updated_at,
+      NULL
+    FROM companies;
+
+    INSERT OR IGNORE INTO thesis_companies (thesis_id, company_ticker)
+    SELECT 'company-' || lower(ticker), ticker
+    FROM companies;
+
+    INSERT OR IGNORE INTO thesis_layers (thesis_id, layer_id)
+    SELECT 'company-' || lower(company_ticker), layer_id
+    FROM company_layers;
+
+    UPDATE theses
+    SET current_version_id = id || '-v1'
+    WHERE type = 'company'
+      AND current_version_id IS NULL
+      AND EXISTS (
+        SELECT 1 FROM thesis_versions
+        WHERE thesis_versions.id = theses.id || '-v1'
+      );
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {

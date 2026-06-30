@@ -1,9 +1,9 @@
 import {
   BookOpenText,
-  Building2,
+  BrainCircuit,
+  Database,
   LoaderCircle,
   Quote,
-  Radar,
   Search,
   X,
 } from "lucide-react";
@@ -35,6 +35,7 @@ const supportedResultTypes = new Set<SearchResultType>([
   "brief",
   "company",
   "evidence",
+  "thesis",
   "update",
 ]);
 
@@ -43,11 +44,13 @@ function getPersistedIcon(type: SearchResultType) {
     case "brief":
       return BookOpenText;
     case "company":
-      return Building2;
+      return BrainCircuit;
     case "evidence":
       return Quote;
+    case "thesis":
+      return BrainCircuit;
     case "update":
-      return Radar;
+      return Database;
     default:
       return Search;
   }
@@ -59,6 +62,9 @@ function normalizeResultHref(href: string) {
   }
   if (href.startsWith("/companies")) {
     return href.replace("/companies", "/theses");
+  }
+  if (href.startsWith("/beliefs")) {
+    return href.replace("/beliefs", "/theses");
   }
   return href;
 }
@@ -133,14 +139,14 @@ export function CommandPalette({
         label: `${company.ticker} · ${company.name}`,
         description: company.thesis,
         href: `/theses/${company.ticker}`,
-        icon: Building2,
+        icon: BrainCircuit,
       })),
       ...data.updates.map((update) => ({
         key: `update-${update.id}`,
         label: update.title,
         description: `${update.publisher} · ${update.companyTickers.join(", ")}`,
         href: `/signals?update=${encodeURIComponent(update.id)}`,
-        icon: Radar,
+        icon: Database,
       })),
     ];
     return entries.slice(0, 8);
@@ -210,7 +216,7 @@ export function CommandPalette({
                 }
               }
             }}
-            placeholder="Search signals, evidence, briefs, and theses"
+            placeholder="Search theses, evidence, briefs, and sources"
             ref={inputRef}
             value={query}
           />

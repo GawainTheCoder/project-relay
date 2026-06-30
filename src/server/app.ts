@@ -6,6 +6,7 @@ import type {
   ImportSourceInput,
   IntelligenceUpdate,
   SourceRefreshResult,
+  ThesisEvaluation,
 } from "../shared/contracts.js";
 
 import { jsonError, validationDetails } from "./api/errors.js";
@@ -17,6 +18,8 @@ import {
   researchSourceInputSchema,
   resourceIdSchema,
   searchQuerySchema,
+  thesisEvaluationReviewInputSchema,
+  thesisListQuerySchema,
   tickerSchema,
 } from "./api/schemas.js";
 import {
@@ -36,6 +39,11 @@ export interface AppServices {
     input: ImportSourceInput,
   ) => Promise<IntelligenceUpdate>;
   refreshSources?: () => Promise<SourceRefreshResult>;
+  evaluateTheses?: () => Promise<{
+    evaluatedAt: string;
+    model: string;
+    evaluations: ThesisEvaluation[];
+  }>;
   generateBrief?: () => Promise<DailyBrief>;
 }
 
@@ -196,6 +204,143 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   application.get("/api/dashboard", (context) => {
     return context.json(getRepository().getDashboard());
   });
+
+  application.get("/api/theses", (context) => {
+    const parsedQuery = thesisListQuerySchema.safeParse({
+      kind: context.req.query("kind") ?? undefined,
+      status: context.req.query("status") ?? undefined,
+    });
+    if (!parsedQuery.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The thesis list query is invalid.",
+        validationDetails(parsedQuery.error),
+      );
+    }
+    return context.json({
+      theses: getRepository().listTheses({
+        status: parsedQuery.data.status,
+        ...(parsedQuery.data.kind
+          ? { kind: parsedQuery.data.kind }
+          : {}),
+      }),
+    });
+  });
+
+  application.get("/api/theses/:id", (context) => {
+    const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+    if (!parsedId.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The thesis ID is invalid.",
+        validationDetails(parsedId.error),
+      );
+    }
+    const thesis = getRepository().getThesisDetail(parsedId.data);
+    if (!thesis) {
+      return jsonError(
+        context,
+        404,
+        "THESIS_NOT_FOUND",
+        "The requested thesis does not exist.",
+      );
+    }
+    return context.json(thesis);
+  });
+
+  application.post("/api/theses/evaluate", async (context) => {
+    if (!options.services?.evaluateTheses) {
+      return jsonError(
+        context,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Thesis evaluation is not configured.",
+      );
+    }
+    if (activeOperations.has("thesis-evaluation")) {
+      return jsonError(
+        context,
+        409,
+        "OPERATION_IN_PROGRESS",
+        "A thesis evaluation is already running.",
+      );
+    }
+    activeOperations.add("thesis-evaluation");
+    try {
+      const result = await options.services.evaluateTheses();
+      return context.json(result, 201);
+    } catch {
+      return jsonError(
+        context,
+        502,
+        "THESIS_EVALUATION_FAILED",
+        "Relay could not evaluate theses.",
+      );
+    } finally {
+      activeOperations.delete("thesis-evaluation");
+    }
+  });
+
+  application.post(
+    "/api/thesis-evaluations/:id/review",
+    async (context) => {
+      const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+      const parsedBody = thesisEvaluationReviewInputSchema.safeParse(
+        await requestJson(context),
+      );
+      if (!parsedId.success || !parsedBody.success) {
+        return jsonError(
+          context,
+          400,
+          "VALIDATION_ERROR",
+          "The thesis evaluation review is invalid.",
+          [
+            ...(parsedId.success
+              ? []
+              : validationDetails(parsedId.error)),
+            ...(parsedBody.success
+              ? []
+              : validationDetails(parsedBody.error)),
+          ],
+        );
+      }
+      try {
+        return context.json(
+          getRepository().reviewThesisEvaluation(
+            parsedId.data,
+            {
+              decision: parsedBody.data.decision,
+              ...(parsedBody.data.note
+                ? { note: parsedBody.data.note }
+                : {}),
+            },
+          ),
+        );
+      } catch (error) {
+        if (error instanceof RangeError) {
+          return jsonError(
+            context,
+            404,
+            "THESIS_EVALUATION_NOT_FOUND",
+            "The requested thesis evaluation does not exist.",
+          );
+        }
+        if (error instanceof TypeError) {
+          return jsonError(
+            context,
+            409,
+            "THESIS_EVALUATION_CONFLICT",
+            error.message,
+          );
+        }
+        throw error;
+      }
+    },
+  );
 
   application.get("/api/search", (context) => {
     const parsedQuery = searchQuerySchema.safeParse({

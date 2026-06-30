@@ -39,6 +39,101 @@ describe("Relay API", () => {
     });
   });
 
+  it("lists active beliefs and returns their versioned detail", async () => {
+    const app = createApp({ repository });
+
+    const listResponse = await app.request("/api/theses?kind=macro");
+    expect(listResponse.status).toBe(200);
+    const payload = (await listResponse.json()) as {
+      theses: Array<{ id: string; kind: string }>;
+    };
+    expect(payload.theses.length).toBeGreaterThan(0);
+    expect(payload.theses.every((thesis) => thesis.kind === "macro")).toBe(
+      true,
+    );
+
+    const detailResponse = await app.request(
+      `/api/theses/${payload.theses[0]?.id}`,
+    );
+    expect(detailResponse.status).toBe(200);
+    await expect(detailResponse.json()).resolves.toMatchObject({
+      id: payload.theses[0]?.id,
+      kind: "macro",
+      currentVersion: {
+        id: expect.any(String),
+        belief: expect.any(String),
+        confidenceScore: expect.any(Number),
+      },
+      versions: expect.any(Array),
+      evidence: expect.any(Array),
+      evaluations: expect.any(Array),
+    });
+  });
+
+  it("reviews a thesis evaluation and advances the accepted belief", async () => {
+    const thesis = repository
+      .listTheses()
+      .find((candidate) => candidate.currentVersion.confidenceScore < 100);
+    const update = repository.getUpdate("vrt-fy25-q4");
+    if (!thesis || !update?.claims[0]) {
+      throw new Error("Expected seeded thesis and evidence fixtures.");
+    }
+    const evaluation = repository.persistThesisEvaluation({
+      id: "route-thesis-evaluation",
+      thesisId: thesis.id,
+      outcome: "reinforced",
+      summary: "Independent evidence reinforces the current belief.",
+      rationale: "The cited operating result supports the current belief.",
+      proposedBelief: thesis.currentVersion.belief,
+      proposedConfidenceScore:
+        thesis.currentVersion.confidenceScore + 1,
+      proposedUnknowns: thesis.currentVersion.unknowns,
+      proposedStrengtheningConditions:
+        thesis.currentVersion.strengtheningConditions,
+      proposedWeakeningConditions:
+        thesis.currentVersion.weakeningConditions,
+      signalIds: [update.id],
+      evidence: [
+        {
+          claimId: update.claims[0].id,
+          stance: "supports",
+          rationale: "The claim directly supports the belief.",
+        },
+      ],
+      model: "mock-evaluation-model",
+    });
+    const app = createApp({ repository });
+
+    const response = await app.request(
+      `/api/thesis-evaluations/${evaluation.id}/review`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          decision: "accepted",
+          note: "The cited evidence clears the confidence threshold.",
+        }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      id: evaluation.id,
+      reviewStatus: "accepted",
+      acceptedVersionId: expect.any(String),
+    });
+    expect(
+      repository.getThesis(thesis.id)?.currentVersion.confidenceScore,
+    ).toBe(thesis.currentVersion.confidenceScore + 1);
+    expect(repository.listThesisEvidence(thesis.id)).toEqual([
+      expect.objectContaining({
+        claimId: update.claims[0].id,
+        stance: "supports",
+        linkedByEvaluationId: evaluation.id,
+      }),
+    ]);
+  });
+
   it("searches persisted intelligence and validates query bounds", async () => {
     const app = createApp({ repository });
 
@@ -315,6 +410,57 @@ describe("Relay API", () => {
     });
     releaseRefresh?.({ imported: 0, analyzed: 0, errors: [], items: [] });
     expect((await firstRequest).status).toBe(200);
+  });
+
+  it("coalesces concurrent thesis evaluation requests", async () => {
+    let releaseEvaluation:
+      | ((value: {
+          evaluatedAt: string;
+          model: string;
+          evaluations: [];
+        }) => void)
+      | undefined;
+    const evaluateTheses = vi.fn(
+      () =>
+        new Promise<{
+          evaluatedAt: string;
+          model: string;
+          evaluations: [];
+        }>((resolve) => {
+          releaseEvaluation = resolve;
+        }),
+    );
+    const app = createApp({
+      repository,
+      services: { evaluateTheses },
+    });
+
+    const firstRequest = app.request("/api/theses/evaluate", {
+      method: "POST",
+    });
+    await vi.waitFor(() => {
+      expect(evaluateTheses).toHaveBeenCalledOnce();
+    });
+    const secondResponse = await app.request("/api/theses/evaluate", {
+      method: "POST",
+    });
+
+    expect(secondResponse.status).toBe(409);
+    await expect(secondResponse.json()).resolves.toMatchObject({
+      error: { code: "OPERATION_IN_PROGRESS" },
+    });
+    releaseEvaluation?.({
+      evaluatedAt: "2026-06-30T08:00:00.000Z",
+      model: "mock-evaluation-model",
+      evaluations: [],
+    });
+    const firstResponse = await firstRequest;
+    expect(firstResponse.status).toBe(201);
+    await expect(firstResponse.json()).resolves.toEqual({
+      evaluatedAt: "2026-06-30T08:00:00.000Z",
+      model: "mock-evaluation-model",
+      evaluations: [],
+    });
   });
 
   it("adds and archives a watchlist company thesis", async () => {

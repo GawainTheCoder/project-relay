@@ -292,6 +292,93 @@ describe("Relay API integration contracts", () => {
     }
   });
 
+  it("persists accepted belief changes and their evidence across a database reopen", async () => {
+    repository.close();
+    const directory = mkdtempSync(join(tmpdir(), "relay-belief-integration-"));
+    const databasePath = join(directory, "relay.sqlite");
+
+    try {
+      let fileRepository = createRelayRepository(databasePath);
+      const thesis = fileRepository
+        .listTheses()
+        .find((candidate) => candidate.currentVersion.confidenceScore < 100);
+      const update = fileRepository.getUpdate("vrt-fy25-q4");
+      if (!thesis || !update?.claims[0]) {
+        throw new Error("Expected seeded thesis and evidence fixtures.");
+      }
+      const priorConfidence = thesis.currentVersion.confidenceScore;
+      const evaluation = fileRepository.persistThesisEvaluation({
+        id: "persistent-api-thesis-evaluation",
+        thesisId: thesis.id,
+        outcome: "reinforced",
+        summary: "The evidence reinforces the current belief.",
+        rationale: "The cited operating evidence supports higher confidence.",
+        proposedBelief: thesis.currentVersion.belief,
+        proposedConfidenceScore: priorConfidence + 1,
+        proposedUnknowns: thesis.currentVersion.unknowns,
+        proposedStrengtheningConditions:
+          thesis.currentVersion.strengtheningConditions,
+        proposedWeakeningConditions:
+          thesis.currentVersion.weakeningConditions,
+        signalIds: [update.id],
+        evidence: [
+          {
+            claimId: update.claims[0].id,
+            stance: "supports",
+            rationale: "The exact claim supports the current belief.",
+          },
+        ],
+        model: "mock-evaluation-model",
+      });
+      let app = createApp({ repository: fileRepository });
+
+      const accepted = await app.request(
+        `/api/thesis-evaluations/${evaluation.id}/review`,
+        {
+          method: "POST",
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ decision: "accepted" }),
+        },
+      );
+      expect(accepted.status).toBe(200);
+      await expect(accepted.json()).resolves.toMatchObject({
+        id: evaluation.id,
+        reviewStatus: "accepted",
+        acceptedVersionId: expect.any(String),
+      });
+      fileRepository.close();
+
+      fileRepository = createRelayRepository(databasePath);
+      app = createApp({ repository: fileRepository });
+      const detail = await app.request(`/api/theses/${thesis.id}`);
+      expect(detail.status).toBe(200);
+      await expect(detail.json()).resolves.toMatchObject({
+        id: thesis.id,
+        currentVersion: {
+          confidenceScore: priorConfidence + 1,
+          createdByEvaluationId: evaluation.id,
+        },
+        evidence: [
+          expect.objectContaining({
+            claimId: update.claims[0].id,
+            stance: "supports",
+            linkedByEvaluationId: evaluation.id,
+          }),
+        ],
+        evaluations: [
+          expect.objectContaining({
+            id: evaluation.id,
+            reviewStatus: "accepted",
+          }),
+        ],
+      });
+      fileRepository.close();
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+      repository = createRelayRepository(":memory:");
+    }
+  });
+
   it("persists a generated brief and returns it on the next dashboard read", async () => {
     const generatedBrief: DailyBrief = {
       id: "brief-integration-generated",

@@ -15,6 +15,35 @@ export type LayerId = (typeof layerIds)[number];
 export type Sentiment = "bullish" | "bearish" | "neutral" | "not-material";
 export type Materiality = "high" | "medium" | "low" | "not-material";
 export type Confidence = "high" | "medium" | "low";
+export const thesisKinds = ["company", "macro"] as const;
+export type ThesisKind = (typeof thesisKinds)[number];
+export const thesisTypes = thesisKinds;
+export type ThesisType = ThesisKind;
+export const thesisStatuses = ["active", "archived"] as const;
+export type ThesisStatus = (typeof thesisStatuses)[number];
+export const thesisEvidenceStances = [
+  "supports",
+  "opposes",
+  "context",
+] as const;
+export type ThesisEvidenceStance = (typeof thesisEvidenceStances)[number];
+export const thesisEvaluationOutcomes = [
+  "unchanged",
+  "reinforced",
+  "weakened",
+  "contradicted",
+  "revised",
+] as const;
+export type ThesisEvaluationOutcome =
+  (typeof thesisEvaluationOutcomes)[number];
+export const thesisEvaluationReviewStatuses = [
+  "pending",
+  "accepted",
+  "rejected",
+  "deferred",
+] as const;
+export type ThesisEvaluationReviewStatus =
+  (typeof thesisEvaluationReviewStatuses)[number];
 export type SignalNovelty =
   | "new"
   | "confirmation"
@@ -49,6 +78,110 @@ export interface EvidenceClaim {
   quote: string;
   sourceId: string;
   locator: string;
+}
+
+export interface ThesisVersion {
+  id: string;
+  thesisId: string;
+  version: number;
+  belief: string;
+  confidenceScore: number;
+  unknowns: string[];
+  strengtheningConditions: string[];
+  weakeningConditions: string[];
+  createdAt: string;
+  createdByEvaluationId: string | null;
+}
+
+export interface ThesisEvidence {
+  thesisId: string;
+  claimId: string;
+  updateId: string;
+  stance: ThesisEvidenceStance;
+  rationale: string;
+  linkedAt: string;
+  linkedByEvaluationId: string | null;
+  claim: EvidenceClaim;
+}
+
+export interface Thesis {
+  id: string;
+  kind: ThesisKind;
+  title: string;
+  status: ThesisStatus;
+  currentVersion: ThesisVersion;
+  versions: ThesisVersion[];
+  companyTickers: string[];
+  layerIds: LayerId[];
+  evidence: ThesisEvidence[];
+  evaluations: ThesisEvaluation[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ThesisInput {
+  id?: string;
+  kind: ThesisKind;
+  title: string;
+  belief: string;
+  confidenceScore: number;
+  unknowns: string[];
+  strengtheningConditions: string[];
+  weakeningConditions: string[];
+  companyTickers: string[];
+  layerIds: LayerId[];
+}
+
+export interface ThesisEvaluationEvidenceInput {
+  claimId: string;
+  stance: ThesisEvidenceStance;
+  rationale: string;
+}
+
+export interface ThesisEvaluationInput {
+  id?: string;
+  thesisId: string;
+  outcome: ThesisEvaluationOutcome;
+  summary: string;
+  rationale: string;
+  proposedBelief: string;
+  proposedConfidenceScore: number;
+  proposedUnknowns: string[];
+  proposedStrengtheningConditions: string[];
+  proposedWeakeningConditions: string[];
+  signalIds: string[];
+  evidence: ThesisEvaluationEvidenceInput[];
+  model?: string | null;
+}
+
+export interface ThesisEvaluation {
+  id: string;
+  thesisId: string;
+  previousVersionId: string;
+  acceptedVersionId: string | null;
+  outcome: ThesisEvaluationOutcome;
+  summary: string;
+  rationale: string;
+  proposedBelief: string;
+  previousConfidenceScore: number;
+  proposedConfidenceScore: number;
+  confidenceDelta: number;
+  proposedUnknowns: string[];
+  proposedStrengtheningConditions: string[];
+  proposedWeakeningConditions: string[];
+  signalIds: string[];
+  claimIds: string[];
+  evidence: ThesisEvaluationEvidenceInput[];
+  reviewStatus: ThesisEvaluationReviewStatus;
+  reviewNote: string | null;
+  model: string | null;
+  createdAt: string;
+  reviewedAt: string | null;
+}
+
+export interface ThesisEvaluationReviewInput {
+  decision: Exclude<ThesisEvaluationReviewStatus, "pending">;
+  note?: string | undefined;
 }
 
 export interface ThesisImpact {
@@ -91,6 +224,7 @@ export type SearchResultType =
   | "brief"
   | "company"
   | "evidence"
+  | "thesis"
   | "update";
 
 export interface SearchResult {
@@ -189,6 +323,7 @@ export interface DailyBrief {
   secondarySignals: string[];
   updateIds: string[];
   citationClaimIds: string[];
+  thesisEvaluationIds?: string[];
   generatedAt: string;
   model: string | null;
 }

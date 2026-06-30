@@ -74,6 +74,20 @@ describe("LocalSearchService", () => {
     ]);
   });
 
+  it("treats versioned theses as first-class search results", () => {
+    repository = createRelayRepository(":memory:");
+    const search = new LocalSearchService(repository.database);
+
+    expect(search.search("premium economics")).toContainEqual(
+      expect.objectContaining({
+        type: "thesis",
+        id: "company-nvda",
+        href: "/theses/company-nvda",
+        matchedField: "current thesis",
+      }),
+    );
+  });
+
   it("applies query and result-limit boundaries", () => {
     repository = createRelayRepository(":memory:");
     const search = new LocalSearchService(repository.database);

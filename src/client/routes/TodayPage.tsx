@@ -61,7 +61,7 @@ export function TodayPage() {
   }, [data]);
 
   if (isLoading) {
-    return <PageLoading label="Preparing today’s brief" />;
+    return <PageLoading label="Updating today’s mental model" />;
   }
   if (error || !data) {
     return (
@@ -96,10 +96,10 @@ export function TodayPage() {
         <header className="border-b border-relay-border px-5 py-5 sm:px-8 lg:px-10">
           <div className="mx-auto max-w-[1100px]">
             <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
-              AI infrastructure signal tracker
+              AI infrastructure thesis monitor
             </p>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              Today’s brief
+              What changed in your understanding
             </h1>
           </div>
         </header>
@@ -111,21 +111,21 @@ export function TodayPage() {
             />
             <h2 className="mt-5 text-2xl font-semibold tracking-tight">
               {thesisChangingSignalCount
-                ? "Thesis-changing signals are ready"
+                ? "Thesis updates are ready"
                 : data.updates.length
                   ? "No meaningful change"
-                  : "No material signals yet"}
+                  : "No evidence evaluated yet"}
             </h2>
             <p className="mt-3 text-sm leading-7 text-relay-muted">
               {thesisChangingSignalCount
                 ? `Relay found ${thesisChangingSignalCount} signal${
                     thesisChangingSignalCount === 1 ? "" : "s"
-                  } that changed an infrastructure thesis. Generate today’s brief for the concise synthesis.`
+                  } that may change an infrastructure thesis. Generate today’s readout for the concise synthesis.`
                 : data.updates.length
                   ? `Relay analyzed ${data.updates.length} signal${
                       data.updates.length === 1 ? "" : "s"
-                    } and filtered them out as not thesis-changing.`
-                  : "Refresh trusted feeds or add a public article or permitted excerpt. A quiet day with no thesis change is a valid result."}
+                    } without finding a warranted thesis change.`
+                  : "Refresh trusted feeds or add a public article or permitted excerpt. A quiet day with no change in understanding is a valid result."}
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               {thesisChangingSignalCount ? (
@@ -135,7 +135,7 @@ export function TodayPage() {
                   onClick={() => void generateBrief()}
                   type="button"
                 >
-                  {isGeneratingBrief ? "Generating…" : "Generate daily brief"}
+                  {isGeneratingBrief ? "Generating…" : "Generate understanding readout"}
                   <ArrowRight aria-hidden="true" className="size-3.5" />
                 </button>
               ) : (
@@ -151,7 +151,7 @@ export function TodayPage() {
                 className="inline-flex h-10 items-center rounded-md border border-relay-border px-4 text-sm text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
                 to="/search"
               >
-                Search signals
+                Search evidence
               </Link>
             </div>
             {briefError ? (
@@ -184,11 +184,11 @@ export function TodayPage() {
               })}
             </div>
             <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              Today’s brief
+              What changed in your understanding
             </h1>
           </div>
           <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-subtle">
-            {data.updates.length} signals monitored
+            {data.updates.length} evidence records monitored
             <span className="mx-2 text-relay-border-strong">·</span>
             {brief.model ?? "Seed example"}
           </div>
@@ -200,7 +200,7 @@ export function TodayPage() {
           <article className="max-w-4xl">
             <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
               <span className="size-1.5 rounded-full bg-relay-accent" />
-              {hasBriefSignals ? "Most material signal" : "Daily conclusion"}
+              {hasBriefSignals ? "Largest thesis update" : "Daily conclusion"}
             </div>
             <h2 className="mt-4 max-w-3xl text-3xl font-semibold leading-[1.15] tracking-[-0.025em] sm:text-4xl">
               {brief.title}
@@ -216,7 +216,9 @@ export function TodayPage() {
                   className="mt-1 size-5 shrink-0 text-relay-subtle"
                 />
                 <div>
-                  <h3 className="text-sm font-semibold">Analyst synthesis</h3>
+                  <h3 className="text-sm font-semibold">
+                    Mental-model synthesis
+                  </h3>
                   <p className="mt-3 max-w-3xl text-[15px] leading-7 text-relay-text/90">
                     {brief.summary}
                   </p>
@@ -231,7 +233,7 @@ export function TodayPage() {
               >
                 <div className="min-w-0">
                   <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-muted">
-                    Read the underlying signal
+                    Inspect the underlying evidence
                   </span>
                   <p className="mt-1 truncate text-sm font-medium">
                     {primaryUpdate.title}
@@ -248,10 +250,11 @@ export function TodayPage() {
               <div className="flex items-end justify-between border-b border-relay-border pb-3">
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight">
-                    Secondary signals
+                    Evidence without thesis change
                   </h2>
                   <p className="mt-1 text-sm text-relay-muted">
-                    Useful developments that did not displace the lead signal.
+                    Reinforcement and context that did not warrant rewriting a
+                    thesis.
                   </p>
                 </div>
                 <span className="font-mono text-[10px] text-relay-subtle">
@@ -307,8 +310,8 @@ export function TodayPage() {
                 </ol>
               ) : (
                 <EmptyState
-                  body="Relay found no additional developments worth elevating."
-                  title="No secondary signals today"
+                  body="Relay found no additional evidence worth attaching to today’s readout."
+                  title="No additional evidence today"
                 />
               )}
             </section>
@@ -319,9 +322,9 @@ export function TodayPage() {
           <section>
             <div className="flex items-center justify-between border-b border-relay-border pb-3">
               <div>
-                <h2 className="text-sm font-semibold">Affected theses</h2>
+                <h2 className="text-sm font-semibold">Theses evaluated</h2>
                 <p className="mt-1 text-xs text-relay-muted">
-                  Proposed evidence changes
+                  Proposed changes to review
                 </p>
               </div>
               <Building2

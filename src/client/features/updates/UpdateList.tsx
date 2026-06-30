@@ -17,8 +17,8 @@ interface UpdateListProps {
 }
 
 const filters: { id: UpdateFilter; label: string }[] = [
-  { id: "material", label: "Thesis-changing" },
-  { id: "filtered", label: "Filtered out" },
+  { id: "material", label: "Changed a thesis" },
+  { id: "filtered", label: "No thesis change" },
 ];
 
 function dayGroup(publishedAt: string) {
@@ -59,7 +59,10 @@ export function UpdateList({
   return (
     <aside className="flex h-full min-h-0 flex-col border-r border-relay-border bg-relay-deep">
       <div className="border-b border-relay-border px-4 pb-3 pt-5">
-        <h1 className="text-xl font-semibold tracking-tight">Signals</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Evidence</h1>
+        <p className="mt-1 text-[11px] leading-4 text-relay-muted">
+          Immutable source ledger
+        </p>
         <div className="mt-4 flex items-center gap-1" role="tablist">
           {filters.map((candidate) => (
             <button
@@ -84,11 +87,11 @@ export function UpdateList({
 
       <label className="flex h-11 items-center gap-2 border-b border-relay-border px-4">
         <Search aria-hidden="true" className="size-3.5 text-relay-subtle" />
-        <span className="sr-only">Filter signals</span>
+        <span className="sr-only">Filter evidence</span>
         <input
           className="min-w-0 flex-1 bg-transparent text-xs text-relay-text placeholder:text-relay-subtle"
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Filter signals"
+          placeholder="Filter evidence"
           value={query}
         />
       </label>
@@ -163,13 +166,13 @@ export function UpdateList({
         ) : (
           <div className="px-5 py-12 text-center">
             <p className="text-sm text-relay-muted">
-              No signals match this view.
+              No evidence matches this view.
             </p>
           </div>
         )}
       </div>
       <div className="border-t border-relay-border px-4 py-2.5 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-        {updates.length} signals · J/K navigate
+        {updates.length} records · J/K navigate
       </div>
     </aside>
   );

@@ -5,6 +5,7 @@ import {
   seedCompanies,
   seedLayers,
   seedSources,
+  seedTheses,
   seedUpdates,
 } from "./catalog.js";
 
@@ -20,6 +21,7 @@ export function seedDatabase(
     companies: seedCompanies,
     layers: seedLayers,
     sources: seedSources,
+    theses: seedTheses,
     updates: options.includeDemoData ? seedUpdates : [],
   });
 }

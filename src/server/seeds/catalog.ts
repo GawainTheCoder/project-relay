@@ -4,6 +4,7 @@ import type {
   IntelligenceUpdate,
   ResearchSource,
   StackLayer,
+  ThesisInput,
 } from "../../shared/contracts.js";
 import { SOURCE_CATALOG_ROWS } from "../ingestion/source-registry.js";
 
@@ -251,6 +252,172 @@ export const seedCompanies: Company[] = [
     watchMetrics: ["HPC revenue", "3nm and 2nm mix", "CoWoS capacity", "Capital expenditure"],
     confidence: "high",
     updatedAt,
+  },
+];
+
+export const seedTheses: ThesisInput[] = [
+  ...seedCompanies.map(
+    (company): ThesisInput => ({
+      id: `company-${company.ticker.toLowerCase()}`,
+      kind: "company",
+      title: company.name,
+      belief: company.thesis,
+      confidenceScore:
+        company.confidence === "high"
+          ? 85
+          : company.confidence === "medium"
+            ? 60
+            : 35,
+      unknowns: [],
+      strengtheningConditions: company.provesRight,
+      weakeningConditions: company.breaksThesis,
+      companyTickers: [company.ticker],
+      layerIds: company.layerIds,
+    }),
+  ),
+  {
+    id: "macro-memory-bottleneck",
+    kind: "macro",
+    title: "Memory is a primary AI-system bottleneck",
+    belief:
+      "Memory bandwidth, HBM availability, and memory capacity constrain useful AI compute enough to shape accelerator performance and deployment timing.",
+    confidenceScore: 75,
+    unknowns: [
+      "How quickly can HBM supply expand without weakening pricing discipline?",
+      "How much will model and serving optimization reduce memory intensity?",
+    ],
+    strengtheningConditions: [
+      "HBM remains sold ahead across multiple suppliers",
+      "Memory bandwidth limits persist across new accelerator generations",
+      "HBM content per accelerator continues rising",
+    ],
+    weakeningConditions: [
+      "HBM supply persistently exceeds demand",
+      "Architectural changes materially reduce memory content or bandwidth needs",
+      "Accelerator deployments stop citing memory availability as a constraint",
+    ],
+    companyTickers: ["MU", "NVDA", "AMD", "TSM"],
+    layerIds: ["memory", "accelerators", "manufacturing"],
+  },
+  {
+    id: "macro-networking-bottleneck",
+    kind: "macro",
+    title: "Networking is becoming the scaling bottleneck",
+    belief:
+      "As accelerator clusters grow, data movement, fabric utilization, and network reliability increasingly determine realized system performance.",
+    confidenceScore: 70,
+    unknowns: [
+      "Which workloads benefit enough from the largest scale-out domains to justify network cost?",
+      "How will Ethernet and proprietary fabrics divide large back-end deployments?",
+    ],
+    strengtheningConditions: [
+      "Network spend grows faster than accelerator deployments",
+      "800G and 1.6T adoption accelerates across independent buyers",
+      "Cluster performance disclosures increasingly emphasize fabric efficiency",
+    ],
+    weakeningConditions: [
+      "Smaller clusters or scale-up architectures reduce network intensity",
+      "Network utilization ceases to limit delivered accelerator performance",
+      "Bandwidth growth slows materially across hyperscalers",
+    ],
+    companyTickers: ["ANET", "AVGO", "MRVL", "NVDA"],
+    layerIds: ["networking", "optics", "accelerators"],
+  },
+  {
+    id: "macro-optics-supply",
+    kind: "macro",
+    title: "Advanced optics supply remains constrained",
+    belief:
+      "Demand for higher-speed AI links is growing faster than qualified laser and transceiver capacity, supporting a structurally tighter advanced-optics market.",
+    confidenceScore: 65,
+    unknowns: [
+      "How much announced capacity is qualified for production rather than nominal?",
+      "When will co-packaged optics materially affect pluggable demand?",
+    ],
+    strengtheningConditions: [
+      "Lead times and pre-commitments remain elevated across suppliers",
+      "1.6T qualifications convert into broad volume shipments",
+      "Optical supplier utilization and margins rise together",
+    ],
+    weakeningConditions: [
+      "Capacity additions create sustained pricing pressure",
+      "Qualification delays reduce near-term deployment demand",
+      "Alternative interconnect approaches reduce optical content",
+    ],
+    companyTickers: ["COHR", "LITE", "GLW", "MRVL"],
+    layerIds: ["optics", "networking", "materials-builders"],
+  },
+  {
+    id: "macro-power-cooling",
+    kind: "macro",
+    title: "Power and cooling are limiting AI deployment",
+    belief:
+      "Available megawatts, grid interconnection, electrical equipment, and heat removal increasingly gate when dense AI capacity can enter service.",
+    confidenceScore: 85,
+    unknowns: [
+      "How much announced data-center capacity will be delayed by interconnection constraints?",
+      "Which cooling architectures will dominate at higher rack densities?",
+    ],
+    strengtheningConditions: [
+      "Power and cooling backlogs remain elevated across independent suppliers",
+      "Deployment schedules slip because sites cannot energize or reject heat",
+      "Liquid-cooling attach rates rise with accelerator density",
+    ],
+    weakeningConditions: [
+      "Infrastructure lead times normalize despite continued AI deployments",
+      "Rack-density growth slows materially",
+      "Power availability stops appearing on the critical deployment path",
+    ],
+    companyTickers: ["VRT", "ETN", "GEV"],
+    layerIds: ["power-cooling", "materials-builders", "cloud"],
+  },
+  {
+    id: "macro-custom-silicon",
+    kind: "macro",
+    title: "Custom silicon adoption is accelerating",
+    belief:
+      "Hyperscalers will allocate a growing share of suitable AI workloads to custom accelerators where workload control and scale justify design cost.",
+    confidenceScore: 70,
+    unknowns: [
+      "How broad is custom-silicon utilization beyond each sponsor's anchor workloads?",
+      "Will software portability make custom accelerators easier to adopt?",
+    ],
+    strengtheningConditions: [
+      "Multiple custom programs reach high-volume production",
+      "Custom accelerator revenue grows across more than one supplier",
+      "Cloud customers expose custom platforms to external developers",
+    ],
+    weakeningConditions: [
+      "Programs remain concentrated or repeatedly slip",
+      "Merchant accelerators retain better total cost across target workloads",
+      "Software friction limits custom silicon to narrow internal use",
+    ],
+    companyTickers: ["AVGO", "MRVL", "TSM", "NVDA", "AMD"],
+    layerIds: ["accelerators", "manufacturing", "serving"],
+  },
+  {
+    id: "macro-inference-portability",
+    kind: "macro",
+    title: "Inference software is reducing vendor lock-in",
+    belief:
+      "Improving compilers, runtimes, model formats, and orchestration are gradually making inference workloads more portable across accelerator vendors.",
+    confidenceScore: 55,
+    unknowns: [
+      "How much portability survives production requirements for latency and reliability?",
+      "Will optimization layers converge or remain tied to vendor-specific kernels?",
+    ],
+    strengtheningConditions: [
+      "Production workloads move between vendors without major rewrites",
+      "Open runtimes close performance gaps with proprietary stacks",
+      "Cloud buyers routinely use heterogeneous inference fleets",
+    ],
+    weakeningConditions: [
+      "Vendor-specific kernels retain decisive performance advantages",
+      "Portability adds unacceptable operational complexity",
+      "Inference deployments consolidate around a single hardware-software stack",
+    ],
+    companyTickers: ["NVDA", "AMD"],
+    layerIds: ["serving", "accelerators", "cloud"],
   },
 ];
 

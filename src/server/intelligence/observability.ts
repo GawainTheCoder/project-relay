@@ -1,7 +1,10 @@
 const DISABLED_VALUES = new Set(["0", "false", "no", "off"]);
 const MAX_METADATA_VALUE_LENGTH = 512;
 
-export type RelayOpenAIOperation = "daily_brief" | "signal_analysis";
+export type RelayOpenAIOperation =
+  | "daily_brief"
+  | "signal_analysis"
+  | "thesis_evaluation";
 
 export function shouldStoreOpenAIResponses(
   configuredValue = process.env.OPENAI_STORE_RESPONSES,

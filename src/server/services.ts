@@ -5,6 +5,8 @@ import type {
   ResearchSource,
   SourceRefreshItem,
   SourceRefreshResult,
+  Thesis,
+  ThesisEvaluation,
 } from "../shared/contracts.js";
 
 import type { AppServices } from "./app.js";
@@ -13,9 +15,13 @@ import {
   analyzeDocument,
   analyzeImportedSource as analyzePastedSource,
   analyzeUrlSource,
+  evaluateTheses as runThesisEvaluation,
   selectBriefEligibleUpdates,
   type AnalysisContext,
   type AnalysisSourceProfile,
+  type ThesisEvidenceSignalInput,
+  type VersionedThesisInput,
+  synthesizeBeliefBrief,
   synthesizeDailyBrief,
 } from "./intelligence/index.js";
 import {
@@ -33,12 +39,21 @@ import {
 
 const DEFAULT_REFRESH_MAX_ITEMS = 6;
 const MAX_REFRESH_ITEMS = 12;
+const MAX_THESES_PER_EVALUATION = 50;
+const MAX_SIGNALS_PER_EVALUATION = 100;
+
+export interface PersistedThesisEvaluationBatch {
+  evaluatedAt: string;
+  model: string;
+  evaluations: ThesisEvaluation[];
+}
 
 export function createAppServices(repository: RelayRepository): AppServices {
   return {
     analyzeImportedSource: (input) =>
       analyzeImportedSource(repository, input),
     refreshSources: () => refreshPublicSources(repository),
+    evaluateTheses: () => evaluatePendingTheses(repository),
     generateBrief: () => generateDailyBrief(repository),
   };
 }
@@ -205,6 +220,45 @@ export async function generateDailyBrief(
     ? repository.listUpdatesIngestedAfter(latestBrief.generatedAt)
     : repository.listAllUpdates();
   const today = new Date().toISOString().slice(0, 10);
+  const newEvaluations = latestBrief
+    ? repository.listThesisEvaluationsSince(latestBrief.generatedAt)
+    : repository.listRecentThesisEvaluations(100);
+  const previousBriefEvaluations =
+    latestBrief?.date === today
+      ? (latestBrief.thesisEvaluationIds ?? [])
+          .map((evaluationId) =>
+            repository.getThesisEvaluation(evaluationId),
+          )
+          .filter(
+            (evaluation): evaluation is ThesisEvaluation =>
+              evaluation !== null,
+          )
+      : [];
+  const evaluations = [
+    ...new Map(
+      [...previousBriefEvaluations, ...newEvaluations].map(
+        (evaluation) => [evaluation.id, evaluation],
+      ),
+    ).values(),
+  ];
+  if (evaluations.length > 0) {
+    const evaluationUpdates = [
+      ...new Map(
+        evaluations
+          .flatMap((evaluation) => evaluation.signalIds)
+          .map((updateId) => repository.getUpdate(updateId))
+          .filter(
+            (update): update is IntelligenceUpdate => update !== null,
+          )
+          .map((update) => [update.id, update]),
+      ).values(),
+    ];
+    return synthesizeBeliefBrief(
+      evaluations,
+      repository.listTheses({ status: "active" }),
+      evaluationUpdates,
+    );
+  }
   if (
     latestBrief?.date === today &&
     selectBriefEligibleUpdates(newUpdates).length === 0
@@ -248,9 +302,138 @@ export async function generateDailyBrief(
       };
     }
   });
-  return synthesizeDailyBrief(updates, {
+  const brief = await synthesizeDailyBrief(updates, {
     sourceProfilesByUpdateId,
   });
+  const thesisEvaluationIds = relevantAcceptedEvaluationIds(
+    repository,
+    brief.updateIds,
+  );
+  return thesisEvaluationIds.length > 0
+    ? {
+        ...brief,
+        thesisEvaluationIds: [
+          ...new Set([
+            ...(brief.thesisEvaluationIds ?? []),
+            ...thesisEvaluationIds,
+          ]),
+        ],
+      }
+    : brief;
+}
+
+export async function evaluatePendingTheses(
+  repository: RelayRepository,
+): Promise<PersistedThesisEvaluationBatch> {
+  const latestEvaluationCursor =
+    repository.getLatestThesisEvaluationRunCursor();
+  const candidateUpdates = latestEvaluationCursor
+    ? repository.listUpdatesIngestedAfter(latestEvaluationCursor)
+    : repository.listAllUpdates();
+  const pendingUpdates = candidateUpdates.filter(
+    (update) => update.claims.length > 0,
+  );
+  const signalIngestionCursor = candidateUpdates.reduce<string | null>(
+    (latest, update) =>
+      !latest || update.ingestedAt > latest ? update.ingestedAt : latest,
+    null,
+  );
+  const theses = repository.listTheses({ status: "active" });
+  const thesisBatches = chunksOf(
+    theses.map(toEvaluationThesis),
+    MAX_THESES_PER_EVALUATION,
+  );
+  const signalBatches = chunksOf(
+    pendingUpdates.map((update) =>
+      toEvaluationSignal(repository, update),
+    ),
+    MAX_SIGNALS_PER_EVALUATION,
+  );
+
+  if (thesisBatches.length === 0 || signalBatches.length === 0) {
+    const empty = await runThesisEvaluation({
+      theses: thesisBatches[0] ?? [],
+      signals: [],
+    });
+    if (signalIngestionCursor) {
+      repository.recordThesisEvaluationRun({
+        signalIngestionCursor,
+        signalCount: pendingUpdates.length,
+        evaluationCount: 0,
+        model: empty.model,
+        completedAt: empty.evaluatedAt,
+      });
+    }
+    return { ...empty, evaluations: [] };
+  }
+
+  let evaluatedAt = "";
+  let model = "";
+  const evaluations: ThesisEvaluation[] = [];
+  for (const thesisBatch of thesisBatches) {
+    for (const signalBatch of signalBatches) {
+      const batch = await runThesisEvaluation({
+        theses: thesisBatch,
+        signals: signalBatch,
+      });
+      evaluatedAt = batch.evaluatedAt;
+      model = batch.model;
+      for (const proposal of batch.evaluations) {
+        const thesis = theses.find(
+          (candidate) => candidate.id === proposal.thesisId,
+        );
+        if (!thesis) {
+          throw new Error(
+            `Thesis evaluation referenced unknown thesis ${proposal.thesisId}.`,
+          );
+        }
+        evaluations.push(
+          repository.persistThesisEvaluation({
+            id: proposal.id,
+            thesisId: proposal.thesisId,
+            outcome: proposal.outcome,
+            summary: evaluationSummary(thesis, proposal.outcome),
+            rationale: proposal.rationale,
+            proposedBelief:
+              proposal.proposedBelief ?? thesis.currentVersion.belief,
+            proposedConfidenceScore: proposal.proposedConfidenceScore,
+            proposedUnknowns: proposal.unknowns,
+            proposedStrengtheningConditions:
+              proposal.strengthenConditions,
+            proposedWeakeningConditions: proposal.weakenConditions,
+            signalIds: proposal.signalIds,
+            evidence: [
+              ...proposal.supportingEvidence.flatMap((reference) =>
+                reference.claimIds.map((claimId) => ({
+                  claimId,
+                  stance: "supports" as const,
+                  rationale: reference.reason,
+                })),
+              ),
+              ...proposal.opposingEvidence.flatMap((reference) =>
+                reference.claimIds.map((claimId) => ({
+                  claimId,
+                  stance: "opposes" as const,
+                  rationale: reference.reason,
+                })),
+              ),
+            ],
+            model: proposal.model,
+          }),
+        );
+      }
+    }
+  }
+  if (signalIngestionCursor) {
+    repository.recordThesisEvaluationRun({
+      signalIngestionCursor,
+      signalCount: pendingUpdates.length,
+      evaluationCount: evaluations.length,
+      model,
+      completedAt: evaluatedAt,
+    });
+  }
+  return { evaluatedAt, model, evaluations };
 }
 
 function configuredAutomatedSource(
@@ -326,6 +509,109 @@ function buildAnalysisContext(
         }
       : null,
   };
+}
+
+function toEvaluationThesis(thesis: Thesis): VersionedThesisInput {
+  return {
+    id: thesis.id,
+    type: thesis.kind,
+    title: thesis.title,
+    currentVersion: {
+      id: thesis.currentVersion.id,
+      belief: thesis.currentVersion.belief,
+      confidenceScore: thesis.currentVersion.confidenceScore,
+      unknowns: thesis.currentVersion.unknowns,
+      strengthenConditions:
+        thesis.currentVersion.strengtheningConditions,
+      weakenConditions: thesis.currentVersion.weakeningConditions,
+    },
+    companyTickers: thesis.companyTickers,
+    layerIds: thesis.layerIds,
+  };
+}
+
+function toEvaluationSignal(
+  repository: RelayRepository,
+  update: IntelligenceUpdate,
+): ThesisEvidenceSignalInput {
+  const sourceId =
+    repository.getResearchSourceIdForUpdate(update.id) ??
+    update.claims[0]?.sourceId ??
+    `publisher-${slugify(update.publisher)}`;
+  const sourceProfile = findSourceById(sourceId);
+  return {
+    id: update.id,
+    title: update.title,
+    publishedAt: update.publishedAt,
+    sourceProvenance: {
+      id: sourceId,
+      publisher:
+        sourceProfile?.name ??
+        repository.getSource(sourceId)?.name ??
+        update.publisher,
+      authorityTier: sourceProfile?.authorityTier ?? "unknown",
+    },
+    companyTickers: update.companyTickers,
+    layerIds: update.layerIds,
+    whatHappened: update.whatHappened,
+    whyItMatters: update.whyItMatters,
+    claims: update.claims.map((claim) => ({
+      id: claim.id,
+      quote: claim.quote,
+      locator: claim.locator,
+    })),
+  };
+}
+
+function evaluationSummary(
+  thesis: Thesis,
+  outcome: ThesisEvaluation["outcome"],
+): string {
+  switch (outcome) {
+    case "unchanged":
+      return `${thesis.title}: no thesis change.`;
+    case "reinforced":
+      return `${thesis.title}: confidence strengthened.`;
+    case "weakened":
+      return `${thesis.title}: confidence weakened.`;
+    case "contradicted":
+      return `${thesis.title}: contradictory evidence requires review.`;
+    case "revised":
+      return `${thesis.title}: thesis revision proposed.`;
+  }
+}
+
+function relevantAcceptedEvaluationIds(
+  repository: RelayRepository,
+  updateIds: readonly string[],
+): string[] {
+  const includedUpdates = new Set(updateIds);
+  return repository
+    .listRecentThesisEvaluations(100)
+    .filter(
+      (evaluation) =>
+        evaluation.reviewStatus === "accepted" &&
+        evaluation.outcome !== "unchanged" &&
+        evaluation.signalIds.some((id) => includedUpdates.has(id)),
+    )
+    .map((evaluation) => evaluation.id);
+}
+
+function chunksOf<T>(values: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < values.length; index += size) {
+    chunks.push(values.slice(index, index + size));
+  }
+  return chunks;
+}
+
+function slugify(value: string): string {
+  const slug = value
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "unknown";
 }
 
 export function resolveResearchSourceId(input: ImportSourceInput): string {

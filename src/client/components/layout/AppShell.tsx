@@ -1,10 +1,11 @@
 import {
   BookOpen,
-  Building2,
+  BrainCircuit,
   ChevronLeft,
   ChevronRight,
+  Database,
+  Layers3,
   Menu,
-  Radar,
   Rss,
   Search,
   Sun,
@@ -18,10 +19,11 @@ import { useDashboard } from "../../context/useDashboard";
 
 const primaryNavigation = [
   { label: "Today", href: "/", icon: Sun, end: true },
+  { label: "Theses", href: "/theses", icon: BrainCircuit, end: false },
+  { label: "Evidence", href: "/signals", icon: Database, end: false },
   { label: "Briefs", href: "/briefs", icon: BookOpen, end: false },
-  { label: "Signals", href: "/signals", icon: Radar, end: false },
+  { label: "Stack", href: "/stack", icon: Layers3, end: false },
   { label: "Sources", href: "/sources", icon: Rss, end: false },
-  { label: "Theses", href: "/theses", icon: Building2, end: false },
 ] as const;
 
 export function AppShell() {

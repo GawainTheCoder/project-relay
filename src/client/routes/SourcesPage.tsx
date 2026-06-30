@@ -8,6 +8,7 @@ import {
   History,
   LoaderCircle,
   Plus,
+  Radar,
   RefreshCw,
   Rss,
   Sparkles,
@@ -29,7 +30,7 @@ import {
 import { removeResearchSource } from "../lib/api";
 import { formatRelativeTime } from "../lib/format";
 
-type Action = "refresh" | "brief";
+type Action = "refresh" | "evaluate" | "brief";
 
 interface ActionFeedback {
   message: string;
@@ -128,6 +129,7 @@ export function SourcesPage() {
   const {
     data,
     error,
+    evaluateAllBeliefs,
     isLoading,
     regenerateBrief,
     reload,
@@ -175,10 +177,22 @@ export function SourcesPage() {
               : ""
           }.`,
         });
+      } else if (action === "evaluate") {
+        const result = await evaluateAllBeliefs();
+        setActionMessage({
+          message:
+            result.evaluations.length > 0
+              ? `${result.evaluations.length} thesis evaluation${
+                  result.evaluations.length === 1 ? "" : "s"
+                } ready for review.`
+              : "No new evidence required a thesis evaluation.",
+          href: "/theses",
+          linkLabel: "Review theses",
+        });
       } else {
         await regenerateBrief();
         setActionMessage({
-          message: "Today’s brief was generated from thesis-changing signals.",
+          message: "Today’s brief was generated from thesis evaluations.",
           href: "/",
           linkLabel: "Open brief",
         });
@@ -264,6 +278,21 @@ export function SourcesPage() {
                 <RefreshCw aria-hidden="true" className="size-3.5" />
               )}
               Refresh
+            </Button>
+            <Button
+              className="flex-1 sm:flex-none"
+              disabled={activeAction !== null || data.updates.length === 0}
+              onClick={() => void runAction("evaluate")}
+            >
+              {activeAction === "evaluate" ? (
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="size-3.5 animate-spin"
+                />
+              ) : (
+                <Radar aria-hidden="true" className="size-3.5" />
+              )}
+              Evaluate theses
             </Button>
             <Button
               className="flex-1 sm:flex-none"
