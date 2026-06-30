@@ -8,6 +8,8 @@ import {
 
 import { AppShell } from "./components/layout/AppShell";
 import { DashboardProvider } from "./context/DashboardProvider";
+import { BriefDetailPage } from "./routes/BriefDetailPage";
+import { BriefsPage } from "./routes/BriefsPage";
 import { CompaniesPage } from "./routes/CompaniesPage";
 import { CompanyDetailPage } from "./routes/CompanyDetailPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
@@ -29,6 +31,8 @@ export function App() {
         <Routes>
           <Route element={<AppShell />}>
             <Route index element={<TodayPage />} />
+            <Route path="briefs" element={<BriefsPage />} />
+            <Route path="briefs/:briefId" element={<BriefDetailPage />} />
             <Route path="signals" element={<UpdatesPage />} />
             <Route path="updates" element={<LegacyUpdatesRedirect />} />
             <Route path="search" element={<SearchPage />} />

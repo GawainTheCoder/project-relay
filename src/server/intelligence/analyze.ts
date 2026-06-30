@@ -21,6 +21,10 @@ import {
   type OpenAIRequestOptions,
 } from "./openai.js";
 import {
+  buildOpenAIResponseMetadata,
+  shouldStoreOpenAIResponses,
+} from "./observability.js";
+import {
   analysisOutputSchema,
   MIN_EVIDENCE_QUOTE_CHARS,
   type AnalysisOutput,
@@ -126,7 +130,18 @@ export async function analyzeDocument(
   try {
     const response = await client.responses.parse({
       model,
-      store: false,
+      store: shouldStoreOpenAIResponses(),
+      metadata: buildOpenAIResponseMetadata("signal_analysis", {
+        relay_update_id: updateId,
+        relay_source_id: document.id,
+        relay_source_title: document.title,
+        relay_source_publisher: document.publisher,
+        relay_source_published_at: document.publishedAt,
+        relay_source_type: document.sourceType,
+        relay_source_profile_id: options.context?.sourceProfile?.id,
+        relay_watchlist_count: options.context?.watchlistCompanies.length ?? 0,
+        relay_recent_signal_count: options.context?.recentSignals?.length ?? 0,
+      }),
       instructions: ANALYSIS_INSTRUCTIONS,
       input: buildAnalysisInput(document, options.context),
       text: {

@@ -1,4 +1,6 @@
 import {
+  AlertCircle,
+  ArrowRight,
   Check,
   Link2,
   LoaderCircle,
@@ -8,22 +10,34 @@ import {
 } from "lucide-react";
 import {
   type FormEvent,
+  useCallback,
   useEffect,
   useRef,
   useState,
 } from "react";
+import { Link } from "react-router-dom";
 
 import type {
   ImportSourceInput,
   SourceKind,
 } from "../../../shared/contracts";
 import { Button } from "../../components/ui/Button";
-import { importSource } from "../../lib/api";
+import {
+  importSource,
+  type ImportSourceResult,
+} from "../../lib/api";
+
+export interface ImportSourceFeedback {
+  kind: "success" | "error";
+  message: string;
+  updateId?: string;
+}
 
 interface ImportSourceDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  onImported: () => Promise<void>;
+  onImported: (result: ImportSourceResult) => Promise<void>;
+  onResult?: (feedback: ImportSourceFeedback) => void;
 }
 
 type IntakeMode = "url" | "excerpt";
@@ -32,6 +46,7 @@ export function ImportSourceDialog({
   isOpen,
   onClose,
   onImported,
+  onResult,
 }: ImportSourceDialogProps) {
   const [mode, setMode] = useState<IntakeMode>("url");
   const [title, setTitle] = useState("");
@@ -40,9 +55,20 @@ export function ImportSourceDialog({
   const [content, setContent] = useState("");
   const [sourceKind, setSourceKind] = useState<SourceKind>("other");
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [success, setSuccess] = useState<ImportSourceFeedback | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
+
+  const closeDialog = useCallback(() => {
+    setError(null);
+    setSuccess(null);
+    setTitle("");
+    setPublisher("");
+    setSourceUrl("");
+    setContent("");
+    setSourceKind("other");
+    onClose();
+  }, [onClose]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -51,7 +77,7 @@ export function ImportSourceDialog({
     const frame = window.requestAnimationFrame(() => titleRef.current?.focus());
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !isSubmitting) {
-        onClose();
+        closeDialog();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -59,7 +85,7 @@ export function ImportSourceDialog({
       window.cancelAnimationFrame(frame);
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [isOpen, isSubmitting, onClose]);
+  }, [closeDialog, isOpen, isSubmitting]);
 
   if (!isOpen) {
     return null;
@@ -97,25 +123,30 @@ export function ImportSourceDialog({
     setIsSubmitting(true);
     try {
       const result = await importSource(input);
-      setSuccess(
-        result.duplicate
+      const feedback: ImportSourceFeedback = {
+        kind: "success",
+        message: result.duplicate
           ? "This signal is already tracked. Relay kept the existing analysis."
           : result.update
             ? "Signal added and analyzed."
             : "Signal added. Analysis is pending.",
-      );
-      await onImported();
+        ...(result.update ? { updateId: result.update.id } : {}),
+      };
+      setSuccess(feedback);
+      onResult?.(feedback);
+      await onImported(result);
       setTitle("");
       setPublisher("");
       setSourceUrl("");
       setContent("");
       setSourceKind("other");
     } catch (caughtError) {
-      setError(
+      const message =
         caughtError instanceof Error
           ? caughtError.message
-          : "The signal could not be added.",
-      );
+          : "The signal could not be added.";
+      setError(message);
+      onResult?.({ kind: "error", message });
     } finally {
       setIsSubmitting(false);
     }
@@ -128,7 +159,7 @@ export function ImportSourceDialog({
       className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"
       onMouseDown={(event) => {
         if (event.currentTarget === event.target && !isSubmitting) {
-          onClose();
+          closeDialog();
         }
       }}
       role="dialog"
@@ -150,7 +181,7 @@ export function ImportSourceDialog({
             aria-label="Close add signal"
             className="rounded p-1.5 text-relay-muted hover:bg-relay-raised hover:text-relay-text"
             disabled={isSubmitting}
-            onClick={onClose}
+            onClick={closeDialog}
             type="button"
           >
             <X aria-hidden="true" className="size-4" />
@@ -288,30 +319,56 @@ export function ImportSourceDialog({
             )}
 
             {error ? (
-              <p
-                className="rounded-md border border-relay-negative/35 bg-relay-negative/8 px-3 py-2.5 text-xs leading-5 text-relay-negative"
+              <div
+                className="flex items-start gap-2 rounded-md border border-relay-negative/35 bg-relay-negative/8 px-3 py-2.5 text-xs leading-5 text-relay-negative"
                 role="alert"
               >
-                {error}
-              </p>
-            ) : null}
-            {success ? (
-              <p
-                className="flex items-start gap-2 rounded-md border border-relay-positive/35 bg-relay-positive/8 px-3 py-2.5 text-xs leading-5 text-relay-positive"
-                role="status"
-              >
-                <Check
+                <AlertCircle
                   aria-hidden="true"
                   className="mt-0.5 size-3.5 shrink-0"
                 />
-                {success}
-              </p>
+                <span>
+                  <span className="block font-medium">Signal not added</span>
+                  <span className="mt-0.5 block">{error}</span>
+                </span>
+              </div>
+            ) : null}
+            {success ? (
+              <div
+                className="rounded-md border border-relay-positive/35 bg-relay-positive/8 px-3 py-3 text-xs leading-5 text-relay-positive"
+                role="status"
+              >
+                <div className="flex items-start gap-2">
+                  <Check
+                    aria-hidden="true"
+                    className="mt-0.5 size-3.5 shrink-0"
+                  />
+                  <span>
+                    <span className="block font-medium">Import complete</span>
+                    <span className="mt-0.5 block">{success.message}</span>
+                  </span>
+                </div>
+                {success.updateId ? (
+                  <Link
+                    className="mt-2 inline-flex items-center gap-1.5 font-medium text-relay-accent hover:text-relay-text"
+                    onClick={closeDialog}
+                    to={`/signals?update=${encodeURIComponent(success.updateId)}`}
+                  >
+                    View analyzed signal
+                    <ArrowRight aria-hidden="true" className="size-3.5" />
+                  </Link>
+                ) : null}
+              </div>
             ) : null}
           </div>
 
           <footer className="flex items-center justify-end gap-2 border-t border-relay-border px-5 py-4">
-            <Button disabled={isSubmitting} onClick={onClose} variant="quiet">
-              Cancel
+            <Button
+              disabled={isSubmitting}
+              onClick={closeDialog}
+              variant="quiet"
+            >
+              {success ? "Done" : "Cancel"}
             </Button>
             <Button disabled={isSubmitting} type="submit" variant="primary">
               {isSubmitting ? (

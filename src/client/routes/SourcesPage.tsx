@@ -1,23 +1,95 @@
 import {
   AlertCircle,
+  ArrowRight,
   Check,
   Clock3,
+  ExternalLink,
   FilePlus2,
+  History,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Rss,
   Sparkles,
+  Trash2,
+  X,
 } from "lucide-react";
 import { useCallback, useState } from "react";
+import { Link } from "react-router-dom";
 
 import type { ResearchSource } from "../../shared/contracts";
 import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { Button } from "../components/ui/Button";
 import { useDashboard } from "../context/useDashboard";
-import { ImportSourceDialog } from "../features/sources/ImportSourceDialog";
+import { AddResearchSourceDialog } from "../features/sources/AddResearchSourceDialog";
+import {
+  ImportSourceDialog,
+  type ImportSourceFeedback,
+} from "../features/sources/ImportSourceDialog";
+import { removeResearchSource } from "../lib/api";
 import { formatRelativeTime } from "../lib/format";
 
 type Action = "refresh" | "brief";
+
+interface ActionFeedback {
+  message: string;
+  href?: string;
+  linkLabel?: string;
+}
+
+interface RefreshItemView {
+  sourceId: string;
+  sourceName: string;
+  title: string;
+  status: "analyzed" | "duplicate" | "error";
+  isNew: boolean;
+  sourceUrl?: string;
+  updateId?: string;
+  error?: string;
+}
+
+function refreshItemsFrom(result: unknown): RefreshItemView[] {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    !("items" in result) ||
+    !Array.isArray(result.items)
+  ) {
+    return [];
+  }
+
+  return result.items.flatMap((candidate): RefreshItemView[] => {
+    if (!candidate || typeof candidate !== "object") {
+      return [];
+    }
+    const item = candidate as Record<string, unknown>;
+    const status = item.status;
+    if (
+      typeof item.sourceId !== "string" ||
+      typeof item.sourceName !== "string" ||
+      typeof item.title !== "string" ||
+      (status !== "analyzed" && status !== "duplicate" && status !== "error")
+    ) {
+      return [];
+    }
+    return [
+      {
+        sourceId: item.sourceId,
+        sourceName: item.sourceName,
+        title: item.title,
+        status,
+        isNew: item.isNew === true,
+        ...(typeof item.sourceUrl === "string"
+          ? { sourceUrl: item.sourceUrl }
+          : {}),
+        ...(typeof item.updateId === "string"
+          ? { updateId: item.updateId }
+          : {}),
+        ...(typeof item.error === "string" ? { error: item.error } : {}),
+      },
+    ];
+  });
+}
 
 const sourceTypeLabels: Record<ResearchSource["type"], string> = {
   rss: "RSS feed",
@@ -62,10 +134,17 @@ export function SourcesPage() {
     refreshAllSources,
   } = useDashboard();
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isAddSourceOpen, setIsAddSourceOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<Action | null>(null);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<ActionFeedback | null>(
+    null,
+  );
   const [actionError, setActionError] = useState<string | null>(null);
+  const [refreshItems, setRefreshItems] = useState<RefreshItemView[]>([]);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
+  const [removingSourceId, setRemovingSourceId] = useState<string | null>(null);
   const closeImport = useCallback(() => setIsImportOpen(false), []);
+  const closeAddSource = useCallback(() => setIsAddSourceOpen(false), []);
 
   if (isLoading) {
     return <PageLoading label="Checking trusted sources" />;
@@ -83,21 +162,26 @@ export function SourcesPage() {
     setActiveAction(action);
     setActionError(null);
     setActionMessage(null);
+    setRefreshItems([]);
     try {
       if (action === "refresh") {
         const result = await refreshAllSources();
-        setActionMessage(
-          `Refresh complete: ${result.imported} new, ${result.analyzed} analyzed${
+        const items = refreshItemsFrom(result);
+        setRefreshItems(items);
+        setActionMessage({
+          message: `Refresh complete: ${result.imported} new, ${result.analyzed} analyzed${
             result.errors.length
               ? `, ${result.errors.length} source error${result.errors.length === 1 ? "" : "s"}`
               : ""
           }.`,
-        );
+        });
       } else {
         await regenerateBrief();
-        setActionMessage(
-          "Today’s brief was generated from thesis-changing signals.",
-        );
+        setActionMessage({
+          message: "Today’s brief was generated from thesis-changing signals.",
+          href: "/",
+          linkLabel: "Open brief",
+        });
       }
     } catch (caughtError) {
       setActionError(
@@ -107,6 +191,43 @@ export function SourcesPage() {
       );
     } finally {
       setActiveAction(null);
+    }
+  };
+
+  const handleImportResult = (feedback: ImportSourceFeedback) => {
+    setActionError(feedback.kind === "error" ? feedback.message : null);
+    setActionMessage(
+      feedback.kind === "success"
+        ? {
+            message: feedback.message,
+            ...(feedback.updateId
+              ? {
+                  href: `/signals?update=${encodeURIComponent(feedback.updateId)}`,
+                  linkLabel: "View signal",
+                }
+              : {}),
+          }
+        : null,
+    );
+  };
+
+  const removeSource = async (source: ResearchSource) => {
+    setRemovingSourceId(source.id);
+    setActionMessage(null);
+    setActionError(null);
+    try {
+      await removeResearchSource(source.id);
+      await reload();
+      setActionMessage({ message: `${source.name} was removed.` });
+      setConfirmRemoveId(null);
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "The source could not be removed.",
+      );
+    } finally {
+      setRemovingSourceId(null);
     }
   };
 
@@ -160,6 +281,13 @@ export function SourcesPage() {
               Generate brief
             </Button>
             <Button
+              className="flex-1 sm:flex-none"
+              onClick={() => setIsAddSourceOpen(true)}
+            >
+              <Plus aria-hidden="true" className="size-3.5" />
+              Add source
+            </Button>
+            <Button
               className="w-full sm:w-auto"
               onClick={() => setIsImportOpen(true)}
               variant="primary"
@@ -174,11 +302,20 @@ export function SourcesPage() {
       <main className="mx-auto max-w-[1280px] px-5 py-7 sm:px-8 lg:px-10 lg:py-10">
         {actionMessage ? (
           <div
-            className="mb-5 flex items-center gap-2 rounded-md border border-relay-positive/30 bg-relay-positive/8 px-3 py-2.5 text-xs text-relay-positive"
+            className="mb-5 flex flex-wrap items-center gap-2 rounded-md border border-relay-positive/30 bg-relay-positive/8 px-3 py-2.5 text-xs text-relay-positive"
             role="status"
           >
             <Check aria-hidden="true" className="size-3.5" />
-            {actionMessage}
+            <span>{actionMessage.message}</span>
+            {actionMessage.href && actionMessage.linkLabel ? (
+              <Link
+                className="ml-auto inline-flex min-h-8 items-center gap-1.5 rounded-md border border-relay-positive/35 px-2.5 font-medium text-relay-accent hover:border-relay-accent hover:text-relay-text"
+                to={actionMessage.href}
+              >
+                {actionMessage.linkLabel}
+                <ArrowRight aria-hidden="true" className="size-3.5" />
+              </Link>
+            ) : null}
           </div>
         ) : null}
         {actionError ? (
@@ -189,6 +326,97 @@ export function SourcesPage() {
             <AlertCircle aria-hidden="true" className="size-3.5" />
             {actionError}
           </div>
+        ) : null}
+
+        {refreshItems.length ? (
+          <section
+            aria-labelledby="refresh-results-title"
+            className="mb-7 overflow-hidden rounded-md border border-relay-border bg-relay-surface"
+          >
+            <header className="border-b border-relay-border px-4 py-3">
+              <h2
+                className="text-sm font-semibold"
+                id="refresh-results-title"
+              >
+                Refresh results
+              </h2>
+              <p className="mt-1 text-xs text-relay-muted">
+                Exact feed items handled in the latest refresh.
+              </p>
+            </header>
+            <ul className="divide-y divide-relay-border">
+              {refreshItems.map((item, index) => (
+                <li
+                  className="grid gap-3 px-4 py-3 sm:grid-cols-[minmax(0,1fr)_120px_auto] sm:items-center"
+                  key={`${item.sourceId}-${item.title}-${index}`}
+                >
+                  <div className="min-w-0">
+                    {item.sourceUrl ? (
+                      <a
+                        className="inline-flex max-w-full items-center gap-1.5 text-sm font-medium hover:text-relay-accent"
+                        href={item.sourceUrl}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <span className="truncate">{item.title}</span>
+                        <ExternalLink
+                          aria-hidden="true"
+                          className="size-3 shrink-0"
+                        />
+                      </a>
+                    ) : (
+                      <p className="truncate text-sm font-medium">
+                        {item.title}
+                      </p>
+                    )}
+                    <p className="mt-1 text-xs text-relay-muted">
+                      {item.sourceName}
+                    </p>
+                    {item.error ? (
+                      <p className="mt-1 text-xs text-relay-negative">
+                        {item.error}
+                      </p>
+                    ) : null}
+                  </div>
+                  <span
+                    className="flex flex-wrap items-center gap-1.5"
+                  >
+                    {item.isNew ? (
+                      <span className="rounded border border-relay-accent/35 bg-relay-accent/8 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-accent">
+                        New
+                      </span>
+                    ) : null}
+                    <span
+                      className={`w-fit rounded border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.08em] ${
+                        item.status === "analyzed"
+                          ? "border-relay-positive/30 text-relay-positive"
+                          : item.status === "error"
+                            ? "border-relay-negative/30 text-relay-negative"
+                            : "border-relay-border text-relay-muted"
+                      }`}
+                    >
+                      {item.status === "duplicate"
+                        ? "Already tracked"
+                        : item.status}
+                    </span>
+                  </span>
+                  {item.updateId ? (
+                    <Link
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-relay-accent hover:text-relay-text"
+                      to={`/signals?update=${encodeURIComponent(item.updateId)}`}
+                    >
+                      View signal
+                      <ArrowRight aria-hidden="true" className="size-3.5" />
+                    </Link>
+                  ) : (
+                    <span className="text-xs text-relay-subtle">
+                      {item.status === "error" ? "Not analyzed" : "No new analysis"}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
         ) : null}
 
         <section
@@ -234,14 +462,23 @@ export function SourcesPage() {
                 Specialist feeds, official company channels, and manual context.
               </p>
             </div>
-            <Rss aria-hidden="true" className="size-4 text-relay-subtle" />
+            <div className="flex items-center gap-4">
+              <Link
+                className="inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
+                to="/briefs"
+              >
+                <History aria-hidden="true" className="size-3.5" />
+                Prior briefs
+              </Link>
+              <Rss aria-hidden="true" className="size-4 text-relay-subtle" />
+            </div>
           </div>
 
           {data.sources.length ? (
             <div className="divide-y divide-relay-border">
               {data.sources.map((source) => (
                 <article
-                  className="grid gap-4 py-5 sm:grid-cols-[minmax(220px,1fr)_150px_130px_150px]"
+                  className="grid gap-4 py-5 lg:grid-cols-[minmax(220px,1fr)_140px_120px_140px_auto]"
                   key={source.id}
                 >
                   <div className="min-w-0">
@@ -249,9 +486,18 @@ export function SourcesPage() {
                       {source.name}
                     </h3>
                     {source.url ? (
-                      <p className="mt-1 truncate text-xs text-relay-subtle">
-                        {source.url}
-                      </p>
+                      <a
+                        className="mt-1 inline-flex max-w-full items-center gap-1 text-xs text-relay-subtle hover:text-relay-accent"
+                        href={source.url}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        <span className="truncate">{source.url}</span>
+                        <ExternalLink
+                          aria-hidden="true"
+                          className="size-3 shrink-0"
+                        />
+                      </a>
                     ) : (
                       <p className="mt-1 text-xs text-relay-subtle">
                         Add excerpts manually when permitted.
@@ -287,6 +533,47 @@ export function SourcesPage() {
                           : "Not yet checked"}
                     </p>
                   </div>
+                  <div className="flex items-center justify-end">
+                    {confirmRemoveId === source.id ? (
+                      <div className="flex items-center gap-1">
+                        <Button
+                          aria-label={`Confirm remove ${source.name}`}
+                          disabled={removingSourceId !== null}
+                          onClick={() => void removeSource(source)}
+                          variant="danger"
+                        >
+                          {removingSourceId === source.id ? (
+                            <LoaderCircle
+                              aria-hidden="true"
+                              className="size-3.5 animate-spin"
+                            />
+                          ) : (
+                            <Trash2 aria-hidden="true" className="size-3.5" />
+                          )}
+                          Remove
+                        </Button>
+                        <button
+                          aria-label={`Cancel removing ${source.name}`}
+                          className="rounded p-2 text-relay-subtle hover:bg-relay-surface-2 hover:text-relay-text"
+                          onClick={() => setConfirmRemoveId(null)}
+                          type="button"
+                        >
+                          <X aria-hidden="true" className="size-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        aria-label={`Remove ${source.name}`}
+                        className="rounded p-2 text-relay-subtle hover:bg-relay-negative/10 hover:text-relay-negative"
+                        disabled={removingSourceId !== null}
+                        onClick={() => setConfirmRemoveId(source.id)}
+                        title="Remove source"
+                        type="button"
+                      >
+                        <Trash2 aria-hidden="true" className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
                 </article>
               ))}
             </div>
@@ -311,7 +598,25 @@ export function SourcesPage() {
       <ImportSourceDialog
         isOpen={isImportOpen}
         onClose={closeImport}
-        onImported={reload}
+        onImported={async () => {
+          setIsImportOpen(false);
+          await reload();
+        }}
+        onResult={handleImportResult}
+      />
+      <AddResearchSourceDialog
+        isOpen={isAddSourceOpen}
+        onClose={closeAddSource}
+        onCreated={async (source) => {
+          setIsAddSourceOpen(false);
+          await reload();
+          setActionError(null);
+          setActionMessage({ message: `${source.name} was added.` });
+        }}
+        onError={(message) => {
+          setActionMessage(null);
+          setActionError(message);
+        }}
       />
     </div>
   );

@@ -159,8 +159,41 @@ describe("analyzeDocument", () => {
     expect(client.responses.parse).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "gpt-5.4-mini",
-        store: false,
+        store: true,
+        metadata: expect.objectContaining({
+          relay_app: "project-relay",
+          relay_operation: "signal_analysis",
+          relay_recent_signal_count: "1",
+          relay_source_id: "source_1",
+          relay_source_publisher: "Example Research",
+          relay_source_title: "Optical component demand rises",
+          relay_source_profile_id: "example-research",
+          relay_update_id: "update_1",
+          relay_watchlist_count: "2",
+        }),
         input: expect.stringContaining('"watchlistCompanies"'),
+      }),
+    );
+  });
+
+  it("supports disabling Platform response storage for sensitive sources", async () => {
+    vi.stubEnv("OPENAI_STORE_RESPONSES", "false");
+    const client = mockClient(makeOutput());
+
+    await analyzeDocument(makeDocument(), {
+      client,
+      now: () => NOW,
+      idFactory: () => "update_private",
+      context: makeContext(),
+    });
+
+    expect(client.responses.parse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        store: false,
+        metadata: expect.objectContaining({
+          relay_operation: "signal_analysis",
+          relay_update_id: "update_private",
+        }),
       }),
     );
   });

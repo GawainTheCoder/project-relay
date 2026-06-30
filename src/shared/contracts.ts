@@ -154,9 +154,30 @@ export interface ResearchSource {
   type: "rss" | "investor-relations" | "filing" | "paper" | "release" | "manual";
   url: string | null;
   enabled: boolean;
+  userAdded: boolean;
+  layerIds: LayerId[];
+  companyTickers: string[];
   status: "ready" | "syncing" | "error";
   lastSyncedAt: string | null;
   documentCount: number;
+}
+
+export interface SourceRefreshItem {
+  sourceId: string;
+  sourceName: string;
+  title: string;
+  sourceUrl: string | null;
+  isNew: boolean;
+  status: "analyzed" | "duplicate" | "error";
+  updateId: string | null;
+  error: string | null;
+}
+
+export interface SourceRefreshResult {
+  imported: number;
+  analyzed: number;
+  errors: string[];
+  items: SourceRefreshItem[];
 }
 
 export interface DailyBrief {
@@ -188,4 +209,26 @@ export interface ImportSourceInput {
   publishedAt?: string;
   content?: string;
   sourceKind?: SourceKind;
+}
+
+export interface CompanyInput {
+  ticker: string;
+  name: string;
+  layerIds: LayerId[];
+  description: string;
+  thesis: string;
+  whyItMatters: string;
+  provesRight: string[];
+  breaksThesis: string[];
+  watchMetrics: string[];
+  confidence: Confidence;
+}
+
+export interface ResearchSourceInput {
+  name: string;
+  type: Extract<ResearchSource["type"], "rss" | "paper" | "release">;
+  url: string;
+  enabled?: boolean;
+  layerIds?: LayerId[];
+  companyTickers?: string[];
 }

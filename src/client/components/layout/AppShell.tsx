@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Building2,
   ChevronLeft,
   ChevronRight,
@@ -17,6 +18,7 @@ import { useDashboard } from "../../context/useDashboard";
 
 const primaryNavigation = [
   { label: "Today", href: "/", icon: Sun, end: true },
+  { label: "Briefs", href: "/briefs", icon: BookOpen, end: false },
   { label: "Signals", href: "/signals", icon: Radar, end: false },
   { label: "Sources", href: "/sources", icon: Rss, end: false },
   { label: "Theses", href: "/theses", icon: Building2, end: false },

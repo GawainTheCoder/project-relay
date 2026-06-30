@@ -16,6 +16,10 @@ import {
   type OpenAIRequestOptions,
 } from "./openai.js";
 import {
+  buildOpenAIResponseMetadata,
+  shouldStoreOpenAIResponses,
+} from "./observability.js";
+import {
   dailyBriefOutputSchema,
   type DailyBriefOutput,
 } from "./schemas.js";
@@ -73,7 +77,14 @@ export async function synthesizeDailyBrief(
   try {
     const response = await client.responses.parse({
       model,
-      store: false,
+      store: shouldStoreOpenAIResponses(),
+      metadata: buildOpenAIResponseMetadata("daily_brief", {
+        relay_brief_date: date,
+        relay_eligible_update_count: eligibleUpdates.length,
+        relay_input_update_ids: eligibleUpdates
+          .map((update) => update.id)
+          .join(","),
+      }),
       instructions: SYNTHESIS_INSTRUCTIONS,
       input: JSON.stringify(
         eligibleUpdates.map((update) =>

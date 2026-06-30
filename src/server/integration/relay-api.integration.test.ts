@@ -330,6 +330,18 @@ describe("Relay API integration contracts", () => {
       imported: 3,
       analyzed: 2,
       errors: ["arXiv: one source could not be parsed"],
+      items: [
+        {
+          sourceId: "arxiv-distributed-systems",
+          sourceName: "arXiv — AI infrastructure systems",
+          title: "Distributed inference paper",
+          sourceUrl: "https://arxiv.org/abs/2606.00001",
+          isNew: true,
+          status: "analyzed" as const,
+          updateId: "paper-update",
+          error: null,
+        },
+      ],
     };
     const refreshSources = vi.fn().mockResolvedValue(result);
     const app = createApp({

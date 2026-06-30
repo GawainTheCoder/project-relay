@@ -42,17 +42,49 @@ concrete delta for a known watchlist company.
 - **Today** shows the lead signal, concise synthesis, affected theses, and exact
   supporting evidence. It also treats “No meaningful change” as a first-class
   outcome.
+- **Briefs** keeps a dated archive of prior daily conclusions with their
+  underlying signals and stored evidence citations.
 - **Signals** defaults to thesis-changing items. A secondary filtered-out view
   keeps noise inspectable without making it the product center.
 - **Sources** shows trusted-source health, refreshes enabled public feeds,
-  accepts public article URLs, and accepts manually pasted excerpts.
-- **Theses** contains the 13-company watchlist, confirmation signals, break
-  conditions, watch metrics, and linked signal history.
+  identifies every item handled by the latest refresh, accepts public article
+  URLs and manually pasted excerpts, and lets the owner add or remove feeds.
+- **Theses** contains the starting 13-company watchlist, confirmation signals,
+  break conditions, watch metrics, linked signal history, and owner-managed
+  company theses.
 - **Search** remains available through `Cmd+K` / `Ctrl+K` and a dedicated route,
   but searches only signals, evidence, briefs, and theses—not raw source text.
 
 The stack map remains available as contextual infrastructure for signals and
 theses, rather than as a primary navigation destination.
+
+## Managing your tracker
+
+Relay starts with the focused AI-infrastructure watchlist and source catalog,
+but both are owner-managed:
+
+- Use **Theses → Add thesis** to define a company, infrastructure layers, core
+  thesis, confirmation criteria, disconfirming criteria, watch metrics, and
+  initial confidence. Selecting any thesis row opens its full detail directly.
+- Use **Remove** on a thesis detail page to take it off the active watchlist.
+  Relay archives the company instead of deleting historical signals or evidence.
+- Use **Sources → Add source** to add an RSS, release, or research feed. Added
+  feeds participate in the same normalization, deduplication, topic filtering,
+  and analysis pipeline as built-in automated feeds.
+- Use the remove control on any source to stop tracking it. The source is
+  archived so previously imported evidence keeps valid provenance.
+- Use **Add signal** for a public article URL or a permitted pasted excerpt.
+  Relay leaves a persistent success or error result after the dialog closes;
+  successful analysis includes a direct **View signal** link.
+
+After **Refresh**, the result ledger names every feed item Relay handled and
+marks it as **New**, **Analyzed**, **Already tracked**, or **Error**. Analyzed
+items link directly to their signal, so aggregate counts such as “1 new, 1
+analyzed” always map back to a specific title and source.
+
+After **Generate brief**, use **Open brief** to go directly to the current
+synthesis. The **Briefs** route preserves prior dated briefs, their underlying
+signals, and any stored evidence citations.
 
 ## Source strategy
 
@@ -101,7 +133,8 @@ and impacts without a concrete thesis delta before synthesis begins.
 If nothing qualifies, Relay creates a deterministic “No meaningful change”
 brief without making an OpenAI synthesis request. Otherwise the synthesis model
 can select only supplied update IDs and evidence claim IDs, and Relay validates
-every returned reference before persistence.
+every returned reference before persistence. Each dated brief remains available
+through the brief archive.
 
 ## Infrastructure map
 
@@ -138,6 +171,18 @@ VRT, ETN, GEV, and TSM.
 Client routes live under `src/client/routes`, reusable UI under
 `src/client/features`, API and services under `src/server`, and shared contracts
 under `src/shared`.
+
+Owner-management and history APIs include:
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/companies` | Add or restore a company thesis. |
+| `DELETE` | `/api/companies/:ticker` | Archive a company thesis. |
+| `POST` | `/api/sources` | Add an RSS, release, or research feed. |
+| `DELETE` | `/api/sources/:id` | Archive a source. |
+| `POST` | `/api/sources/refresh` | Refresh feeds and return per-item outcomes. |
+| `GET` | `/api/briefs` | List prior daily briefs. |
+| `GET` | `/api/briefs/:id` | Read one persisted brief. |
 
 SQLite remains the private system of record for source provenance, hashes,
 analysis status, signals, exact claims, thesis impacts, lightweight corrections,
@@ -177,6 +222,7 @@ NODE_ENV=production npm start
 | `OPENAI_API_KEY` | none | Required for live analysis and material synthesis. |
 | `OPENAI_ANALYSIS_MODEL` | `gpt-5.4-mini` | Thesis-aware source analysis model. |
 | `OPENAI_SYNTHESIS_MODEL` | `gpt-5.5` | Selective daily-brief model. |
+| `OPENAI_STORE_RESPONSES` | `true` | Store Responses with searchable Relay metadata in the OpenAI Platform. Set `false` for sensitive sources. |
 | `HOST` | `127.0.0.1` | API bind address. Keep it on loopback without an auth/TLS boundary. |
 | `PORT` | `8787` | API and production web-server port. |
 | `RELAY_ALLOWED_HOSTS` | `127.0.0.1,localhost,::1` | API request-host allowlist. |
@@ -184,9 +230,13 @@ NODE_ENV=production npm start
 | `RELAY_DATABASE_PATH` | `data/relay.sqlite` | Optional local database path. |
 | `RELAY_DEMO_DATA` | `false` | Opt in to clearly labeled UI fixtures. |
 
-Both model requests use `store: false`. Imported text still leaves the local
-machine when sent to OpenAI, so do not process material whose license or
-sensitivity prohibits that use.
+Both model requests store their Responses and attach searchable metadata for the
+Relay operation, environment, source/update identifiers, and brief inputs.
+OpenAI retains stored Response application state for at least 30 days. Set
+`OPENAI_STORE_RESPONSES=false` before processing sensitive sources that should
+not appear in Platform logs. Imported text always leaves the local machine when
+sent to OpenAI, so do not process material whose license or sensitivity
+prohibits that use.
 
 ## Commands
 
@@ -208,9 +258,9 @@ also exist. These files, `.env`, backups, imported excerpts, and generated
 analysis are ignored by Git and restricted to the current OS user.
 
 Schema changes are additive. Existing source documents and legacy analyses are
-preserved. Deprecated catalog entries are archived rather than used by the
-current product, and new analyses record source provenance plus an analysis
-version.
+preserved. Removed companies and sources are archived so prior evidence remains
+valid, owner-added feeds survive catalog reseeding, and new analyses record
+source provenance plus an analysis version.
 
 Create a consistent backup while Relay is running or stopped:
 

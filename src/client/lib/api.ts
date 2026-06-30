@@ -1,11 +1,16 @@
 import type {
+  Company,
+  CompanyInput,
   DashboardPayload,
   DailyBrief,
   ImpactReview,
   ImpactReviewInput,
   ImportSourceInput,
   IntelligenceUpdate,
+  ResearchSource,
+  ResearchSourceInput,
   SearchResult,
+  SourceRefreshResult,
 } from "../../shared/contracts";
 
 export class ApiError extends Error {
@@ -112,11 +117,7 @@ export function reviewImpact(
   );
 }
 
-export interface RefreshSourcesResult {
-  imported: number;
-  analyzed: number;
-  errors: string[];
-}
+export type RefreshSourcesResult = SourceRefreshResult;
 
 export function refreshSources(): Promise<RefreshSourcesResult> {
   return requestJson<RefreshSourcesResult>("/api/sources/refresh", {
@@ -128,4 +129,58 @@ export function generateBrief(): Promise<DailyBrief> {
   return requestJson<DailyBrief>("/api/briefs/generate", {
     method: "POST",
   });
+}
+
+export function createCompany(input: CompanyInput): Promise<Company> {
+  return requestJson<Company>("/api/companies", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeCompany(ticker: string): Promise<void> {
+  return requestJson<void>(
+    `/api/companies/${encodeURIComponent(ticker)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function createResearchSource(
+  input: ResearchSourceInput,
+): Promise<ResearchSource> {
+  return requestJson<ResearchSource>("/api/sources", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function removeResearchSource(id: string): Promise<void> {
+  return requestJson<void>(`/api/sources/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function listBriefs(
+  limit = 30,
+  signal?: AbortSignal,
+): Promise<DailyBrief[]> {
+  const parameters = new URLSearchParams({ limit: String(limit) });
+  return requestJson<{ briefs: DailyBrief[] }>(
+    `/api/briefs?${parameters}`,
+    {
+      ...(signal ? { signal } : {}),
+    },
+  ).then((response) => response.briefs);
+}
+
+export function getBrief(
+  id: string,
+  signal?: AbortSignal,
+): Promise<DailyBrief> {
+  return requestJson<DailyBrief>(
+    `/api/briefs/${encodeURIComponent(id)}`,
+    {
+      ...(signal ? { signal } : {}),
+    },
+  );
 }
