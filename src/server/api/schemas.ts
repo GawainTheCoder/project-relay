@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   impactReviewDecisions,
   impactReviewReasonTags,
+  layerIds,
 } from "../../shared/contracts.js";
 import { MAX_MANUAL_DOCUMENT_CHARS } from "../ingestion/normalize.js";
 
@@ -30,6 +31,38 @@ export const tickerSchema = z
   .max(12)
   .regex(/^[A-Za-z][A-Za-z0-9.-]*$/)
   .transform((value) => value.toUpperCase());
+
+const thesisListSchema = z.array(z.string().trim().min(1).max(500)).max(20);
+
+export const companyInputSchema = z
+  .object({
+    ticker: tickerSchema,
+    name: z.string().trim().min(1).max(120),
+    layerIds: z.array(z.enum(layerIds)).max(layerIds.length).default([]),
+    description: z.string().trim().max(2_000).default(""),
+    thesis: z.string().trim().min(1).max(4_000),
+    whyItMatters: z.string().trim().max(2_000).default(""),
+    provesRight: thesisListSchema.default([]),
+    breaksThesis: thesisListSchema.default([]),
+    watchMetrics: thesisListSchema.default([]),
+    confidence: z.enum(["high", "medium", "low"]).default("medium"),
+  })
+  .strict();
+
+export const researchSourceInputSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    type: z.enum(["rss", "paper", "release"]),
+    url: webUrlSchema,
+    enabled: z.boolean().default(true),
+    layerIds: z.array(z.enum(layerIds)).max(layerIds.length).default([]),
+    companyTickers: z.array(tickerSchema).max(50).default([]),
+  })
+  .strict();
+
+export const briefListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+});
 
 export const importSourceInputSchema = z
   .object({

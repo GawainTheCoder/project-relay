@@ -58,6 +58,44 @@ describe("RelayRepository", () => {
     }
   });
 
+  it("preserves archived catalog rows and user-added sources across seeding", () => {
+    const directory = mkdtempSync(join(tmpdir(), "relay-catalog-management-"));
+    const databasePath = join(directory, "relay.sqlite");
+    let fileRepository: RelayRepository | undefined;
+    try {
+      fileRepository = createRelayRepository(databasePath, {
+        demoData: false,
+      });
+      expect(fileRepository.archiveCompany("NVDA")).toBe(true);
+      expect(fileRepository.archiveSource("the-next-platform")).toBe(true);
+      const customSource = fileRepository.addSource({
+        name: "Personal inference feed",
+        type: "rss",
+        url: "https://example.com/inference.xml",
+        layerIds: ["serving"],
+        companyTickers: ["NVDA"],
+      });
+      fileRepository.close();
+      fileRepository = undefined;
+
+      fileRepository = createRelayRepository(databasePath, {
+        demoData: false,
+      });
+      expect(fileRepository.getCompany("NVDA")).toBeNull();
+      expect(fileRepository.getSource("the-next-platform")).toBeNull();
+      expect(fileRepository.getSource(customSource.id)).toMatchObject({
+        id: customSource.id,
+        name: "Personal inference feed",
+        userAdded: true,
+        layerIds: ["serving"],
+        companyTickers: ["NVDA"],
+      });
+    } finally {
+      fileRepository?.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("removes only known demo records when reopening in personal mode", () => {
     const directory = mkdtempSync(join(tmpdir(), "relay-personal-"));
     const databasePath = join(directory, "relay.sqlite");

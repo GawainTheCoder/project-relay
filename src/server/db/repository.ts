@@ -5,11 +5,13 @@ import { DatabaseSync } from "node:sqlite";
 
 import type {
   Company,
+  CompanyInput,
   DailyBrief,
   DashboardPayload,
   ImpactReview,
   IntelligenceUpdate,
   ResearchSource,
+  ResearchSourceInput,
   SourceKind,
   StackLayer,
 } from "../../shared/contracts.js";
@@ -120,14 +122,14 @@ export class RelayRepository {
     const insertSource = this.database.prepare(`
       INSERT INTO research_sources (
         id, name, type, url, enabled, status, last_synced_at, document_count,
-        archived
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+        archived, user_added, layer_ids_json, company_tickers_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         type = excluded.type,
         url = excluded.url,
-        enabled = excluded.enabled,
-        archived = 0
+        layer_ids_json = excluded.layer_ids_json,
+        company_tickers_json = excluded.company_tickers_json
     `);
 
     this.withTransaction(() => {
@@ -166,13 +168,16 @@ export class RelayRepository {
           source.status,
           source.lastSyncedAt,
           source.documentCount,
+          JSON.stringify(source.layerIds),
+          JSON.stringify(source.companyTickers),
         );
       });
       this.database
         .prepare(`
           UPDATE research_sources
           SET archived = 1
-          WHERE id NOT IN (${catalog.sources.map(() => "?").join(", ")})
+          WHERE user_added = 0
+            AND id NOT IN (${catalog.sources.map(() => "?").join(", ")})
         `)
         .run(...catalog.sources.map((source) => source.id));
     });
@@ -271,17 +276,91 @@ export class RelayRepository {
 
   listCompanies(): Company[] {
     return rows(
-      this.database.prepare("SELECT * FROM companies ORDER BY ticker").all(),
+      this.database
+        .prepare("SELECT * FROM companies WHERE archived = 0 ORDER BY ticker")
+        .all(),
     ).map((companyRow) => this.mapCompany(companyRow));
   }
 
   getCompany(ticker: string): Company | null {
     const companyRow = row(
       this.database
-        .prepare("SELECT * FROM companies WHERE ticker = ?")
+        .prepare("SELECT * FROM companies WHERE ticker = ? AND archived = 0")
         .get(ticker.toUpperCase()),
     );
     return companyRow ? this.mapCompany(companyRow) : null;
+  }
+
+  upsertCompany(input: CompanyInput): Company {
+    const ticker = input.ticker.toUpperCase();
+    const updatedAt = new Date().toISOString();
+    const knownLayer = this.database.prepare(
+      "SELECT 1 FROM stack_layers WHERE id = ?",
+    );
+    const invalidLayer = input.layerIds.find(
+      (layerId) => !knownLayer.get(layerId),
+    );
+    if (invalidLayer) {
+      throw new RangeError(`Unknown stack layer: ${invalidLayer}`);
+    }
+
+    this.withTransaction(() => {
+      this.database
+        .prepare(`
+          INSERT INTO companies (
+            ticker, name, description, thesis, why_it_matters,
+            proves_right_json, breaks_thesis_json, watch_metrics_json,
+            confidence, updated_at, archived
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+          ON CONFLICT(ticker) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            thesis = excluded.thesis,
+            why_it_matters = excluded.why_it_matters,
+            proves_right_json = excluded.proves_right_json,
+            breaks_thesis_json = excluded.breaks_thesis_json,
+            watch_metrics_json = excluded.watch_metrics_json,
+            confidence = excluded.confidence,
+            updated_at = excluded.updated_at,
+            archived = 0
+        `)
+        .run(
+          ticker,
+          input.name,
+          input.description,
+          input.thesis,
+          input.whyItMatters,
+          JSON.stringify(input.provesRight),
+          JSON.stringify(input.breaksThesis),
+          JSON.stringify(input.watchMetrics),
+          input.confidence,
+          updatedAt,
+        );
+      this.database
+        .prepare("DELETE FROM company_layers WHERE company_ticker = ?")
+        .run(ticker);
+      const insertLayer = this.database.prepare(
+        "INSERT INTO company_layers (company_ticker, layer_id) VALUES (?, ?)",
+      );
+      input.layerIds.forEach((layerId) => insertLayer.run(ticker, layerId));
+    });
+
+    const company = this.getCompany(ticker);
+    if (!company) {
+      throw new Error(`Failed to reload company ${ticker}`);
+    }
+    return company;
+  }
+
+  archiveCompany(ticker: string): boolean {
+    const result = this.database
+      .prepare(`
+        UPDATE companies
+        SET archived = 1, updated_at = ?
+        WHERE ticker = ? AND archived = 0
+      `)
+      .run(new Date().toISOString(), ticker.toUpperCase());
+    return result.changes > 0;
   }
 
   listSources(): ResearchSource[] {
@@ -291,19 +370,83 @@ export class RelayRepository {
           "SELECT * FROM research_sources WHERE archived = 0 ORDER BY name",
         )
         .all(),
-    ).map((sourceRow) => ({
+    ).map((sourceRow) => this.mapSource(sourceRow));
+  }
+
+  getSource(id: string): ResearchSource | null {
+    const sourceRow = row(
+      this.database
+        .prepare(
+          "SELECT * FROM research_sources WHERE id = ? AND archived = 0",
+        )
+        .get(id),
+    );
+    return sourceRow ? this.mapSource(sourceRow) : null;
+  }
+
+  addSource(input: ResearchSourceInput): ResearchSource {
+    const id = `source-${randomUUID()}`;
+    const url = canonicalizeUrl(input.url);
+    this.database
+      .prepare(`
+        INSERT INTO research_sources (
+          id, name, type, url, enabled, status, last_synced_at,
+          document_count, archived, user_added, layer_ids_json,
+          company_tickers_json
+        ) VALUES (?, ?, ?, ?, ?, 'ready', NULL, 0, 0, 1, ?, ?)
+      `)
+      .run(
+        id,
+        input.name,
+        input.type,
+        url,
+        input.enabled === false ? 0 : 1,
+        JSON.stringify(input.layerIds ?? []),
+        JSON.stringify(
+          (input.companyTickers ?? []).map((ticker) => ticker.toUpperCase()),
+        ),
+      );
+    const source = this.getSource(id);
+    if (!source) {
+      throw new Error(`Failed to reload source ${id}`);
+    }
+    return source;
+  }
+
+  archiveSource(id: string): boolean {
+    const result = this.database
+      .prepare(`
+        UPDATE research_sources
+        SET archived = 1, enabled = 0
+        WHERE id = ? AND archived = 0
+      `)
+      .run(id);
+    return result.changes > 0;
+  }
+
+  private mapSource(sourceRow: SqlRow): ResearchSource {
+    return {
       id: text(sourceRow, "id"),
       name: text(sourceRow, "name"),
       type: text(sourceRow, "type") as ResearchSource["type"],
       url: nullableText(sourceRow, "url"),
       enabled: sourceRow.enabled === 1,
+      userAdded: sourceRow.user_added === 1,
+      layerIds: parseJson<ResearchSource["layerIds"]>(
+        sourceRow.layer_ids_json,
+        [],
+      ),
+      companyTickers: parseJson<string[]>(
+        sourceRow.company_tickers_json,
+        [],
+      ),
       status: text(sourceRow, "status") as ResearchSource["status"],
       lastSyncedAt: nullableText(sourceRow, "last_synced_at"),
       documentCount:
         typeof sourceRow.document_count === "number"
           ? sourceRow.document_count
           : 0,
-    }));
+    };
   }
 
   listUpdates(limit = 50): IntelligenceUpdate[] {
@@ -641,6 +784,22 @@ export class RelayRepository {
       generatedAt: text(briefRow, "generated_at"),
       model: nullableText(briefRow, "model"),
     };
+  }
+
+  listBriefs(limit = 30): DailyBrief[] {
+    const briefRows = rows(
+      this.database
+        .prepare(`
+          SELECT id
+          FROM daily_briefs
+          ORDER BY date DESC, generated_at DESC
+          LIMIT ?
+        `)
+        .all(limit),
+    );
+    return briefRows
+      .map((briefRow) => this.getBrief(text(briefRow, "id")))
+      .filter((brief): brief is DailyBrief => brief !== null);
   }
 
   persistDailyBrief(brief: DailyBrief): DailyBrief {

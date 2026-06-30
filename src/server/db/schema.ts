@@ -227,6 +227,27 @@ const migrations = [
     )
     WHERE research_source_id IS NULL;
   `,
+  `
+    ALTER TABLE companies
+      ADD COLUMN archived INTEGER NOT NULL DEFAULT 0
+      CHECK (archived IN (0, 1));
+
+    ALTER TABLE research_sources
+      ADD COLUMN user_added INTEGER NOT NULL DEFAULT 0
+      CHECK (user_added IN (0, 1));
+
+    ALTER TABLE research_sources
+      ADD COLUMN layer_ids_json TEXT NOT NULL DEFAULT '[]';
+
+    ALTER TABLE research_sources
+      ADD COLUMN company_tickers_json TEXT NOT NULL DEFAULT '[]';
+
+    CREATE INDEX IF NOT EXISTS companies_archived_idx
+      ON companies(archived, ticker);
+
+    CREATE INDEX IF NOT EXISTS research_sources_archived_user_added_idx
+      ON research_sources(archived, user_added, name);
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {

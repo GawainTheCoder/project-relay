@@ -212,6 +212,18 @@ describe("Relay service integration with mocked external boundaries", () => {
       imported: 1,
       analyzed: 1,
       errors: [],
+      items: [
+        {
+          sourceId: "arxiv-distributed-systems",
+          sourceName: "Mock arXiv",
+          title: entry.title,
+          sourceUrl: entry.sourceUrl,
+          isNew: true,
+          status: "analyzed",
+          updateId: update.id,
+          error: null,
+        },
+      ],
     });
     expect(ingestionMocks.fetchRssSource).toHaveBeenCalledWith(
       ingestionMocks.ACTIVE_AUTOMATED_SOURCES[0],
@@ -238,6 +250,77 @@ describe("Relay service integration with mocked external boundaries", () => {
       status: "ready",
       documentCount: 1,
     });
+  });
+
+  it("refreshes a user-added feed with its saved analysis context", async () => {
+    repository.listSources().forEach((source) => {
+      if (!source.userAdded) {
+        repository.archiveSource(source.id);
+      }
+    });
+    const customSource = repository.addSource({
+      name: "Personal inference systems feed",
+      type: "rss",
+      url: "https://example.com/personal-feed.xml",
+      layerIds: ["serving"],
+      companyTickers: ["NVDA"],
+    });
+    const entry: RssEntry = {
+      externalId: "personal-entry-1",
+      title: "Serving throughput improves",
+      publisher: "Personal inference systems feed",
+      sourceUrl: "https://example.com/posts/serving-throughput",
+      publishedAt: "2026-06-29T09:00:00.000Z",
+      content:
+        "The release reports a measurable improvement in inference serving throughput.",
+    };
+    const document: NormalizedDocument = {
+      id: "personal-source-entry-1",
+      sourceType: "rss",
+      title: entry.title,
+      publisher: entry.publisher,
+      sourceUrl: entry.sourceUrl,
+      publishedAt: entry.publishedAt,
+      ingestedAt: "2026-06-29T10:00:00.000Z",
+      content: entry.content,
+      paragraphs: [{ locator: "P1", text: entry.content }],
+    };
+    const update = makeUpdate(repository, "personal-feed-update");
+    ingestionMocks.fetchRssSource.mockResolvedValue([entry]);
+    ingestionMocks.deduplicateRssEntries.mockImplementation(
+      (entries: RssEntry[]) => entries,
+    );
+    ingestionMocks.normalizeRssEntry.mockReturnValue(document);
+    intelligenceMocks.analyzeDocument.mockResolvedValue(update);
+
+    const result = await refreshPublicSources(repository);
+
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        sourceId: customSource.id,
+        title: entry.title,
+        status: "analyzed",
+        updateId: update.id,
+      }),
+    ]);
+    expect(ingestionMocks.fetchRssSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: customSource.id,
+        url: customSource.url,
+        layerIds: ["serving"],
+        companyTickers: ["NVDA"],
+      }),
+    );
+    expect(intelligenceMocks.analyzeDocument).toHaveBeenCalledWith(
+      document,
+      expect.objectContaining({
+        context: expect.objectContaining({
+          sourceProfile: expect.objectContaining({
+            id: customSource.id,
+          }),
+        }),
+      }),
+    );
   });
 
   it("builds app services around the repository and supplies updates to synthesis", async () => {

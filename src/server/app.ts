@@ -5,12 +5,16 @@ import type {
   DailyBrief,
   ImportSourceInput,
   IntelligenceUpdate,
+  SourceRefreshResult,
 } from "../shared/contracts.js";
 
 import { jsonError, validationDetails } from "./api/errors.js";
 import {
+  briefListQuerySchema,
+  companyInputSchema,
   impactReviewInputSchema,
   importSourceInputSchema,
+  researchSourceInputSchema,
   resourceIdSchema,
   searchQuerySchema,
   tickerSchema,
@@ -31,11 +35,7 @@ export interface AppServices {
   analyzeImportedSource?: (
     input: ImportSourceInput,
   ) => Promise<IntelligenceUpdate>;
-  refreshSources?: () => Promise<{
-    imported: number;
-    analyzed: number;
-    errors: string[];
-  }>;
+  refreshSources?: () => Promise<SourceRefreshResult>;
   generateBrief?: () => Promise<DailyBrief>;
 }
 
@@ -311,6 +311,117 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     return context.json(company);
   });
 
+  application.post("/api/companies", async (context) => {
+    const parsedBody = companyInputSchema.safeParse(await requestJson(context));
+    if (!parsedBody.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The company thesis is invalid.",
+        validationDetails(parsedBody.error),
+      );
+    }
+    try {
+      const company = getRepository().upsertCompany(parsedBody.data);
+      return context.json(company, 201);
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          context,
+          400,
+          "VALIDATION_ERROR",
+          error.message,
+        );
+      }
+      throw error;
+    }
+  });
+
+  application.delete("/api/companies/:ticker", (context) => {
+    const parsedTicker = tickerSchema.safeParse(context.req.param("ticker"));
+    if (!parsedTicker.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The company ticker is invalid.",
+        validationDetails(parsedTicker.error),
+      );
+    }
+    if (!getRepository().archiveCompany(parsedTicker.data)) {
+      return jsonError(
+        context,
+        404,
+        "COMPANY_NOT_FOUND",
+        "The requested company does not exist.",
+      );
+    }
+    return context.body(null, 204);
+  });
+
+  application.post("/api/sources", async (context) => {
+    const parsedBody = researchSourceInputSchema.safeParse(
+      await requestJson(context),
+    );
+    if (!parsedBody.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The research source is invalid.",
+        validationDetails(parsedBody.error),
+      );
+    }
+    const source = getRepository().addSource(parsedBody.data);
+    return context.json(source, 201);
+  });
+
+  application.get("/api/sources/:id", (context) => {
+    const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+    if (!parsedId.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The source ID is invalid.",
+        validationDetails(parsedId.error),
+      );
+    }
+    const source = getRepository().getSource(parsedId.data);
+    if (!source) {
+      return jsonError(
+        context,
+        404,
+        "SOURCE_NOT_FOUND",
+        "The requested source does not exist.",
+      );
+    }
+    return context.json(source);
+  });
+
+  application.delete("/api/sources/:id", (context) => {
+    const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+    if (!parsedId.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The source ID is invalid.",
+        validationDetails(parsedId.error),
+      );
+    }
+    if (!getRepository().archiveSource(parsedId.data)) {
+      return jsonError(
+        context,
+        404,
+        "SOURCE_NOT_FOUND",
+        "The requested source does not exist.",
+      );
+    }
+    return context.body(null, 204);
+  });
+
   application.post("/api/sources/import", async (context) => {
     const parsedBody = importSourceInputSchema.safeParse(
       await requestJson(context),
@@ -380,6 +491,47 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     } finally {
       activeOperations.delete("source-refresh");
     }
+  });
+
+  application.get("/api/briefs", (context) => {
+    const parsedQuery = briefListQuerySchema.safeParse({
+      limit: context.req.query("limit") ?? undefined,
+    });
+    if (!parsedQuery.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The brief history query is invalid.",
+        validationDetails(parsedQuery.error),
+      );
+    }
+    return context.json({
+      briefs: getRepository().listBriefs(parsedQuery.data.limit),
+    });
+  });
+
+  application.get("/api/briefs/:id", (context) => {
+    const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+    if (!parsedId.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The brief ID is invalid.",
+        validationDetails(parsedId.error),
+      );
+    }
+    const brief = getRepository().getBrief(parsedId.data);
+    if (!brief) {
+      return jsonError(
+        context,
+        404,
+        "BRIEF_NOT_FOUND",
+        "The requested brief does not exist.",
+      );
+    }
+    return context.json(brief);
   });
 
   application.post("/api/briefs/generate", async (context) => {

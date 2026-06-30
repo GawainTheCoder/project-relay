@@ -138,7 +138,14 @@ describe("synthesizeDailyBrief", () => {
     expect(client.responses.parse).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "gpt-5.5",
-        store: false,
+        store: true,
+        metadata: expect.objectContaining({
+          relay_app: "project-relay",
+          relay_brief_date: "2026-06-27",
+          relay_eligible_update_count: "1",
+          relay_input_update_ids: "update_1",
+          relay_operation: "daily_brief",
+        }),
         input: expect.stringContaining('"authorityTier":"specialist"'),
       }),
     );

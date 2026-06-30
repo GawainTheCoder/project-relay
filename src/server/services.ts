@@ -2,6 +2,9 @@ import type {
   DailyBrief,
   ImportSourceInput,
   IntelligenceUpdate,
+  ResearchSource,
+  SourceRefreshItem,
+  SourceRefreshResult,
 } from "../shared/contracts.js";
 
 import type { AppServices } from "./app.js";
@@ -23,6 +26,7 @@ import {
   findSourceForUrl,
   normalizeRssEntry,
   selectRefreshCandidates,
+  type PublicSourceDefinition,
   type SourceEntryBatch,
   type TrustedSourceDefinition,
 } from "./ingestion/index.js";
@@ -66,20 +70,18 @@ export async function analyzeImportedSource(
 
 export async function refreshPublicSources(
   repository: RelayRepository,
-): Promise<{ imported: number; analyzed: number; errors: string[] }> {
+): Promise<SourceRefreshResult> {
   let imported = 0;
   let analyzed = 0;
   let processed = 0;
   const errors: string[] = [];
-  const enabledSourceIds = new Set(
-    repository
-      .listSources()
-      .filter((source) => source.enabled)
-      .map((source) => source.id),
-  );
-  const activeSources = ACTIVE_AUTOMATED_SOURCES.filter((source) =>
-    enabledSourceIds.has(source.id),
-  );
+  const items: SourceRefreshItem[] = [];
+  const configuredSources = repository
+    .listSources()
+    .filter((source) => source.enabled);
+  const activeSources = configuredSources
+    .map((source) => configuredAutomatedSource(source))
+    .filter((source): source is PublicSourceDefinition => source !== null);
   const maxItems = Math.max(refreshLimit(), activeSources.length);
   const outcomes = await Promise.all(
     activeSources.map(async (source) => {
@@ -95,7 +97,20 @@ export async function refreshPublicSources(
         return { batch: { source, entries } satisfies SourceEntryBatch };
       } catch (error) {
         repository.recordSourceSync(source.id, "error");
-        return { error: `${source.name}: ${safeMessage(error)}` };
+        const message = safeMessage(error);
+        return {
+          error: `${source.name}: ${message}`,
+          item: {
+            sourceId: source.id,
+            sourceName: source.name,
+            title: `${source.name} feed`,
+            sourceUrl: source.url,
+            isNew: false,
+            status: "error",
+            updateId: null,
+            error: message,
+          } satisfies SourceRefreshItem,
+        };
       }
     }),
   );
@@ -105,6 +120,7 @@ export async function refreshPublicSources(
       batches.push(outcome.batch);
     } else {
       errors.push(outcome.error);
+      items.push(outcome.item);
     }
   });
 
@@ -127,6 +143,16 @@ export async function refreshPublicSources(
       researchSourceId: source.id,
     });
     if (document.duplicate && document.status === "analyzed") {
+      items.push({
+        sourceId: source.id,
+        sourceName: source.name,
+        title: entry.title,
+        sourceUrl: entry.sourceUrl,
+        isNew: false,
+        status: "duplicate",
+        updateId: document.updateId,
+        error: null,
+      });
       continue;
     }
 
@@ -142,12 +168,33 @@ export async function refreshPublicSources(
       const persisted = repository.persistAnalyzedUpdate(update);
       repository.markSourceDocumentAnalyzed(document.id, persisted.id);
       analyzed += 1;
+      items.push({
+        sourceId: source.id,
+        sourceName: source.name,
+        title: entry.title,
+        sourceUrl: entry.sourceUrl,
+        isNew: !document.duplicate,
+        status: "analyzed",
+        updateId: persisted.id,
+        error: null,
+      });
     } catch (error) {
-      repository.markSourceDocumentError(document.id, safeMessage(error));
-      errors.push(`${source.name}: ${safeMessage(error)}`);
+      const message = safeMessage(error);
+      repository.markSourceDocumentError(document.id, message);
+      errors.push(`${source.name}: ${message}`);
+      items.push({
+        sourceId: source.id,
+        sourceName: source.name,
+        title: entry.title,
+        sourceUrl: entry.sourceUrl,
+        isNew: !document.duplicate,
+        status: "error",
+        updateId: null,
+        error: message,
+      });
     }
   }
-  return { imported, analyzed, errors };
+  return { imported, analyzed, errors, items };
 }
 
 export async function generateDailyBrief(
@@ -187,7 +234,10 @@ export async function generateDailyBrief(
   > = {};
   updates.forEach((update) => {
     const sourceId = repository.getResearchSourceIdForUpdate(update.id);
-    const source = sourceId ? findSourceById(sourceId) : undefined;
+    const source = sourceId
+      ? findSourceById(sourceId) ??
+        configuredAutomatedSource(repository.getSource(sourceId))
+      : undefined;
     if (source) {
       sourceProfilesByUpdateId[update.id] = {
         id: source.id,
@@ -201,6 +251,42 @@ export async function generateDailyBrief(
   return synthesizeDailyBrief(updates, {
     sourceProfilesByUpdateId,
   });
+}
+
+function configuredAutomatedSource(
+  source: ResearchSource | null,
+): PublicSourceDefinition | null {
+  if (!source?.url || !["rss", "paper", "release"].includes(source.type)) {
+    return null;
+  }
+  const builtIn = ACTIVE_AUTOMATED_SOURCES.find(
+    (definition) => definition.id === source.id,
+  );
+  if (builtIn) {
+    return builtIn;
+  }
+  if (!source.userAdded) {
+    return null;
+  }
+  return {
+    id: source.id,
+    name: source.name,
+    type: source.type as PublicSourceDefinition["type"],
+    role: "primary",
+    authorityTier: "unknown",
+    layerIds: source.layerIds,
+    companyTickers: source.companyTickers,
+    intakeMode: "feed",
+    fetchStrategy: source.type === "release" ? "atom" : "rss",
+    url: source.url,
+    allowedDomains: [new URL(source.url).hostname],
+    enabledByDefault: true,
+    priority: 75,
+    perRefreshQuota: 1,
+    topicRules: {
+      maxAgeDays: source.type === "paper" ? 21 : 45,
+    },
+  };
 }
 
 function buildAnalysisContext(

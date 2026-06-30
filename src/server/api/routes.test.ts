@@ -281,6 +281,7 @@ describe("Relay API", () => {
       imported: number;
       analyzed: number;
       errors: string[];
+      items: [];
     }) => void) | undefined;
     const refreshSources = vi.fn(
       () =>
@@ -288,6 +289,7 @@ describe("Relay API", () => {
           imported: number;
           analyzed: number;
           errors: string[];
+          items: [];
         }>((resolve) => {
           releaseRefresh = resolve;
         }),
@@ -311,7 +313,92 @@ describe("Relay API", () => {
     await expect(secondResponse.json()).resolves.toMatchObject({
       error: { code: "OPERATION_IN_PROGRESS" },
     });
-    releaseRefresh?.({ imported: 0, analyzed: 0, errors: [] });
+    releaseRefresh?.({ imported: 0, analyzed: 0, errors: [], items: [] });
     expect((await firstRequest).status).toBe(200);
+  });
+
+  it("adds and archives a watchlist company thesis", async () => {
+    const app = createApp({ repository });
+    const created = await app.request("/api/companies", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ticker: "CRDO",
+        name: "Credo Technology",
+        layerIds: ["networking"],
+        thesis:
+          "High-speed connectivity demand can sustain durable AI infrastructure growth.",
+        confidence: "medium",
+        provesRight: ["AI connectivity revenue grows faster than the market."],
+        watchMetrics: ["AI connectivity revenue"],
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    await expect(created.json()).resolves.toMatchObject({
+      ticker: "CRDO",
+      layerIds: ["networking"],
+      confidence: "medium",
+    });
+    expect((await app.request("/api/companies/CRDO")).status).toBe(200);
+
+    const archived = await app.request("/api/companies/CRDO", {
+      method: "DELETE",
+    });
+    expect(archived.status).toBe(204);
+    expect((await app.request("/api/companies/CRDO")).status).toBe(404);
+  });
+
+  it("adds and archives a refreshable research source", async () => {
+    const app = createApp({ repository });
+    const created = await app.request("/api/sources", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Custom systems feed",
+        type: "rss",
+        url: "https://example.com/systems.xml",
+        layerIds: ["serving", "networking"],
+        companyTickers: ["NVDA"],
+      }),
+    });
+
+    expect(created.status).toBe(201);
+    const source = (await created.json()) as { id: string };
+    await expect(
+      (await app.request(`/api/sources/${source.id}`)).json(),
+    ).resolves.toMatchObject({
+      name: "Custom systems feed",
+      userAdded: true,
+      enabled: true,
+      layerIds: ["serving", "networking"],
+      companyTickers: ["NVDA"],
+    });
+
+    expect(
+      (
+        await app.request(`/api/sources/${source.id}`, {
+          method: "DELETE",
+        })
+      ).status,
+    ).toBe(204);
+    expect((await app.request(`/api/sources/${source.id}`)).status).toBe(404);
+  });
+
+  it("lists prior briefs and retrieves a selected brief", async () => {
+    const app = createApp({ repository });
+    const response = await app.request("/api/briefs?limit=5");
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      briefs: Array<{ id: string }>;
+    };
+    expect(payload.briefs.length).toBeGreaterThan(0);
+
+    const brief = await app.request(`/api/briefs/${payload.briefs[0]?.id}`);
+    expect(brief.status).toBe(200);
+    await expect(brief.json()).resolves.toMatchObject({
+      id: payload.briefs[0]?.id,
+      updateIds: expect.any(Array),
+    });
   });
 });
