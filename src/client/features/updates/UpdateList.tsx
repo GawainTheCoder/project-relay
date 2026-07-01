@@ -17,8 +17,8 @@ interface UpdateListProps {
 }
 
 const filters: { id: UpdateFilter; label: string }[] = [
-  { id: "material", label: "Changed a thesis" },
-  { id: "filtered", label: "No thesis change" },
+  { id: "material", label: "Thesis-relevant" },
+  { id: "filtered", label: "No thesis impact" },
 ];
 
 function dayGroup(publishedAt: string) {
@@ -59,9 +59,10 @@ export function UpdateList({
   return (
     <aside className="flex h-full min-h-0 flex-col border-r border-relay-border bg-relay-deep">
       <div className="border-b border-relay-border px-4 pb-3 pt-5">
-        <h1 className="text-xl font-semibold tracking-tight">Evidence</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Signals</h1>
         <p className="mt-1 text-[11px] leading-4 text-relay-muted">
-          Immutable source ledger
+          Sources are monitored inputs; signals are source-backed evidence
+          Relay evaluates against your theses.
         </p>
         <div className="mt-4 flex items-center gap-1" role="tablist">
           {filters.map((candidate) => (

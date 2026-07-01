@@ -119,6 +119,37 @@ describe("RelayRepository", () => {
         source_id TEXT NOT NULL,
         locator TEXT NOT NULL
       );
+      CREATE TABLE research_sources (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL,
+        url TEXT,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'ready',
+        last_synced_at TEXT,
+        document_count INTEGER NOT NULL DEFAULT 0,
+        archived INTEGER NOT NULL DEFAULT 0,
+        user_added INTEGER NOT NULL DEFAULT 0,
+        layer_ids_json TEXT NOT NULL DEFAULT '[]',
+        company_tickers_json TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE source_documents (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        publisher TEXT NOT NULL,
+        source_url TEXT,
+        published_at TEXT NOT NULL,
+        content TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        analysis_status TEXT NOT NULL DEFAULT 'pending',
+        update_id TEXT,
+        ingested_at TEXT NOT NULL,
+        error_message TEXT,
+        source_kind TEXT NOT NULL DEFAULT 'other',
+        filename TEXT,
+        research_source_id TEXT,
+        analysis_version TEXT NOT NULL DEFAULT 'legacy'
+      );
       CREATE TABLE daily_briefs (id TEXT PRIMARY KEY);
       INSERT INTO stack_layers VALUES (
         'memory', 'Memory', 'Memory systems', 1
@@ -251,6 +282,283 @@ describe("RelayRepository", () => {
     });
     expect(thesis?.versions).toHaveLength(1);
     expect(thesis?.evidence).toEqual([]);
+  });
+
+  it("defers an evaluation without changing the thesis and allows later review", () => {
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-nvda-deferred",
+        outcome: "reinforced",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    const before = repository.getThesis("company-nvda")?.currentVersion;
+
+    const deferred = repository.reviewThesisEvaluation(evaluation.id, {
+      decision: "deferred",
+      note: "Wait for an independent production-deployment datapoint.",
+    });
+
+    expect(deferred).toMatchObject({
+      reviewStatus: "deferred",
+      reviewNote: "Wait for an independent production-deployment datapoint.",
+      acceptedVersionId: null,
+    });
+    expect(deferred.reviewedAt).not.toBeNull();
+    expect(repository.getThesis("company-nvda")?.currentVersion).toEqual(before);
+    expect(repository.getThesis("company-nvda")?.evidence).toEqual([]);
+
+    expect(
+      repository.reviewThesisEvaluation(evaluation.id, {
+        decision: "accepted",
+      }),
+    ).toMatchObject({
+      reviewStatus: "accepted",
+      proposedConfidenceScore: 87,
+    });
+  });
+
+  it("invalidates only affected pending evaluations and durably requeues restored material impacts", () => {
+    const seed = repository.getUpdate("nvda-fy26-q4");
+    if (!seed) {
+      throw new Error("Seed signal missing");
+    }
+    const update: IntelligenceUpdate = {
+      ...seed,
+      id: "review-reconciliation-signal",
+      companyTickers: ["AMD", "NVDA"],
+      claims: seed.claims.map((claim) => ({
+        ...claim,
+        id: `review-reconciliation-${claim.id}`,
+      })),
+      thesisImpacts: [
+        {
+          ...seed.thesisImpacts[0]!,
+          id: "review-reconciliation-nvda",
+        },
+        {
+          ...seed.thesisImpacts[0]!,
+          id: "review-reconciliation-amd",
+          companyTicker: "AMD",
+          summary: "The same evidence remains relevant to AMD competition.",
+          thesisDelta: "Preserves the competitive context for AMD.",
+        },
+      ],
+    };
+    repository.persistAnalyzedUpdate(update);
+    const companyEvaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "review-reconciliation-company",
+        signalIds: [update.id],
+        evidence: [{
+          claimId: update.claims[0]!.id,
+          stance: "supports",
+          rationale: "The evidence supports the company thesis.",
+        }],
+      }),
+    );
+    const macroEvaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "review-reconciliation-macro",
+        thesisId: "macro-custom-silicon",
+        signalIds: [update.id],
+        evidence: [{
+          claimId: update.claims[0]!.id,
+          stance: "supports",
+          rationale: "The evidence remains relevant at the macro layer.",
+        }],
+      }),
+    );
+    repository.persistDailyBrief({
+      id: "review-reconciliation-brief",
+      date: "2026-07-02",
+      title: "Pending review synthesis",
+      summary: "This brief must be regenerated after review.",
+      signal: "A company impact remains under review.",
+      secondarySignals: [],
+      updateIds: [update.id],
+      citationClaimIds: [update.claims[0]!.id],
+      thesisEvaluationIds: [companyEvaluation.id, macroEvaluation.id],
+      generatedAt: "2026-07-02T12:00:00.000Z",
+      model: "test-model",
+    });
+    const reviewRepository = createImpactReviewRepository(
+      repository.database,
+    );
+    const rejected = reviewRepository.reviewImpact({
+      impactId: "review-reconciliation-nvda",
+      decision: "rejected",
+      reasonTags: ["overstated-materiality"],
+    });
+
+    const invalidated = repository.reconcileImpactReview({
+      updateId: rejected.updateId,
+      impactId: rejected.impactId,
+      companyTicker: rejected.companyTicker,
+      decision: rejected.decision,
+      previousDecision: null,
+    });
+
+    expect(invalidated).toEqual({
+      invalidatedEvaluationIds: [companyEvaluation.id],
+      requeued: false,
+    });
+    expect(
+      repository.getThesisEvaluation(companyEvaluation.id),
+    ).toMatchObject({
+      reviewStatus: "rejected",
+      reviewNote: expect.stringContaining("marked not material"),
+    });
+    expect(
+      repository.getThesisEvaluation(macroEvaluation.id)?.reviewStatus,
+    ).toBe("pending");
+    expect(
+      repository.getBrief("review-reconciliation-brief"),
+    ).toBeNull();
+
+    const restored = reviewRepository.reviewImpact({
+      impactId: "review-reconciliation-nvda",
+      decision: "accepted",
+      reasonTags: ["useful-analysis"],
+    });
+    expect(
+      repository.reconcileImpactReview({
+        updateId: restored.updateId,
+        impactId: restored.impactId,
+        companyTicker: restored.companyTicker,
+        decision: restored.decision,
+        previousDecision: "rejected",
+      }),
+    ).toEqual({
+      invalidatedEvaluationIds: [],
+      requeued: true,
+    });
+    expect(
+      repository.listRequeuedThesisEvaluationUpdates().map(
+        (candidate) => candidate.id,
+      ),
+    ).toEqual([update.id]);
+    expect(
+      repository.getThesisEvaluation(companyEvaluation.id)?.reviewNote,
+    ).toMatch(/^Invalidated after impact /);
+
+    const retriedCompanyEvaluation =
+      repository.persistThesisEvaluation(
+        buildEvaluation(repository, {
+          id: companyEvaluation.id,
+          signalIds: [update.id],
+          evidence: [{
+            claimId: update.claims[0]!.id,
+            stance: "supports",
+            rationale: "The restored material impact supports retrying.",
+          }],
+        }),
+      );
+    expect(retriedCompanyEvaluation.id).not.toBe(companyEvaluation.id);
+    expect(retriedCompanyEvaluation.id).toMatch(
+      /^review-reconciliation-company-retry-/,
+    );
+    expect(retriedCompanyEvaluation.reviewStatus).toBe("pending");
+
+    expect(
+      repository.persistThesisEvaluation(
+        buildEvaluation(repository, {
+          id: macroEvaluation.id,
+          thesisId: "macro-custom-silicon",
+          signalIds: [update.id],
+          evidence: [{
+            claimId: update.claims[0]!.id,
+            stance: "supports",
+            rationale: "The evidence remains relevant at the macro layer.",
+          }],
+        }),
+      ).id,
+    ).toBe(macroEvaluation.id);
+  });
+
+  it("idempotently queues a signal for re-evaluation and supersedes only unreviewed proposals", () => {
+    const accepted = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "manual-requeue-accepted",
+        proposedConfidenceScore: 86,
+      }),
+    );
+    repository.reviewThesisEvaluation(accepted.id, {
+      decision: "accepted",
+    });
+    const deferredInput = buildEvaluation(repository, {
+      id: "manual-requeue-deferred",
+      proposedConfidenceScore: 87,
+    });
+    const deferred = repository.persistThesisEvaluation(deferredInput);
+    repository.reviewThesisEvaluation(deferred.id, {
+      decision: "deferred",
+      note: "Wait for more routing context.",
+    });
+
+    const queued = repository.queueThesisEvaluationUpdate(
+      "nvda-fy26-q4",
+    );
+
+    expect(queued).toMatchObject({
+      updateId: "nvda-fy26-q4",
+      alreadyQueued: false,
+      invalidatedEvaluationIds: [deferred.id],
+    });
+    expect(repository.getThesisEvaluation(accepted.id)?.reviewStatus).toBe(
+      "accepted",
+    );
+    expect(repository.getThesisEvaluation(deferred.id)).toMatchObject({
+      reviewStatus: "rejected",
+      reviewNote: expect.stringContaining(
+        "Superseded by signal re-evaluation",
+      ),
+    });
+    expect(
+      repository.listRequeuedThesisEvaluationUpdates().map(
+        (update) => update.id,
+      ),
+    ).toEqual(["nvda-fy26-q4"]);
+
+    expect(
+      repository.queueThesisEvaluationUpdate("nvda-fy26-q4"),
+    ).toEqual({
+      updateId: "nvda-fy26-q4",
+      requestedAt: queued.requestedAt,
+      alreadyQueued: true,
+      invalidatedEvaluationIds: [],
+    });
+
+    const retried = repository.persistThesisEvaluation(deferredInput);
+    expect(retried.id).toMatch(/^manual-requeue-deferred-retry-/);
+    expect(retried.reviewStatus).toBe("pending");
+  });
+
+  it("creates a fresh proposal when a requeued signal repeats an accepted unchanged evaluation", () => {
+    const thesis = repository.getThesis("company-nvda");
+    if (!thesis) {
+      throw new Error("Seed thesis missing");
+    }
+    const unchangedInput = buildEvaluation(repository, {
+      id: "manual-requeue-accepted-unchanged",
+      outcome: "unchanged",
+      proposedConfidenceScore: thesis.currentVersion.confidenceScore,
+    });
+    const accepted = repository.persistThesisEvaluation(unchangedInput);
+    repository.reviewThesisEvaluation(accepted.id, {
+      decision: "accepted",
+    });
+    repository.queueThesisEvaluationUpdate("nvda-fy26-q4");
+
+    const retried = repository.persistThesisEvaluation(unchangedInput);
+
+    expect(retried.id).toMatch(
+      /^manual-requeue-accepted-unchanged-retry-/,
+    );
+    expect(retried.reviewStatus).toBe("pending");
+    expect(
+      repository.getThesisEvaluation(accepted.id)?.reviewStatus,
+    ).toBe("accepted");
   });
 
   it("rejects stale evaluations after another proposal advances the thesis", () => {
@@ -435,6 +743,46 @@ describe("RelayRepository", () => {
     }
   });
 
+  it("registers trusted website profiles with explicit thesis coverage", () => {
+    const profile = repository.addSourceProfile({
+      name: "Memory specialist",
+      domain: "memory.example.com",
+      publicUrl: "https://memory.example.com/research/",
+      role: "primary",
+      authorityTier: "specialist",
+      layerIds: ["memory"],
+      companyTickers: ["MU"],
+      thesisIds: ["macro-memory-bottleneck"],
+    });
+
+    expect(profile).toMatchObject({
+      type: "manual",
+      url: "https://memory.example.com/research",
+      domain: "memory.example.com",
+      role: "primary",
+      authorityTier: "specialist",
+      enabled: false,
+      userAdded: true,
+      layerIds: ["memory"],
+      companyTickers: ["MU"],
+      thesisIds: ["macro-memory-bottleneck"],
+    });
+    expect(
+      repository.findSourceProfileForUrl(
+        "https://sub.memory.example.com/report/1",
+      )?.id,
+    ).toBe(profile.id);
+    expect(() =>
+      repository.addSourceProfile({
+        name: "Mismatched profile",
+        domain: "memory.example.com",
+        publicUrl: "https://other.example.com/",
+        role: "primary",
+        authorityTier: "specialist",
+      }),
+    ).toThrow("public URL must use the registered source domain");
+  });
+
   it("removes only known demo records when reopening in personal mode", () => {
     const directory = mkdtempSync(join(tmpdir(), "relay-personal-"));
     const databasePath = join(directory, "relay.sqlite");
@@ -581,6 +929,7 @@ describe("RelayRepository", () => {
           decision: "proposed",
         },
       ],
+      macroThesisImpacts: [],
       model: "test-model",
     };
 
@@ -602,6 +951,115 @@ describe("RelayRepository", () => {
     expect(repository.getUpdate(update.id)?.whyItMatters).toBe(
       "The refreshed analysis keeps the same evidence.",
     );
+
+    repository.persistAnalyzedUpdate({
+      ...update,
+      macroThesisImpacts: [
+        {
+          id: "macro-impact-old",
+          thesisId: "macro-optics-supply",
+          relevance: "secondary",
+          stance: "supports",
+          rationale: "Volume production bears on optical supply.",
+          claimIds: ["test-claim"],
+        },
+      ],
+    });
+    repository.persistAnalyzedUpdate({
+      ...update,
+      macroThesisImpacts: [
+        {
+          id: "macro-impact-new",
+          thesisId: "macro-optics-supply",
+          relevance: "context",
+          stance: "context",
+          rationale:
+            "The production datum is adjacent context, not supply-wide evidence.",
+          claimIds: ["test-claim"],
+        },
+      ],
+    });
+    expect(repository.getUpdate(update.id)?.macroThesisImpacts).toEqual([
+      expect.objectContaining({
+        id: "macro-impact-new",
+        thesisId: "macro-optics-supply",
+        relevance: "context",
+        stance: "context",
+      }),
+    ]);
+  });
+
+  it("deletes a signal and any generated brief or unaccepted evaluation that cites it", () => {
+    const document = repository.persistSourceDocument({
+      title: "NVIDIA quarterly results",
+      publisher: "NVIDIA",
+      sourceUrl: "https://investor.nvidia.com/results",
+      content: "NVIDIA reported record data-center revenue.",
+      researchSourceId: "nvidia-ir",
+    });
+    repository.markSourceDocumentAnalyzed(
+      document.id,
+      "nvda-fy26-q4",
+    );
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-deleted-with-signal",
+        outcome: "reinforced",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    const brief: DailyBrief = {
+      id: "brief-deleted-with-signal",
+      date: "2026-07-01",
+      title: "Signal-backed brief",
+      summary: "This prose depends on the signal being deleted.",
+      signal: "The signal reinforced a thesis.",
+      secondarySignals: [],
+      updateIds: ["nvda-fy26-q4"],
+      citationClaimIds: ["claim-nvda-dc"],
+      thesisEvaluationIds: [evaluation.id],
+      generatedAt: "2026-07-01T12:00:00.000Z",
+      model: "test-model",
+    };
+    repository.persistDailyBrief(brief);
+
+    expect(repository.deleteUpdate("nvda-fy26-q4")).toBe(true);
+    expect(repository.getUpdate("nvda-fy26-q4")).toBeNull();
+    expect(repository.getThesisEvaluation(evaluation.id)).toBeNull();
+    expect(repository.getBrief(brief.id)).toBeNull();
+    expect(repository.deleteUpdate("nvda-fy26-q4")).toBe(false);
+    expect(
+      repository.persistSourceDocument({
+        title: "NVIDIA quarterly results",
+        publisher: "NVIDIA",
+        sourceUrl: "https://investor.nvidia.com/results",
+        content: "NVIDIA reported record data-center revenue.",
+        researchSourceId: "nvidia-ir",
+      }),
+    ).toMatchObject({
+      id: document.id,
+      duplicate: true,
+      status: "suppressed",
+      updateId: null,
+    });
+  });
+
+  it("refuses to delete a signal that supports an accepted thesis change", () => {
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-protects-signal",
+        outcome: "reinforced",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    repository.reviewThesisEvaluation(evaluation.id, {
+      decision: "accepted",
+    });
+
+    expect(() => repository.deleteUpdate("nvda-fy26-q4")).toThrow(
+      "supports an accepted thesis change",
+    );
+    expect(repository.getUpdate("nvda-fy26-q4")).not.toBeNull();
   });
 
   it("enforces materiality and novelty invariants at persistence", () => {
@@ -650,7 +1108,7 @@ describe("RelayRepository", () => {
           direction: "not-material",
         })),
       }),
-    ).toThrow("Material signals must contain a concrete thesis delta.");
+    ).toThrow("Company thesis impacts must contain a concrete thesis delta.");
   });
 
   it("deduplicates imported source documents without duplicating source counts", () => {

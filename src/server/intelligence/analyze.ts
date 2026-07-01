@@ -7,6 +7,7 @@ import type {
   EvidenceClaim,
   IntelligenceUpdate,
   LayerId,
+  MacroThesisImpact,
   Materiality,
   Sentiment,
   ThesisImpact,
@@ -70,10 +71,23 @@ export interface AnalysisSourceProfile {
   priority: number;
   layerIds: readonly LayerId[];
   companyTickers: readonly string[];
+  thesisIds?: readonly string[];
+}
+
+export interface AnalysisMacroThesis {
+  id: string;
+  title: string;
+  belief: string;
+  confidenceScore: number;
+  unknowns: readonly string[];
+  strengtheningConditions: readonly string[];
+  weakeningConditions: readonly string[];
+  layerIds: readonly LayerId[];
 }
 
 export interface AnalysisContext {
   watchlistCompanies: AnalysisWatchlistCompany[];
+  macroTheses?: AnalysisMacroThesis[];
   recentSignals?: AnalysisRecentSignal[];
   sourceProfile?: AnalysisSourceProfile | null;
 }
@@ -91,7 +105,25 @@ Rules:
 - Every claim locator must be the matching paragraph label, such as P3.
 - Do not use a headline as evidence unless the same words appear in a paragraph.
 - A thesis impact is a proposed interpretation, never an automatic thesis edit.
-- Compare the source with the supplied company theses and recent signals.
+- Compare the source independently with the supplied company theses, macro
+  theses, and recent signals. Do not require a company impact before routing
+  evidence to a macro thesis.
+- For every macro thesis, compare the exact belief and its conditions—not only
+  its title or overlapping layer tags—with the source's grounded claims.
+- Return exactly one macroThesisDisposition for every supplied macro thesis.
+  Use "primary" only when evidence directly addresses the thesis's central
+  adoption, constraint, supply, or portability mechanism. Use "secondary" for
+  a real but less central implication. Use "context" only for adjacent evidence
+  useful to interpretation. Use "not-relevant" for everything else.
+- A shared industry, company, or stack-layer keyword is not enough to create a
+  macro route. Do not infer a chain of effects that the source does not support.
+- A route's stance describes the evidence relationship: supports, opposes, or
+  context. Relevance never implies a confidence change.
+- Each primary, secondary, or context disposition must cite one or more
+  claimLocators from the exact claims you extracted. A not-relevant disposition
+  must use context stance and an empty claimLocators array.
+- Source-profile thesis IDs are routing hints only. Validate them against the
+  document evidence and the full supplied thesis before creating a route.
 - novelty is "new" for genuinely new evidence, "confirmation" for evidence that
   increases confidence in a known signal, "contradiction" for evidence against a
   prior signal or thesis, and "repetition" for substantially duplicated evidence.
@@ -101,18 +133,21 @@ Rules:
   by this evidence. It cannot merely restate the source or call it "important."
 - Create thesis impacts only for companies present in WATCHLIST CONTEXT.
 - Sentiment is relative to the named companies, not the market in general.
-- Use "not-material" unless the evidence changes a supplied watchlist thesis.
+- Use "not-material" unless the evidence changes a supplied company thesis or
+  directly bears on a supplied macro thesis.
 - Repetition is always "not-material". Confirmation is material only when it
   changes thesis confidence, timing, magnitude, or expected duration.
 - A "not-material" result must use "not-material" sentiment and no thesis impacts.
-- A material result must have at least one exact claim and one watchlist-company
-  thesis impact. Its sentiment and impact directions cannot be "not-material."
+- A material result must have at least one exact claim and at least one
+  company-thesis impact or primary/secondary macro-thesis route. Its sentiment
+  and company-impact directions cannot be "not-material."
 - Prefer no thesis impact over a vague or weakly supported impact.
 - Use ticker symbols when known and uppercase them.
 - Confidence reflects evidence quality, not writing confidence.
 - Do not invent metrics, dates, companies, quotations, or causal relationships.`;
 
 const MAX_CONTEXT_COMPANIES = 30;
+const MAX_CONTEXT_MACRO_THESES = 50;
 const MAX_RECENT_SIGNALS = 20;
 const MAX_CONTEXT_LIST_ITEMS = 8;
 
@@ -121,6 +156,14 @@ export async function analyzeDocument(
   options: AnalyzeDocumentOptions = {},
 ): Promise<IntelligenceUpdate> {
   assertAnalyzableDocument(document);
+  if (
+    (options.context?.macroTheses?.length ?? 0) >
+    MAX_CONTEXT_MACRO_THESES
+  ) {
+    throw new EvidenceValidationError(
+      `Signal analysis supports at most ${MAX_CONTEXT_MACRO_THESES} active macro theses per run.`,
+    );
+  }
 
   const model = options.model ?? getAnalysisModel();
   const client = resolveOpenAIClient(options.client);
@@ -185,6 +228,11 @@ export function buildIntelligenceUpdate(
   const thesisImpacts = output.thesisImpacts.map((impact) =>
     buildThesisImpact(impact, updateId),
   );
+  const macroThesisImpacts = buildMacroThesisImpacts(
+    output,
+    claims,
+    updateId,
+  );
 
   return {
     id: updateId,
@@ -206,6 +254,7 @@ export function buildIntelligenceUpdate(
     watchNext: unique(output.inference.watchNext.map((item) => item.trim())),
     claims,
     thesisImpacts,
+    macroThesisImpacts,
     model,
   };
 }
@@ -237,6 +286,10 @@ function buildAnalysisInput(
             .slice(0, MAX_CONTEXT_COMPANIES)
             .map(normalizeTicker)
             .filter(Boolean),
+          thesisIds: (context.sourceProfile.thesisIds ?? []).slice(
+            0,
+            MAX_CONTEXT_LIST_ITEMS,
+          ),
         }
       : null,
     watchlistCompanies: (context?.watchlistCompanies ?? [])
@@ -247,6 +300,20 @@ function buildAnalysisInput(
         provesRight: compactTextList(company.provesRight),
         breaksThesis: compactTextList(company.breaksThesis),
         watchMetrics: compactTextList(company.watchMetrics),
+      })),
+    macroTheses: (context?.macroTheses ?? []).map((thesis) => ({
+        id: thesis.id,
+        title: truncate(thesis.title, 300),
+        belief: truncate(thesis.belief, 2_000),
+        confidenceScore: thesis.confidenceScore,
+        unknowns: compactTextList([...thesis.unknowns]),
+        strengtheningConditions: compactTextList([
+          ...thesis.strengtheningConditions,
+        ]),
+        weakeningConditions: compactTextList([
+          ...thesis.weakeningConditions,
+        ]),
+        layerIds: thesis.layerIds.slice(0, MAX_CONTEXT_LIST_ITEMS),
       })),
     recentSignals: (context?.recentSignals ?? [])
       .slice(0, MAX_RECENT_SIGNALS)
@@ -349,11 +416,54 @@ function buildThesisImpact(
   };
 }
 
+function buildMacroThesisImpacts(
+  output: AnalysisOutput,
+  claims: EvidenceClaim[],
+  updateId: string,
+): MacroThesisImpact[] {
+  const claimsByLocator = new Map<string, string[]>();
+  for (const claim of claims) {
+    const locatorClaims = claimsByLocator.get(claim.locator) ?? [];
+    locatorClaims.push(claim.id);
+    claimsByLocator.set(claim.locator, locatorClaims);
+  }
+
+  return output.macroThesisDispositions.flatMap((impact) => {
+      if (impact.relevance === "not-relevant") {
+        return [];
+      }
+      const claimIds = unique(
+        impact.claimLocators.flatMap(
+          (locator) => claimsByLocator.get(locator) ?? [],
+        ),
+      );
+      if (claimIds.length === 0) {
+        throw new EvidenceValidationError(
+          "A macro-thesis route must cite an extracted claim locator.",
+        );
+      }
+      return {
+        id: stableId(
+          "macro-impact",
+          updateId,
+          impact.thesisId,
+        ),
+        thesisId: impact.thesisId,
+        relevance: impact.relevance,
+        stance: impact.stance,
+        rationale: impact.rationale.trim(),
+        claimIds,
+      };
+    });
+}
+
 function validateAnalysisSemantics(
   output: AnalysisOutput,
   claims: EvidenceClaim[],
   context?: AnalysisContext,
 ): void {
+  validateMacroThesisDispositions(output, claims, context);
+
   if (output.materiality === "not-material") {
     if (output.sentiment !== "not-material") {
       throw new EvidenceValidationError(
@@ -363,6 +473,15 @@ function validateAnalysisSemantics(
     if (output.thesisImpacts.length > 0) {
       throw new EvidenceValidationError(
         "A not-material update cannot contain actionable thesis impacts.",
+      );
+    }
+    if (
+      output.macroThesisDispositions.some(
+        (impact) => impact.relevance !== "not-relevant",
+      )
+    ) {
+      throw new EvidenceValidationError(
+        "A not-material update cannot contain macro-thesis routes.",
       );
     }
     return;
@@ -389,14 +508,24 @@ function validateAnalysisSemantics(
       .map((company) => normalizeTicker(company.ticker))
       .filter(Boolean),
   );
-  if (knownTickers.size === 0) {
+  const knownMacroTheses = new Set(
+    (context?.macroTheses ?? []).map((thesis) => thesis.id),
+  );
+  if (knownTickers.size === 0 && knownMacroTheses.size === 0) {
     throw new EvidenceValidationError(
-      "A material update requires watchlist thesis context.",
+      "A material update requires company or macro thesis context.",
     );
   }
-  if (output.thesisImpacts.length === 0) {
+  if (
+    output.thesisImpacts.length === 0 &&
+    !output.macroThesisDispositions.some(
+      (impact) =>
+        impact.relevance === "primary" ||
+        impact.relevance === "secondary",
+    )
+  ) {
     throw new EvidenceValidationError(
-      "A material update must contain a watchlist-company thesis delta.",
+      "A material update must contain a company thesis delta or a direct macro-thesis route.",
     );
   }
 
@@ -423,6 +552,79 @@ function validateAnalysisSemantics(
     if (!impact.thesisDelta.trim()) {
       throw new EvidenceValidationError(
         "A material thesis impact must state the concrete thesis delta.",
+      );
+    }
+  }
+
+}
+
+function validateMacroThesisDispositions(
+  output: AnalysisOutput,
+  claims: EvidenceClaim[],
+  context?: AnalysisContext,
+): void {
+  const knownMacroTheses = new Set(
+    (context?.macroTheses ?? []).map((thesis) => thesis.id),
+  );
+  const dispositionIds = output.macroThesisDispositions.map(
+    (impact) => impact.thesisId,
+  );
+  if (
+    dispositionIds.length !== knownMacroTheses.size ||
+    new Set(dispositionIds).size !== dispositionIds.length ||
+    dispositionIds.some((thesisId) => !knownMacroTheses.has(thesisId))
+  ) {
+    throw new EvidenceValidationError(
+      "Macro-thesis dispositions must cover every active macro thesis exactly once.",
+    );
+  }
+
+  for (const impact of output.macroThesisDispositions) {
+    if (!knownMacroTheses.has(impact.thesisId)) {
+      throw new EvidenceValidationError(
+        "A macro-thesis route referenced a thesis outside the active macro context.",
+      );
+    }
+    if (impact.relevance === "not-relevant") {
+      if (
+        impact.stance !== "context" ||
+        impact.claimLocators.length !== 0
+      ) {
+        throw new EvidenceValidationError(
+          "A not-relevant macro disposition must use context stance without claim locators.",
+        );
+      }
+      continue;
+    }
+    if (
+      impact.relevance === "context" &&
+      impact.stance !== "context"
+    ) {
+      throw new EvidenceValidationError(
+        "A context-only macro route must use context stance.",
+      );
+    }
+    if (
+      impact.relevance !== "context" &&
+      impact.stance === "context"
+    ) {
+      throw new EvidenceValidationError(
+        "A primary or secondary macro route must use directional evidence.",
+      );
+    }
+    const citedLocators = new Set(impact.claimLocators);
+    if (citedLocators.size !== impact.claimLocators.length) {
+      throw new EvidenceValidationError(
+        "A macro-thesis route cannot repeat claim locators.",
+      );
+    }
+    if (
+      impact.claimLocators.some(
+        (locator) => !claims.some((claim) => claim.locator === locator),
+      )
+    ) {
+      throw new EvidenceValidationError(
+        "A macro-thesis route must cite an extracted claim locator.",
       );
     }
   }

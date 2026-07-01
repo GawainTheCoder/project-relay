@@ -12,6 +12,127 @@ function formatOutcome(outcome: BeliefEvaluation["outcome"]) {
     .join(" ");
 }
 
+function EvaluationRow({
+  activeReview,
+  evaluation,
+  isDeferred,
+  onReview,
+}: {
+  activeReview: {
+    id: string;
+    decision: ThesisEvaluationReviewInput["decision"];
+  } | null;
+  evaluation: BeliefEvaluation;
+  isDeferred: boolean;
+  onReview: (
+    evaluationId: string,
+    decision: ThesisEvaluationReviewInput["decision"],
+  ) => void;
+}) {
+  const activeDecision =
+    activeReview?.id === evaluation.id ? activeReview.decision : null;
+  return (
+    <article className="grid gap-4 py-5 sm:grid-cols-[130px_minmax(0,1fr)_auto] sm:items-center">
+      <div>
+        <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-warning">
+          {formatOutcome(evaluation.outcome)}
+        </span>
+        <time
+          className="mt-1 flex items-center gap-1.5 font-mono text-[9px] text-relay-subtle"
+          dateTime={evaluation.createdAt}
+        >
+          <Clock3 aria-hidden="true" className="size-3" />
+          {formatDate(evaluation.createdAt, {
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          })}
+        </time>
+      </div>
+      <div>
+        <p className="text-sm leading-6 text-relay-text">
+          {evaluation.proposedStatement ?? evaluation.rationale}
+        </p>
+        {evaluation.proposedStatement ? (
+          <p className="mt-1 text-xs leading-5 text-relay-muted">
+            {evaluation.rationale}
+          </p>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        <span
+          className={`mr-2 font-mono text-[10px] ${
+            evaluation.confidenceDelta > 0
+              ? "text-relay-positive"
+              : evaluation.confidenceDelta < 0
+                ? "text-relay-negative"
+                : "text-relay-muted"
+          }`}
+        >
+          {evaluation.confidenceDelta > 0 ? "+" : ""}
+          {evaluation.confidenceDelta} confidence
+        </span>
+        {isDeferred ? (
+          <span className="inline-flex min-h-8 items-center gap-1.5 rounded border border-relay-warning/30 bg-relay-warning/7 px-2.5 text-xs text-relay-warning">
+            <Pause aria-hidden="true" className="size-3" />
+            Deferred
+          </span>
+        ) : null}
+        <button
+          className="inline-flex min-h-8 items-center gap-1.5 rounded border border-relay-positive/40 px-2.5 text-xs text-relay-positive hover:border-relay-positive hover:bg-relay-positive/8 disabled:opacity-50"
+          disabled={activeReview !== null}
+          onClick={() => onReview(evaluation.id, "accepted")}
+          type="button"
+        >
+          {activeDecision === "accepted" ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-3 animate-spin"
+            />
+          ) : (
+            <Check aria-hidden="true" className="size-3" />
+          )}
+          {activeDecision === "accepted" ? "Accepting" : "Accept"}
+        </button>
+        {!isDeferred ? (
+          <button
+            className="inline-flex min-h-8 items-center gap-1.5 rounded border border-relay-border px-2.5 text-xs text-relay-muted hover:border-relay-warning/50 hover:text-relay-warning disabled:opacity-50"
+            disabled={activeReview !== null}
+            onClick={() => onReview(evaluation.id, "deferred")}
+            type="button"
+          >
+            {activeDecision === "deferred" ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-3 animate-spin"
+              />
+            ) : (
+              <Pause aria-hidden="true" className="size-3" />
+            )}
+            {activeDecision === "deferred" ? "Deferring" : "Defer"}
+          </button>
+        ) : null}
+        <button
+          className="inline-flex min-h-8 items-center gap-1.5 rounded border border-relay-border px-2.5 text-xs text-relay-muted hover:border-relay-negative/50 hover:text-relay-negative disabled:opacity-50"
+          disabled={activeReview !== null}
+          onClick={() => onReview(evaluation.id, "rejected")}
+          type="button"
+        >
+          {activeDecision === "rejected" ? (
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-3 animate-spin"
+            />
+          ) : (
+            <X aria-hidden="true" className="size-3" />
+          )}
+          {activeDecision === "rejected" ? "Rejecting" : "Reject"}
+        </button>
+      </div>
+    </article>
+  );
+}
+
 export function PendingEvaluations({
   evaluations,
   onReview,
@@ -22,14 +143,23 @@ export function PendingEvaluations({
     decision: ThesisEvaluationReviewInput["decision"],
   ) => Promise<void>;
 }) {
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeReview, setActiveReview] = useState<{
+    id: string;
+    decision: ThesisEvaluationReviewInput["decision"];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const pendingEvaluations = evaluations.filter(
+    (evaluation) => evaluation.reviewStatus === "pending",
+  );
+  const deferredEvaluations = evaluations.filter(
+    (evaluation) => evaluation.reviewStatus === "deferred",
+  );
 
   const review = async (
     evaluationId: string,
     decision: ThesisEvaluationReviewInput["decision"],
   ) => {
-    setActiveId(evaluationId);
+    setActiveReview({ id: evaluationId, decision });
     setError(null);
     try {
       await onReview(evaluationId, decision);
@@ -40,7 +170,7 @@ export function PendingEvaluations({
           : "The thesis evaluation could not be reviewed.",
       );
     } finally {
-      setActiveId(null);
+      setActiveReview(null);
     }
   };
 
@@ -54,7 +184,7 @@ export function PendingEvaluations({
           </p>
         </div>
         <span className="font-mono text-[10px] text-relay-subtle">
-          {evaluations.length}
+          {pendingEvaluations.length}
         </span>
       </div>
       {error ? (
@@ -65,88 +195,18 @@ export function PendingEvaluations({
           {error}
         </p>
       ) : null}
-      {evaluations.length ? (
+      {pendingEvaluations.length ? (
         <div className="divide-y divide-relay-border">
-          {evaluations.map((evaluation) => (
-            <article
-              className="grid gap-4 py-5 sm:grid-cols-[130px_minmax(0,1fr)_auto] sm:items-center"
+          {pendingEvaluations.map((evaluation) => (
+            <EvaluationRow
+              activeReview={activeReview}
+              evaluation={evaluation}
+              isDeferred={false}
               key={evaluation.id}
-            >
-              <div>
-                <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-warning">
-                  {formatOutcome(evaluation.outcome)}
-                </span>
-                <time
-                  className="mt-1 flex items-center gap-1.5 font-mono text-[9px] text-relay-subtle"
-                  dateTime={evaluation.createdAt}
-                >
-                  <Clock3 aria-hidden="true" className="size-3" />
-                  {formatDate(evaluation.createdAt, {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })}
-                </time>
-              </div>
-              <div>
-                <p className="text-sm leading-6 text-relay-text">
-                  {evaluation.proposedStatement ?? evaluation.rationale}
-                </p>
-                {evaluation.proposedStatement ? (
-                  <p className="mt-1 text-xs leading-5 text-relay-muted">
-                    {evaluation.rationale}
-                  </p>
-                ) : null}
-              </div>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                <span
-                  className={`mr-2 font-mono text-[10px] ${
-                    evaluation.confidenceDelta > 0
-                      ? "text-relay-positive"
-                      : evaluation.confidenceDelta < 0
-                        ? "text-relay-negative"
-                        : "text-relay-muted"
-                  }`}
-                >
-                  {evaluation.confidenceDelta > 0 ? "+" : ""}
-                  {evaluation.confidenceDelta} confidence
-                </span>
-                <button
-                  className="inline-flex min-h-8 items-center gap-1.5 rounded border border-relay-positive/40 px-2.5 text-xs text-relay-positive hover:border-relay-positive hover:bg-relay-positive/8 disabled:opacity-50"
-                  disabled={activeId !== null}
-                  onClick={() => void review(evaluation.id, "accepted")}
-                  type="button"
-                >
-                  {activeId === evaluation.id ? (
-                    <LoaderCircle
-                      aria-hidden="true"
-                      className="size-3 animate-spin"
-                    />
-                  ) : (
-                    <Check aria-hidden="true" className="size-3" />
-                  )}
-                  Accept
-                </button>
-                <button
-                  className="inline-flex min-h-8 items-center gap-1.5 rounded border border-relay-border px-2.5 text-xs text-relay-muted hover:border-relay-warning/50 hover:text-relay-warning disabled:opacity-50"
-                  disabled={activeId !== null}
-                  onClick={() => void review(evaluation.id, "deferred")}
-                  type="button"
-                >
-                  <Pause aria-hidden="true" className="size-3" />
-                  Defer
-                </button>
-                <button
-                  className="inline-flex min-h-8 items-center gap-1.5 rounded border border-relay-border px-2.5 text-xs text-relay-muted hover:border-relay-negative/50 hover:text-relay-negative disabled:opacity-50"
-                  disabled={activeId !== null}
-                  onClick={() => void review(evaluation.id, "rejected")}
-                  type="button"
-                >
-                  <X aria-hidden="true" className="size-3" />
-                  Reject
-                </button>
-              </div>
-            </article>
+              onReview={(evaluationId, decision) => {
+                void review(evaluationId, decision);
+              }}
+            />
           ))}
         </div>
       ) : (
@@ -154,6 +214,35 @@ export function PendingEvaluations({
           No thesis changes are waiting for review.
         </p>
       )}
+      {deferredEvaluations.length ? (
+        <section className="mt-8">
+          <div className="flex items-end justify-between border-b border-relay-border pb-3">
+            <div>
+              <h3 className="text-sm font-semibold">Deferred for later</h3>
+              <p className="mt-1 text-xs leading-5 text-relay-muted">
+                These proposals are excluded from briefs and remain available
+                to accept or reject later.
+              </p>
+            </div>
+            <span className="font-mono text-[10px] text-relay-subtle">
+              {deferredEvaluations.length}
+            </span>
+          </div>
+          <div className="divide-y divide-relay-border">
+            {deferredEvaluations.map((evaluation) => (
+              <EvaluationRow
+                activeReview={activeReview}
+                evaluation={evaluation}
+                isDeferred
+                key={evaluation.id}
+                onReview={(evaluationId, decision) => {
+                  void review(evaluationId, decision);
+                }}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }

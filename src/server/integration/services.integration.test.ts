@@ -13,25 +13,38 @@ import {
   createRelayRepository,
   type RelayRepository,
 } from "../db/repository.js";
+import { createImpactReviewRepository } from "../evaluation/index.js";
 
 const intelligenceMocks = vi.hoisted(() => ({
   analyzeDocument: vi.fn(),
   analyzeImportedSource: vi.fn(),
   analyzeUrlSource: vi.fn(),
   evaluateTheses: vi.fn(),
+  routeSignalToMacroTheses: vi.fn(),
   selectBriefEligibleUpdates: vi.fn((updates: IntelligenceUpdate[]) =>
-    updates.filter(
-      (update) =>
-        update.materiality !== "not-material" &&
+    updates.flatMap((update) => {
+      const thesisImpacts = update.thesisImpacts.filter(
+        (impact) =>
+          impact.direction !== "not-material" &&
+          impact.decision !== "rejected" &&
+          impact.review?.decision !== "rejected" &&
+          impact.thesisDelta.trim().length > 0,
+      );
+      return update.materiality !== "not-material" &&
         update.novelty !== "repetition" &&
-        update.thesisImpacts.some(
-          (impact) =>
-            impact.direction !== "not-material" &&
-            impact.decision !== "rejected" &&
-            impact.review?.decision !== "rejected" &&
-            impact.thesisDelta.trim().length > 0,
-        ),
-    ),
+        update.claims.length > 0 &&
+        thesisImpacts.length > 0
+        ? [{
+            ...update,
+            companyTickers: [
+              ...new Set(
+                thesisImpacts.map((impact) => impact.companyTicker),
+              ),
+            ],
+            thesisImpacts,
+          }]
+        : [];
+    }),
   ),
   synthesizeBeliefBrief: vi.fn(),
   synthesizeDailyBrief: vi.fn(),
@@ -72,7 +85,9 @@ import {
   createAppServices,
   evaluatePendingTheses,
   generateDailyBrief,
+  requeueSignalThesisEvaluation,
   refreshPublicSources,
+  selectThesisEvaluationEligibleUpdates,
 } from "../services.js";
 
 describe("Relay service integration with mocked external boundaries", () => {
@@ -81,22 +96,46 @@ describe("Relay service integration with mocked external boundaries", () => {
   beforeEach(() => {
     repository = createRelayRepository(":memory:");
     vi.clearAllMocks();
-    ingestionMocks.findSourceById.mockReturnValue({
-      id: "manual-imports",
-      name: "Other manual excerpts",
-      type: "manual",
-      role: "context",
-      authorityTier: "unknown",
-      layerIds: [],
-      companyTickers: [],
-      intakeMode: "manual-excerpt",
-      fetchStrategy: "manual",
-      url: null,
-      allowedDomains: [],
-      enabledByDefault: false,
-      priority: 50,
-      perRefreshQuota: 0,
-    });
+    intelligenceMocks.routeSignalToMacroTheses.mockImplementation(
+      async (
+        signal: IntelligenceUpdate,
+        macroTheses: Array<{ id: string }>,
+      ) => {
+        const thesis = macroTheses[0];
+        const claim = signal.claims[0];
+        return thesis && claim
+          ? [{
+              id: `macro-impact-${signal.id}-${thesis.id}`,
+              thesisId: thesis.id,
+              relevance: "primary" as const,
+              stance: "supports" as const,
+              rationale:
+                "The stored exact claim is directly relevant to this macro thesis.",
+              claimIds: [claim.id],
+            }]
+          : [];
+      },
+    );
+    ingestionMocks.findSourceById.mockImplementation((id: string) =>
+      id === "manual-imports"
+        ? {
+            id: "manual-imports",
+            name: "Other manual excerpts",
+            type: "manual",
+            role: "context",
+            authorityTier: "unknown",
+            layerIds: [],
+            companyTickers: [],
+            intakeMode: "manual-excerpt",
+            fetchStrategy: "manual",
+            url: null,
+            allowedDomains: [],
+            enabledByDefault: false,
+            priority: 50,
+            perRefreshQuota: 0,
+          }
+        : undefined
+    );
     ingestionMocks.findSourceForUrl.mockReturnValue(undefined);
     ingestionMocks.selectRefreshCandidates.mockImplementation(
       (batches: Array<{ source: unknown; entries: RssEntry[] }>) =>
@@ -112,6 +151,62 @@ describe("Relay service integration with mocked external boundaries", () => {
 
   afterEach(() => {
     repository.close();
+  });
+
+  it("keeps only non-rejected company impacts eligible for thesis evaluation", () => {
+    const update = makeUpdate(repository, "reviewed-materiality");
+    update.companyTickers = ["COHR", "VRT"];
+    update.thesisImpacts = [
+      {
+        ...update.thesisImpacts[0]!,
+        companyTicker: "COHR",
+        review: {
+          impactId: update.thesisImpacts[0]!.id,
+          updateId: update.id,
+          companyTicker: "COHR",
+          decision: "accepted",
+          reasonTags: ["useful-analysis"],
+          note: null,
+          createdAt: update.ingestedAt,
+          updatedAt: update.ingestedAt,
+        },
+      },
+      {
+        ...update.thesisImpacts[0]!,
+        id: `${update.id}-rejected-impact`,
+        companyTicker: "VRT",
+        review: {
+          impactId: `${update.id}-rejected-impact`,
+          updateId: update.id,
+          companyTicker: "VRT",
+          decision: "rejected",
+          reasonTags: ["overstated-materiality"],
+          note: null,
+          createdAt: update.ingestedAt,
+          updatedAt: update.ingestedAt,
+        },
+      },
+    ];
+
+    const [eligible] = selectThesisEvaluationEligibleUpdates([update]);
+    expect(eligible?.companyTickers).toEqual(["COHR"]);
+    expect(eligible?.thesisImpacts).toHaveLength(1);
+
+    expect(
+      selectThesisEvaluationEligibleUpdates([
+        {
+          ...update,
+          thesisImpacts: update.thesisImpacts.map((impact) => ({
+            ...impact,
+            review: {
+              ...impact.review!,
+              decision: "rejected",
+              reasonTags: ["overstated-materiality"],
+            },
+          })),
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it("routes pasted content to manual analysis without invoking URL ingestion", async () => {
@@ -143,6 +238,15 @@ describe("Relay service integration with mocked external boundaries", () => {
   });
 
   it("routes URL-only input to secure URL analysis with source metadata", async () => {
+    const profile = repository.addSourceProfile({
+      name: "Example infrastructure research",
+      domain: "example.com",
+      publicUrl: "https://example.com/research",
+      role: "primary",
+      authorityTier: "specialist",
+      layerIds: ["networking"],
+      thesisIds: ["macro-networking-bottleneck"],
+    });
     const input: ImportSourceInput = {
       title: "Public source",
       publisher: "Example Research",
@@ -163,7 +267,16 @@ describe("Relay service integration with mocked external boundaries", () => {
         publishedAt: input.publishedAt,
       },
       expect.objectContaining({
-        analysis: { context: expect.any(Object) },
+        analysis: {
+          context: expect.objectContaining({
+            sourceProfile: expect.objectContaining({
+              id: profile.id,
+              role: "primary",
+              authorityTier: "specialist",
+              layerIds: ["networking"],
+            }),
+          }),
+        },
       }),
     );
     expect(intelligenceMocks.analyzeImportedSource).not.toHaveBeenCalled();
@@ -229,7 +342,9 @@ describe("Relay service integration with mocked external boundaries", () => {
       ],
     });
     expect(ingestionMocks.fetchRssSource).toHaveBeenCalledWith(
-      ingestionMocks.ACTIVE_AUTOMATED_SOURCES[0],
+      expect.objectContaining(
+        ingestionMocks.ACTIVE_AUTOMATED_SOURCES[0],
+      ),
     );
     expect(ingestionMocks.normalizeRssEntry).toHaveBeenCalledWith(entry, {
       sourceType: "paper",
@@ -253,6 +368,27 @@ describe("Relay service integration with mocked external boundaries", () => {
       status: "ready",
       documentCount: 1,
     });
+
+    expect(repository.deleteUpdate(update.id)).toBe(true);
+    await expect(refreshPublicSources(repository)).resolves.toEqual({
+      imported: 0,
+      analyzed: 0,
+      errors: [],
+      items: [
+        {
+          sourceId: "arxiv-distributed-systems",
+          sourceName: "Mock arXiv",
+          title: entry.title,
+          sourceUrl: entry.sourceUrl,
+          isNew: false,
+          status: "duplicate",
+          updateId: null,
+          error: null,
+        },
+      ],
+    });
+    expect(intelligenceMocks.analyzeDocument).toHaveBeenCalledTimes(1);
+    expect(repository.getUpdate(update.id)).toBeNull();
   });
 
   it("refreshes a user-added feed with its saved analysis context", async () => {
@@ -522,6 +658,209 @@ describe("Relay service integration with mocked external boundaries", () => {
     expect(intelligenceMocks.evaluateTheses).toHaveBeenLastCalledWith(
       expect.objectContaining({ signals: [] }),
     );
+  });
+
+  it("explicitly requeues an already processed signal without changing a thesis", async () => {
+    const thesisBefore = repository.getThesis("company-vrt")?.currentVersion;
+
+    const result = await requeueSignalThesisEvaluation(
+      repository,
+      "vrt-fy25-q4",
+    );
+
+    expect(result).toMatchObject({
+      updateId: "vrt-fy25-q4",
+      alreadyQueued: false,
+      macroRouteCount: 1,
+      routesClassified: true,
+    });
+    expect(
+      repository.listRequeuedThesisEvaluationUpdates().map(
+        (update) => update.id,
+      ),
+    ).toContain("vrt-fy25-q4");
+    expect(repository.getThesis("company-vrt")?.currentVersion).toEqual(
+      thesisBefore,
+    );
+    expect(intelligenceMocks.evaluateTheses).not.toHaveBeenCalled();
+    expect(
+      intelligenceMocks.routeSignalToMacroTheses,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it("does not queue a signal with no material thesis impact", async () => {
+    const update = makeUpdate(repository, "not-eligible-for-requeue");
+    repository.persistAnalyzedUpdate({
+      ...update,
+      materiality: "not-material",
+      materialityReason: "The source repeats already captured evidence.",
+      novelty: "repetition",
+      sentiment: "not-material",
+      thesisImpacts: [],
+      macroThesisImpacts: [],
+    });
+
+    await expect(
+      requeueSignalThesisEvaluation(repository, update.id),
+    ).rejects.toThrow("not eligible for thesis evaluation");
+    expect(repository.listRequeuedThesisEvaluationUpdates()).toEqual([]);
+  });
+
+  it("does not repeatedly classify a queued signal when no macro route is relevant", async () => {
+    const update = {
+      ...makeUpdate(repository, "company-only-requeue"),
+      macroThesisImpacts: [],
+    };
+    repository.persistAnalyzedUpdate(update);
+    intelligenceMocks.routeSignalToMacroTheses.mockResolvedValueOnce([]);
+
+    await expect(
+      requeueSignalThesisEvaluation(repository, update.id),
+    ).resolves.toMatchObject({
+      alreadyQueued: false,
+      macroRouteCount: 0,
+      routesClassified: true,
+    });
+    await expect(
+      requeueSignalThesisEvaluation(repository, update.id),
+    ).resolves.toMatchObject({
+      alreadyQueued: true,
+      macroRouteCount: 0,
+      routesClassified: false,
+    });
+    expect(
+      intelligenceMocks.routeSignalToMacroTheses,
+    ).toHaveBeenCalledOnce();
+  });
+
+  it("persists a restored material re-evaluation when its deterministic ID was invalidated", async () => {
+    const thesis = repository.getThesis("company-vrt");
+    const update = repository.getUpdate("vrt-fy25-q4");
+    const claim = update?.claims[0];
+    const impact = update?.thesisImpacts[0];
+    if (!thesis || !update || !claim || !impact) {
+      throw new Error("Expected restored-material fixtures.");
+    }
+    const deterministicId = "restored-material-evaluation";
+    const original = repository.persistThesisEvaluation({
+      id: deterministicId,
+      thesisId: thesis.id,
+      outcome: "reinforced",
+      summary: "The power backlog reinforces the thesis.",
+      rationale: "The exact claim supports a modest confidence increase.",
+      proposedBelief: thesis.currentVersion.belief,
+      proposedConfidenceScore: thesis.currentVersion.confidenceScore + 2,
+      proposedUnknowns: thesis.currentVersion.unknowns,
+      proposedStrengtheningConditions:
+        thesis.currentVersion.strengtheningConditions,
+      proposedWeakeningConditions:
+        thesis.currentVersion.weakeningConditions,
+      signalIds: [update.id],
+      evidence: [{
+        claimId: claim.id,
+        stance: "supports",
+        rationale: "Direct backlog evidence.",
+      }],
+    });
+    const reviews = createImpactReviewRepository(repository.database);
+    const rejected = reviews.reviewImpact({
+      impactId: impact.id,
+      decision: "rejected",
+      reasonTags: ["overstated-materiality"],
+    });
+    repository.reconcileImpactReview({
+      updateId: rejected.updateId,
+      impactId: rejected.impactId,
+      companyTicker: rejected.companyTicker,
+      decision: rejected.decision,
+      previousDecision: null,
+    });
+    expect(
+      repository.getThesisEvaluation(original.id)?.reviewStatus,
+    ).toBe("rejected");
+
+    const restored = reviews.reviewImpact({
+      impactId: impact.id,
+      decision: "accepted",
+      reasonTags: ["useful-analysis"],
+    });
+    repository.reconcileImpactReview({
+      updateId: restored.updateId,
+      impactId: restored.impactId,
+      companyTicker: restored.companyTicker,
+      decision: restored.decision,
+      previousDecision: "rejected",
+    });
+    intelligenceMocks.evaluateTheses.mockImplementation(
+      async (input: {
+        theses: Array<{
+          id: string;
+          currentVersion: {
+            id: string;
+            belief: string;
+            confidenceScore: number;
+            unknowns: string[];
+            strengthenConditions: string[];
+            weakenConditions: string[];
+          };
+        }>;
+        signals: Array<{
+          id: string;
+          claims: Array<{ id: string }>;
+        }>;
+      }) => {
+        const targetThesis = input.theses.find(
+          (candidate) => candidate.id === thesis.id,
+        );
+        const signal = input.signals.find(
+          (candidate) => candidate.id === update.id,
+        );
+        if (!targetThesis || !signal?.claims[0]) {
+          throw new Error("Expected requeued evaluation input.");
+        }
+        return {
+          evaluatedAt: "2026-07-01T00:00:00.000Z",
+          model: "mock-evaluation-model",
+          evaluations: [{
+            id: deterministicId,
+            thesisId: targetThesis.id,
+            previousVersionId: targetThesis.currentVersion.id,
+            outcome: "reinforced" as const,
+            proposedBelief: null,
+            proposedConfidenceScore:
+              targetThesis.currentVersion.confidenceScore + 2,
+            confidenceDelta: 2,
+            rationale:
+              "The restored material impact again clears the reinforcement threshold.",
+            supportingEvidence: [{
+              signalId: signal.id,
+              claimIds: [signal.claims[0].id],
+              reason: "The exact backlog claim supports the thesis.",
+            }],
+            opposingEvidence: [],
+            signalIds: [signal.id],
+            claimIds: [signal.claims[0].id],
+            independentSourceCount: 1,
+            unknowns: targetThesis.currentVersion.unknowns,
+            strengthenConditions:
+              targetThesis.currentVersion.strengthenConditions,
+            weakenConditions:
+              targetThesis.currentVersion.weakenConditions,
+            evaluatedAt: "2026-07-01T00:00:00.000Z",
+            model: "mock-evaluation-model",
+          }],
+        };
+      },
+    );
+
+    const result = await evaluatePendingTheses(repository);
+
+    expect(result.evaluations).toHaveLength(1);
+    expect(result.evaluations[0]?.id).toMatch(
+      /^restored-material-evaluation-retry-/,
+    );
+    expect(result.evaluations[0]?.reviewStatus).toBe("pending");
+    expect(repository.listRequeuedThesisEvaluationUpdates()).toEqual([]);
   });
 
   it("generates the daily brief from belief evaluations when they exist", async () => {

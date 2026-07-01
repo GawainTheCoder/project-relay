@@ -10,11 +10,13 @@ import { Link } from "react-router-dom";
 import type {
   ImpactReviewInput,
   IntelligenceUpdate,
+  MacroThesisRelevance,
 } from "../../../shared/contracts";
 import { EvidencePanel } from "../../components/EvidencePanel";
 import { SentimentBadge } from "../../components/ui/StatusBadge";
 
 interface ThesisDecisionPanelProps {
+  macroThesisTitles: Readonly<Record<string, string>>;
   onClose?: () => void;
   onReview: (impactId: string, input: ImpactReviewInput) => Promise<void>;
   selectedClaimId: string | null;
@@ -22,6 +24,7 @@ interface ThesisDecisionPanelProps {
 }
 
 export function ThesisDecisionPanel({
+  macroThesisTitles,
   onClose,
   onReview,
   selectedClaimId,
@@ -58,9 +61,9 @@ export function ThesisDecisionPanel({
     <aside className="relay-scrollbar flex h-full min-h-0 flex-col overflow-y-auto border-l border-relay-border bg-relay-deep">
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-relay-border px-5">
         <div>
-          <h2 className="text-sm font-semibold">Thesis impact</h2>
+          <h2 className="text-sm font-semibold">Thesis routing</h2>
           <p className="mt-0.5 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-muted">
-            Company-specific direction
+            Company and macro relevance
           </p>
         </div>
         {onClose ? (
@@ -78,6 +81,13 @@ export function ThesisDecisionPanel({
       <section className="border-b border-relay-border p-5">
         {update.thesisImpacts.length ? (
           <div className="space-y-3">
+            <p className="text-[11px] leading-5 text-relay-muted">
+              This reviews the proposed thesis impact, not the source.
+              <span className="text-relay-text"> Material</span> keeps the
+              impact eligible for thesis updates and briefs.
+              <span className="text-relay-text"> Not material</span> excludes
+              this impact; the signal remains in the ledger.
+            </p>
             {update.thesisImpacts.map((impact) => {
               const isWorking = workingImpactId === impact.id;
               const feedback =
@@ -158,12 +168,56 @@ export function ThesisDecisionPanel({
           </div>
         ) : (
           <div className="rounded-md border border-relay-border bg-relay-surface p-4">
-            <p className="text-sm font-medium">No thesis change</p>
+            <p className="text-sm font-medium">
+              No company thesis impact
+            </p>
             <p className="mt-2 text-xs leading-5 text-relay-muted">
               Relay found no company-specific impact worth elevating.
             </p>
           </div>
         )}
+
+        {update.macroThesisImpacts.length ? (
+          <div className="mt-5 border-t border-relay-border pt-5">
+            <h3 className="text-sm font-semibold">Macro thesis routing</h3>
+            <p className="mt-2 text-[11px] leading-5 text-relay-muted">
+              These are evidence-routing decisions, not accepted thesis
+              changes. Evaluate theses creates reviewable proposals; only
+              accepting a proposal updates a thesis.
+            </p>
+            <div className="mt-3 space-y-3">
+              {update.macroThesisImpacts.map((impact) => (
+                <article
+                  className="rounded-md border border-relay-border bg-relay-surface p-3"
+                  key={impact.id}
+                >
+                  <Link
+                    className="text-xs font-semibold leading-5 text-relay-text hover:text-relay-accent"
+                    to={`/theses/${impact.thesisId}`}
+                  >
+                    {macroThesisTitles[impact.thesisId] ??
+                      impact.thesisId}
+                  </Link>
+                  <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-[0.07em]">
+                    <span
+                      className={`rounded border px-1.5 py-0.5 ${macroRelevanceClassName(
+                        impact.relevance,
+                      )}`}
+                    >
+                      {impact.relevance}
+                    </span>
+                    <span className="text-relay-subtle">
+                      {impact.stance}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-5 text-relay-muted">
+                    {impact.rationale}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {actionError ? (
           <p className="mt-3 text-xs leading-5 text-relay-negative" role="alert">
@@ -181,4 +235,17 @@ export function ThesisDecisionPanel({
       </div>
     </aside>
   );
+}
+
+function macroRelevanceClassName(
+  relevance: MacroThesisRelevance,
+): string {
+  switch (relevance) {
+    case "primary":
+      return "border-relay-warning/40 bg-relay-warning/10 text-relay-warning";
+    case "secondary":
+      return "border-relay-accent/40 bg-relay-accent/10 text-relay-accent";
+    case "context":
+      return "border-relay-border-strong bg-relay-raised text-relay-muted";
+  }
 }

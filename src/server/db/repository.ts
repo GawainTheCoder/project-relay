@@ -12,6 +12,7 @@ import type {
   IntelligenceUpdate,
   ResearchSource,
   ResearchSourceInput,
+  SourceProfileInput,
   SourceKind,
   StackLayer,
   Thesis,
@@ -33,6 +34,10 @@ import {
 } from "../seeds/index.js";
 import { migrateDatabase } from "./schema.js";
 import { canonicalizeUrl } from "../ingestion/normalize.js";
+
+const IMPACT_REVIEW_INVALIDATION_PREFIX = "Invalidated after impact ";
+const SIGNAL_REEVALUATION_INVALIDATION_PREFIX =
+  "Superseded by signal re-evaluation ";
 
 interface CatalogSeed {
   brief?: DailyBrief;
@@ -71,6 +76,13 @@ export interface ThesisEvaluationRunInput {
   completedAt?: string | undefined;
 }
 
+export interface ThesisEvaluationRequeueRecord {
+  updateId: string;
+  requestedAt: string;
+  alreadyQueued: boolean;
+  invalidatedEvaluationIds: string[];
+}
+
 export interface SourceDocumentInput {
   title: string;
   publisher: string;
@@ -84,7 +96,7 @@ export interface SourceDocumentInput {
 
 export interface SourceDocumentRecord {
   id: string;
-  status: "pending" | "analyzed" | "error";
+  status: "pending" | "analyzed" | "error" | "suppressed";
   updateId: string | null;
   ingestedAt: string;
   duplicate: boolean;
@@ -168,14 +180,19 @@ export class RelayRepository {
     const insertSource = this.database.prepare(`
       INSERT INTO research_sources (
         id, name, type, url, enabled, status, last_synced_at, document_count,
-        archived, user_added, layer_ids_json, company_tickers_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)
+        archived, user_added, layer_ids_json, company_tickers_json, domain,
+        role, authority_tier, thesis_ids_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         type = excluded.type,
         url = excluded.url,
         layer_ids_json = excluded.layer_ids_json,
-        company_tickers_json = excluded.company_tickers_json
+        company_tickers_json = excluded.company_tickers_json,
+        domain = excluded.domain,
+        role = excluded.role,
+        authority_tier = excluded.authority_tier,
+        thesis_ids_json = excluded.thesis_ids_json
     `);
 
     this.withTransaction(() => {
@@ -216,6 +233,10 @@ export class RelayRepository {
           source.documentCount,
           JSON.stringify(source.layerIds),
           JSON.stringify(source.companyTickers),
+          source.domain,
+          source.role,
+          source.authorityTier,
+          JSON.stringify(source.thesisIds),
         );
       });
       this.database
@@ -251,7 +272,7 @@ export class RelayRepository {
     }
   }
 
-  getDashboard(): DashboardPayload {
+  getDashboard(): Omit<DashboardPayload, "sourceCoverage"> {
     const briefRow = row(
       this.database
         .prepare("SELECT id FROM daily_briefs ORDER BY date DESC, generated_at DESC LIMIT 1")
@@ -680,12 +701,6 @@ export class RelayRepository {
   persistThesisEvaluation(
     input: ThesisEvaluationInput,
   ): ThesisEvaluation {
-    if (input.id) {
-      const existing = this.getThesisEvaluation(input.id);
-      if (existing) {
-        return existing;
-      }
-    }
     const thesis = this.getThesis(input.thesisId);
     if (!thesis || thesis.status !== "active") {
       throw new RangeError(`Unknown active thesis: ${input.thesisId}`);
@@ -807,7 +822,56 @@ export class RelayRepository {
       );
     }
 
-    const id = input.id?.trim() || `thesis-evaluation-${randomUUID()}`;
+    const requestedId =
+      input.id?.trim() || `thesis-evaluation-${randomUUID()}`;
+    const existingEvaluation = this.getThesisEvaluation(requestedId);
+    const repeatsExplicitlyRequeuedSignal =
+      existingEvaluation?.reviewStatus !== "pending" &&
+      signalIds.some((signalId) =>
+        this.database
+          .prepare(`
+            SELECT 1
+            FROM thesis_evaluation_requeue
+            WHERE update_id = ?
+          `)
+          .get(signalId),
+      );
+    if (
+      existingEvaluation &&
+      !wasSystemInvalidated(existingEvaluation) &&
+      !repeatsExplicitlyRequeuedSignal
+    ) {
+      if (
+        existingEvaluation.thesisId !== thesis.id ||
+        existingEvaluation.previousVersionId !== previous.id ||
+        existingEvaluation.outcome !== input.outcome ||
+        existingEvaluation.proposedBelief.trim() !== proposal.belief.trim() ||
+        existingEvaluation.proposedConfidenceScore !==
+          proposal.confidenceScore ||
+        !sameTextSet(existingEvaluation.proposedUnknowns, proposal.unknowns) ||
+        !sameTextSet(
+          existingEvaluation.proposedStrengtheningConditions,
+          proposal.strengtheningConditions,
+        ) ||
+        !sameTextSet(
+          existingEvaluation.proposedWeakeningConditions,
+          proposal.weakeningConditions,
+        ) ||
+        !sameTextSet(existingEvaluation.signalIds, signalIds) ||
+        !sameTextSet(
+          existingEvaluation.claimIds,
+          evidence.map((item) => item.claimId),
+        )
+      ) {
+        throw new TypeError(
+          `Thesis evaluation ID ${requestedId} already belongs to a different proposal.`,
+        );
+      }
+      return existingEvaluation;
+    }
+    const id = existingEvaluation
+      ? `${requestedId}-retry-${randomUUID()}`
+      : requestedId;
     const createdAt = new Date().toISOString();
     this.withTransaction(() => {
       this.database
@@ -1006,6 +1070,225 @@ export class RelayRepository {
     return latest ? text(latest, "created_at") : null;
   }
 
+  listRequeuedThesisEvaluationUpdates(): IntelligenceUpdate[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT update_id
+          FROM thesis_evaluation_requeue
+          ORDER BY requested_at, update_id
+        `)
+        .all(),
+    )
+      .map((queueRow) => this.getUpdate(text(queueRow, "update_id")))
+      .filter((update): update is IntelligenceUpdate => update !== null);
+  }
+
+  getThesisEvaluationRequeueReason(updateId: string): string | null {
+    const queued = row(
+      this.database
+        .prepare(`
+          SELECT reason
+          FROM thesis_evaluation_requeue
+          WHERE update_id = ?
+        `)
+        .get(updateId),
+    );
+    return queued ? text(queued, "reason") : null;
+  }
+
+  queueThesisEvaluationUpdate(
+    updateId: string,
+    reason = "Signal was manually queued for thesis re-evaluation.",
+  ): ThesisEvaluationRequeueRecord {
+    if (!this.getUpdate(updateId)) {
+      throw new RangeError(`Unknown signal: ${updateId}`);
+    }
+    const existing = row(
+      this.database
+        .prepare(`
+          SELECT requested_at
+          FROM thesis_evaluation_requeue
+          WHERE update_id = ?
+        `)
+        .get(updateId),
+    );
+    const invalidatedEvaluationIds = rows(
+      this.database
+        .prepare(`
+          SELECT evaluation.id
+          FROM thesis_evaluations AS evaluation
+          INNER JOIN thesis_evaluation_updates AS link
+            ON link.evaluation_id = evaluation.id
+          WHERE link.update_id = ?
+            AND evaluation.review_status IN ('pending', 'deferred')
+          ORDER BY evaluation.created_at, evaluation.id
+        `)
+        .all(updateId),
+    ).map((evaluationRow) => text(evaluationRow, "id"));
+    const requestedAt = existing
+      ? text(existing, "requested_at")
+      : new Date().toISOString();
+    const reviewNote =
+      `${SIGNAL_REEVALUATION_INVALIDATION_PREFIX}was requested for signal ${updateId}.`;
+
+    this.withTransaction(() => {
+      const invalidate = this.database.prepare(`
+        UPDATE thesis_evaluations
+        SET review_status = 'rejected',
+            review_note = ?,
+            reviewed_at = ?,
+            accepted_version_id = NULL
+        WHERE id = ?
+          AND review_status IN ('pending', 'deferred')
+      `);
+      invalidatedEvaluationIds.forEach((evaluationId) => {
+        invalidate.run(reviewNote, requestedAt, evaluationId);
+      });
+      if (!existing) {
+        this.database
+          .prepare(`
+            INSERT INTO thesis_evaluation_requeue (
+              update_id, requested_at, reason
+            ) VALUES (?, ?, ?)
+          `)
+          .run(
+            updateId,
+            requestedAt,
+            reason.trim() || "Manual re-evaluation",
+          );
+      } else {
+        this.database
+          .prepare(`
+            UPDATE thesis_evaluation_requeue
+            SET reason = ?
+            WHERE update_id = ?
+          `)
+          .run(reason.trim() || "Manual re-evaluation", updateId);
+      }
+    });
+
+    return {
+      updateId,
+      requestedAt,
+      alreadyQueued: Boolean(existing),
+      invalidatedEvaluationIds,
+    };
+  }
+
+  clearThesisEvaluationRequeue(updateIds: readonly string[]): void {
+    const remove = this.database.prepare(
+      "DELETE FROM thesis_evaluation_requeue WHERE update_id = ?",
+    );
+    this.withTransaction(() => {
+      uniqueStrings(updateIds).forEach((updateId) => remove.run(updateId));
+    });
+  }
+
+  reconcileImpactReview(input: {
+    updateId: string;
+    impactId: string;
+    companyTicker: string;
+    decision: ImpactReview["decision"];
+    previousDecision: ImpactReview["decision"] | null;
+  }): {
+    invalidatedEvaluationIds: string[];
+    requeued: boolean;
+  } {
+    const update = this.getUpdate(input.updateId);
+    if (!update) {
+      throw new RangeError(`Unknown signal: ${input.updateId}`);
+    }
+    const decisionChanged = input.previousDecision !== input.decision;
+    if (!decisionChanged) {
+      return { invalidatedEvaluationIds: [], requeued: false };
+    }
+
+    const fullyRejected = update.thesisImpacts.length > 0 &&
+      update.thesisImpacts.every(
+        (impact) =>
+          impact.decision === "rejected" ||
+          impact.review?.decision === "rejected",
+      );
+    const invalidatedEvaluationIds =
+      input.decision === "rejected"
+        ? this.listThesisEvaluations()
+            .filter(
+              (evaluation) =>
+                (evaluation.reviewStatus === "pending" ||
+                  evaluation.reviewStatus === "deferred") &&
+                evaluation.signalIds.includes(input.updateId),
+            )
+            .filter((evaluation) => {
+              if (fullyRejected) {
+                return true;
+              }
+              const thesis = this.getThesis(evaluation.thesisId);
+              return thesis?.kind === "company" &&
+                thesis.companyTickers.includes(
+                  input.companyTicker.toUpperCase(),
+                );
+            })
+            .map((evaluation) => evaluation.id)
+        : [];
+    const reviewedAt = new Date().toISOString();
+    const requeued =
+      input.decision === "accepted" &&
+      input.previousDecision !== "accepted";
+
+    this.withTransaction(() => {
+      const invalidate = this.database.prepare(`
+        UPDATE thesis_evaluations
+        SET review_status = 'rejected',
+            review_note = ?,
+            reviewed_at = ?,
+            accepted_version_id = NULL
+        WHERE id = ?
+          AND review_status IN ('pending', 'deferred')
+      `);
+      invalidatedEvaluationIds.forEach((evaluationId) => {
+        invalidate.run(
+          `${IMPACT_REVIEW_INVALIDATION_PREFIX}${input.impactId} was marked not material.`,
+          reviewedAt,
+          evaluationId,
+        );
+      });
+      this.database
+        .prepare(`
+          DELETE FROM daily_briefs
+          WHERE id IN (
+            SELECT brief_id
+            FROM brief_updates
+            WHERE update_id = ?
+            UNION
+            SELECT brief_link.brief_id
+            FROM brief_thesis_evaluations AS brief_link
+            INNER JOIN thesis_evaluation_updates AS evaluation_link
+              ON evaluation_link.evaluation_id = brief_link.evaluation_id
+            WHERE evaluation_link.update_id = ?
+          )
+        `)
+        .run(input.updateId, input.updateId);
+      if (requeued) {
+        this.database
+          .prepare(`
+            INSERT INTO thesis_evaluation_requeue (
+              update_id, requested_at, reason
+            ) VALUES (?, ?, ?)
+            ON CONFLICT(update_id) DO UPDATE SET
+              requested_at = excluded.requested_at,
+              reason = excluded.reason
+          `)
+          .run(
+            input.updateId,
+            reviewedAt,
+            `Impact ${input.impactId} was marked material.`,
+          );
+      }
+    });
+    return { invalidatedEvaluationIds, requeued };
+  }
+
   reviewThesisEvaluation(
     id: string,
     input: ThesisEvaluationReviewInput,
@@ -1152,13 +1435,17 @@ export class RelayRepository {
   addSource(input: ResearchSourceInput): ResearchSource {
     const id = `source-${randomUUID()}`;
     const url = canonicalizeUrl(input.url);
+    const domain = normalizedDomain(new URL(url).hostname);
     this.database
       .prepare(`
         INSERT INTO research_sources (
           id, name, type, url, enabled, status, last_synced_at,
           document_count, archived, user_added, layer_ids_json,
-          company_tickers_json
-        ) VALUES (?, ?, ?, ?, ?, 'ready', NULL, 0, 0, 1, ?, ?)
+          company_tickers_json, domain, role, authority_tier, thesis_ids_json
+        ) VALUES (
+          ?, ?, ?, ?, ?, 'ready', NULL, 0, 0, 1, ?, ?,
+          ?, 'primary', 'unknown', '[]'
+        )
       `)
       .run(
         id,
@@ -1170,10 +1457,106 @@ export class RelayRepository {
         JSON.stringify(
           (input.companyTickers ?? []).map((ticker) => ticker.toUpperCase()),
         ),
+        domain,
       );
     const source = this.getSource(id);
     if (!source) {
       throw new Error(`Failed to reload source ${id}`);
+    }
+    return source;
+  }
+
+  addSourceProfile(input: SourceProfileInput): ResearchSource {
+    const id = `source-profile-${randomUUID()}`;
+    const url = canonicalizeUrl(input.publicUrl);
+    const domain = normalizedDomain(input.domain);
+    const publicUrlDomain = normalizedDomain(new URL(url).hostname);
+    if (!domainMatches(publicUrlDomain, domain)) {
+      throw new RangeError(
+        "The public URL must use the registered source domain.",
+      );
+    }
+    const companyTickers = uniqueStrings(
+      (input.companyTickers ?? []).map((ticker) => ticker.toUpperCase()),
+    );
+    companyTickers.forEach((ticker) => {
+      if (!this.getCompany(ticker)) {
+        throw new RangeError(`Unknown company ticker: ${ticker}`);
+      }
+    });
+    const thesisIds = uniqueStrings(input.thesisIds ?? []);
+    thesisIds.forEach((thesisId) => {
+      const thesis = this.getThesis(thesisId);
+      if (!thesis || thesis.kind !== "macro") {
+        throw new RangeError(`Unknown macro thesis: ${thesisId}`);
+      }
+    });
+    this.database
+      .prepare(`
+        INSERT INTO research_sources (
+          id, name, type, url, enabled, status, last_synced_at,
+          document_count, archived, user_added, layer_ids_json,
+          company_tickers_json, domain, role, authority_tier, thesis_ids_json
+        ) VALUES (
+          ?, ?, 'manual', ?, 0, 'ready', NULL, 0, 0, 1, ?, ?, ?, ?, ?, ?
+        )
+      `)
+      .run(
+        id,
+        input.name,
+        url,
+        JSON.stringify(input.layerIds ?? []),
+        JSON.stringify(companyTickers),
+        domain,
+        input.role,
+        input.authorityTier,
+        JSON.stringify(thesisIds),
+      );
+    const source = this.getSource(id);
+    if (!source) {
+      throw new Error(`Failed to reload source profile ${id}`);
+    }
+    return source;
+  }
+
+  findSourceProfileForUrl(sourceUrl: string): ResearchSource | null {
+    let hostname: string;
+    try {
+      hostname = normalizedDomain(new URL(sourceUrl).hostname);
+    } catch {
+      return null;
+    }
+    return (
+      this.listSources()
+        .filter((source) => source.domain)
+        .filter((source) => domainMatches(hostname, source.domain ?? ""))
+        .toSorted(
+          (left, right) =>
+            (right.domain?.length ?? 0) - (left.domain?.length ?? 0),
+        )[0] ?? null
+    );
+  }
+
+  getSourceProfile(
+    id: string,
+    sourceUrl?: string,
+  ): ResearchSource {
+    const source = this.getSource(id);
+    if (
+      !source ||
+      !source.domain ||
+      ["rss", "paper", "release"].includes(source.type) ||
+      source.id === "manual-imports"
+    ) {
+      throw new RangeError(`Unknown trusted source profile: ${id}`);
+    }
+    if (sourceUrl) {
+      const hostname = normalizedDomain(new URL(sourceUrl).hostname);
+      if (!domainMatches(hostname, source.domain)) {
+        throw new RangeError(
+          "The signal URL does not match the selected source profile.",
+        );
+      }
     }
     return source;
   }
@@ -1195,6 +1578,14 @@ export class RelayRepository {
       name: text(sourceRow, "name"),
       type: text(sourceRow, "type") as ResearchSource["type"],
       url: nullableText(sourceRow, "url"),
+      domain:
+        nullableText(sourceRow, "domain") ??
+        domainFromUrl(nullableText(sourceRow, "url")),
+      role: text(sourceRow, "role") as ResearchSource["role"],
+      authorityTier: text(
+        sourceRow,
+        "authority_tier",
+      ) as ResearchSource["authorityTier"],
       enabled: sourceRow.enabled === 1,
       userAdded: sourceRow.user_added === 1,
       layerIds: parseJson<ResearchSource["layerIds"]>(
@@ -1205,6 +1596,7 @@ export class RelayRepository {
         sourceRow.company_tickers_json,
         [],
       ),
+      thesisIds: parseJson<string[]>(sourceRow.thesis_ids_json, []),
       status: text(sourceRow, "status") as ResearchSource["status"],
       lastSyncedAt: nullableText(sourceRow, "last_synced_at"),
       documentCount:
@@ -1288,6 +1680,22 @@ export class RelayRepository {
         .prepare("SELECT * FROM thesis_impacts WHERE update_id = ? ORDER BY rowid")
         .all(id),
     );
+    const macroImpactRows = rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM update_macro_thesis_impacts
+          WHERE update_id = ?
+          ORDER BY
+            CASE relevance
+              WHEN 'primary' THEN 1
+              WHEN 'secondary' THEN 2
+              ELSE 3
+            END,
+            rowid
+        `)
+        .all(id),
+    );
     const reviewStatement = this.database.prepare(
       "SELECT * FROM impact_reviews WHERE impact_id = ?",
     );
@@ -1351,8 +1759,103 @@ export class RelayRepository {
           review: reviewRow ? mapImpactReview(reviewRow) : null,
         };
       }),
+      macroThesisImpacts: macroImpactRows.map((impactRow) => ({
+        id: text(impactRow, "id"),
+        thesisId: text(impactRow, "thesis_id"),
+        relevance: text(
+          impactRow,
+          "relevance",
+        ) as NonNullable<
+          IntelligenceUpdate["macroThesisImpacts"]
+        >[number]["relevance"],
+        stance: text(
+          impactRow,
+          "stance",
+        ) as NonNullable<
+          IntelligenceUpdate["macroThesisImpacts"]
+        >[number]["stance"],
+        rationale: text(impactRow, "rationale"),
+        claimIds: parseJson<string[]>(impactRow.claim_ids_json, []),
+      })),
       model: nullableText(updateRow, "model"),
     };
+  }
+
+  deleteUpdate(id: string): boolean {
+    if (!this.getUpdate(id)) {
+      return false;
+    }
+    const acceptedEvaluation = row(
+      this.database
+        .prepare(`
+          SELECT evaluation.id
+          FROM thesis_evaluations AS evaluation
+          INNER JOIN thesis_evaluation_updates AS link
+            ON link.evaluation_id = evaluation.id
+          WHERE link.update_id = ?
+            AND evaluation.review_status = 'accepted'
+          LIMIT 1
+        `)
+        .get(id),
+    );
+    if (acceptedEvaluation) {
+      throw new TypeError(
+        "This signal supports an accepted thesis change and cannot be deleted.",
+      );
+    }
+
+    this.withTransaction(() => {
+      this.database
+        .prepare(`
+          DELETE FROM daily_briefs
+          WHERE id IN (
+            SELECT brief_id
+            FROM brief_updates
+            WHERE update_id = ?
+            UNION
+            SELECT brief_claims.brief_id
+            FROM brief_claims
+            INNER JOIN evidence_claims
+              ON evidence_claims.id = brief_claims.claim_id
+            WHERE evidence_claims.update_id = ?
+            UNION
+            SELECT brief_link.brief_id
+            FROM brief_thesis_evaluations AS brief_link
+            INNER JOIN thesis_evaluation_updates AS evaluation_link
+              ON evaluation_link.evaluation_id = brief_link.evaluation_id
+            WHERE evaluation_link.update_id = ?
+          )
+        `)
+        .run(id, id, id);
+      this.database
+        .prepare(`
+          DELETE FROM thesis_evaluations
+          WHERE id IN (
+            SELECT evaluation.id
+            FROM thesis_evaluations AS evaluation
+            INNER JOIN thesis_evaluation_updates AS link
+              ON link.evaluation_id = evaluation.id
+            WHERE link.update_id = ?
+              AND evaluation.review_status <> 'accepted'
+          )
+        `)
+        .run(id);
+      this.database
+        .prepare("DELETE FROM impact_reviews WHERE update_id = ?")
+        .run(id);
+      this.database
+        .prepare(`
+          UPDATE source_documents
+          SET update_id = NULL, suppressed_at = ?,
+              error_message = NULL
+          WHERE update_id = ?
+        `)
+        .run(new Date().toISOString(), id);
+      this.database
+        .prepare("DELETE FROM intelligence_updates WHERE id = ?")
+        .run(id);
+    });
+    return true;
   }
 
   persistAnalyzedUpdate(update: IntelligenceUpdate): IntelligenceUpdate {
@@ -1413,6 +1916,18 @@ export class RelayRepository {
           ELSE thesis_impacts.decision
         END
     `);
+    const insertMacroImpact = this.database.prepare(`
+      INSERT INTO update_macro_thesis_impacts (
+        id, update_id, thesis_id, relevance, stance, rationale,
+        claim_ids_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(update_id, thesis_id) DO UPDATE SET
+        id = excluded.id,
+        relevance = excluded.relevance,
+        stance = excluded.stance,
+        rationale = excluded.rationale,
+        claim_ids_json = excluded.claim_ids_json
+    `);
     const knownLayer = this.database.prepare("SELECT 1 FROM stack_layers WHERE id = ?");
     const knownCompany = this.database.prepare("SELECT 1 FROM companies WHERE ticker = ?");
 
@@ -1469,6 +1984,27 @@ export class RelayRepository {
             .run(impactId);
         }
       });
+      const nextMacroImpactIds = new Set(
+        (update.macroThesisImpacts ?? []).map((impact) => impact.id),
+      );
+      rows(
+        this.database
+          .prepare(`
+            SELECT id
+            FROM update_macro_thesis_impacts
+            WHERE update_id = ?
+          `)
+          .all(update.id),
+      ).forEach((impactRow) => {
+        const impactId = text(impactRow, "id");
+        if (!nextMacroImpactIds.has(impactId)) {
+          this.database
+            .prepare(
+              "DELETE FROM update_macro_thesis_impacts WHERE id = ?",
+            )
+            .run(impactId);
+        }
+      });
 
       update.layerIds.forEach((layerId) => {
         if (knownLayer.get(layerId)) {
@@ -1488,6 +2024,17 @@ export class RelayRepository {
           claim.quote,
           claim.sourceId,
           claim.locator,
+        );
+      });
+      (update.macroThesisImpacts ?? []).forEach((impact) => {
+        insertMacroImpact.run(
+          impact.id,
+          update.id,
+          impact.thesisId,
+          impact.relevance,
+          impact.stance,
+          impact.rationale,
+          JSON.stringify(impact.claimIds),
         );
       });
       update.thesisImpacts.forEach((impact) => {
@@ -1677,7 +2224,7 @@ export class RelayRepository {
     const existing = row(
       this.database
         .prepare(`
-          SELECT id, analysis_status, update_id, ingested_at
+          SELECT id, analysis_status, update_id, ingested_at, suppressed_at
           FROM source_documents WHERE content_hash = ?
         `)
         .get(contentHash),
@@ -1685,10 +2232,12 @@ export class RelayRepository {
     if (existing) {
       return {
         id: text(existing, "id"),
-        status: text(
-          existing,
-          "analysis_status",
-        ) as SourceDocumentRecord["status"],
+        status: existing.suppressed_at
+          ? "suppressed"
+          : text(
+              existing,
+              "analysis_status",
+            ) as SourceDocumentRecord["status"],
         updateId: nullableText(existing, "update_id"),
         ingestedAt: text(existing, "ingested_at"),
         duplicate: true,
@@ -1735,7 +2284,7 @@ export class RelayRepository {
       .prepare(`
         UPDATE source_documents
         SET analysis_status = 'analyzed', update_id = ?, error_message = NULL
-        WHERE id = ?
+        WHERE id = ? AND suppressed_at IS NULL
       `)
       .run(updateId, documentId);
   }
@@ -1745,7 +2294,7 @@ export class RelayRepository {
       .prepare(`
         UPDATE source_documents
         SET analysis_status = 'error', error_message = ?
-        WHERE id = ?
+        WHERE id = ? AND suppressed_at IS NULL
       `)
       .run(sanitizeStoredError(message), documentId);
   }
@@ -1944,6 +2493,15 @@ export class RelayRepository {
   }
 }
 
+function wasSystemInvalidated(evaluation: ThesisEvaluation): boolean {
+  return Boolean(
+    evaluation.reviewNote?.startsWith(IMPACT_REVIEW_INVALIDATION_PREFIX) ||
+      evaluation.reviewNote?.startsWith(
+        SIGNAL_REEVALUATION_INVALIDATION_PREFIX,
+      ),
+  );
+}
+
 export function createRelayRepository(
   databasePath = process.env.RELAY_DATABASE_PATH ??
     resolve(process.cwd(), "data", "relay.sqlite"),
@@ -2084,6 +2642,25 @@ function uniqueStrings(items: readonly string[]): string[] {
   return [...new Set(items.map((item) => item.trim()).filter(Boolean))];
 }
 
+function normalizedDomain(value: string): string {
+  return value.trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+}
+
+function domainMatches(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith(`.${domain}`);
+}
+
+function domainFromUrl(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return normalizedDomain(new URL(value).hostname);
+  } catch {
+    return null;
+  }
+}
+
 function confidenceToScore(confidence: Company["confidence"]): number {
   switch (confidence) {
     case "high":
@@ -2120,6 +2697,11 @@ function assertSignalInvariants(update: IntelligenceUpdate): void {
         "Not-material signals cannot contain thesis impacts.",
       );
     }
+    if ((update.macroThesisImpacts?.length ?? 0) > 0) {
+      throw new TypeError(
+        "Not-material signals cannot contain macro-thesis impacts.",
+      );
+    }
     return;
   }
 
@@ -2134,7 +2716,6 @@ function assertSignalInvariants(update: IntelligenceUpdate): void {
     );
   }
   if (
-    update.thesisImpacts.length === 0 ||
     update.thesisImpacts.some(
       (impact) =>
         impact.direction === "not-material" ||
@@ -2142,7 +2723,46 @@ function assertSignalInvariants(update: IntelligenceUpdate): void {
     )
   ) {
     throw new TypeError(
-      "Material signals must contain a concrete thesis delta.",
+      "Company thesis impacts must contain a concrete thesis delta.",
+    );
+  }
+  const claimIds = new Set(update.claims.map((claim) => claim.id));
+  const routedThesisIds = new Set<string>();
+  for (const impact of update.macroThesisImpacts ?? []) {
+    if (routedThesisIds.has(impact.thesisId)) {
+      throw new TypeError(
+        "A signal cannot route to the same macro thesis more than once.",
+      );
+    }
+    routedThesisIds.add(impact.thesisId);
+    if (
+      !impact.rationale.trim() ||
+      impact.claimIds.length === 0 ||
+      impact.claimIds.some((claimId) => !claimIds.has(claimId))
+    ) {
+      throw new TypeError(
+        "Macro-thesis impacts must cite exact claims from their signal.",
+      );
+    }
+    if (
+      (impact.relevance === "context") !==
+      (impact.stance === "context")
+    ) {
+      throw new TypeError(
+        "Macro-thesis relevance and evidence stance are inconsistent.",
+      );
+    }
+  }
+  if (
+    update.thesisImpacts.length === 0 &&
+    !(update.macroThesisImpacts ?? []).some(
+      (impact) =>
+        impact.relevance === "primary" ||
+        impact.relevance === "secondary",
+    )
+  ) {
+    throw new TypeError(
+      "Material signals require a company impact or direct macro-thesis impact.",
     );
   }
 }

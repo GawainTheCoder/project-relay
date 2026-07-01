@@ -64,7 +64,7 @@ thesis.
   `/theses/:beliefId` shows supporting, opposing, and contextual evidence;
   unknowns; strengthening and weakening conditions; pending evaluations; and
   accepted version history.
-- **Evidence** (`/signals`) is the immutable source-derived signal ledger. It
+- **Signals** (`/signals`) is the source-derived evidence ledger. It
   remains inspectable for provenance and review without being the product
   center.
 - **Briefs** keeps a dated archive of mental-model conclusions with their
@@ -91,19 +91,30 @@ a trusted-source catalog:
 - Use **Remove thesis** on a company thesis detail page to take it off the active
   watchlist.
   Relay archives the company instead of deleting historical signals or evidence.
-- Use **Sources → Add source** to add an RSS, release, or research feed. Added
-  feeds participate in the same normalization, deduplication, topic filtering,
-  and analysis pipeline as built-in automated feeds.
+- Use **Sources → Add automated feed** to add an RSS, release, or research
+  feed. Added feeds participate in the same normalization, deduplication,
+  topic filtering, and analysis pipeline as built-in automated feeds.
+- Use **Add trusted website** to register a non-feed publisher or company
+  domain with its source role, authority tier, infrastructure layers, affected
+  companies, and macro theses. Relay does not crawl these profiles
+  automatically.
 - Use the remove control on any source to stop tracking it. The source is
   archived so previously imported evidence keeps valid provenance.
 - Use **Add signal** for a public article URL or a permitted pasted excerpt.
   Relay leaves a persistent success or error result after the dialog closes;
   successful analysis includes a direct **View signal** link.
 
-After **Refresh**, the result ledger names every feed item Relay handled and
+Use a source row's **Refresh** control to check one automated feed, or
+**Refresh all** to check every enabled feed. The result ledger names every feed item Relay handled and
 marks it as **New**, **Analyzed**, **Already tracked**, or **Error**. Analyzed
 items link directly to their evidence record, so aggregate counts such as “1
 new, 1 analyzed” always map back to a specific title and source.
+
+A source is a repeatable provenance and trust profile. A signal is one analyzed
+piece of evidence from a feed item, public page, or permitted excerpt. Sources
+control intake, attribution, and coverage; signals are evaluated against theses
+and cited by briefs. Signals can be deleted unless an accepted thesis version
+depends on them.
 
 ## Thesis evaluation and review
 
@@ -112,6 +123,10 @@ adding a source records evidence; it does not silently change a thesis. The
 current API workflow is:
 
 ```bash
+# Optionally reclassify and queue one existing signal first.
+curl -X POST \
+  http://127.0.0.1:8787/api/updates/UPDATE_ID/requeue-thesis-evaluation
+
 # Evaluate evidence added since the latest evaluation batch.
 curl -X POST http://127.0.0.1:8787/api/theses/evaluate
 
@@ -122,12 +137,33 @@ curl -X POST \
   http://127.0.0.1:8787/api/thesis-evaluations/EVALUATION_ID/review
 ```
 
+Signal analysis explicitly dispositions every active macro thesis as
+**primary**, **secondary**, **context**, or **not relevant** using the exact
+thesis text and cited claims—not publisher names or layer overlap alone. Primary
+and secondary signal-to-thesis routes must appear in the resulting thesis
+evaluation, even when the correct outcome is **unchanged**. Context evidence can
+inform an evaluation but cannot change thesis confidence by itself. This makes
+macro routing inspectable and prevents relevant signals from disappearing
+silently between ingestion and evaluation.
+
+**Queue thesis re-evaluation** preserves accepted thesis history, supersedes
+only pending or deferred proposals linked to that signal, and places it in the
+next **Evaluate theses** run. Older signals that predate macro routing are first
+classified from their stored summaries and exact claims.
+
 Reviews accept `accepted`, `rejected`, or `deferred`. Accepting a changed
 evaluation transactionally creates a new thesis version and links its exact
 evidence into the durable ledger. Accepting an `unchanged` evaluation records
 the decision without creating a redundant version. Rejected and deferred
 proposals remain auditable, and stale proposals cannot overwrite a thesis that
-has advanced since they were created.
+has advanced since they were created. Deferred proposals move out of the
+pending queue, are excluded from brief synthesis, and remain available to
+accept or reject later.
+
+The **Material** and **Not material** controls review one proposed thesis impact,
+not the source or the entire signal. Material keeps that impact eligible for
+future thesis evaluation and briefs. Not material excludes the impact while
+retaining the signal for other valid impacts or contextual evidence.
 
 After evaluation and review, use **Generate understanding readout** on Today. The
 **Briefs** route preserves prior dated conclusions, their underlying
@@ -142,22 +178,27 @@ coverage, allowed domains, and topic rules.
 
 ### Automated public feeds
 
-- The Next Platform
-- vLLM releases
-- SGLang releases
-- TensorRT-LLM releases
-- NVIDIA Dynamo releases
+- The Next Platform for cross-layer systems and accelerator infrastructure
+- TrendForce Semiconductors for HBM, memory supply, and advanced packaging
+- Dell’Oro for data-center networking and optical interconnects
+- Data Center Dynamics and Utility Dive for data-center power, cooling, grid,
+  transformer, and interconnection constraints
+- vLLM, SGLang, TensorRT-LLM, and NVIDIA Dynamo release feeds
+- ServeTheHome and Chips and Cheese as lower-priority architecture context
 - arXiv `cs.DC`, behind AI-infrastructure topic, recency, and low-signal filters
 
 Refresh fetches every enabled feed before choosing candidates. It applies
-per-source quotas and round-robin selection so a broad source such as arXiv
-cannot consume the entire analysis budget.
+per-source quotas, topic filters, and round-robin selection. Serving-software
+releases share a two-item refresh cap, while automated context sources share a
+one-item cap. This keeps those useful streams without allowing them to crowd out
+memory, networking, optics, power, and manufacturing evidence.
 
 ### Public URL sources
 
 Public pages from the watchlist company newsrooms and investor-relations sites,
 SemiAnalysis public posts, LightCounting, TrendForce / DRAMeXchange, Dell’Oro,
-Data Center Dynamics, and Utility Dive can be submitted through **Add signal**.
+Data Center Dynamics, Utility Dive, Samsung Memory, SK hynix, and TSMC
+advanced-packaging coverage can be submitted through **Add signal**.
 Relay uses hardened, credential-free public URL fetching and never bypasses
 access controls.
 
@@ -170,6 +211,20 @@ Knowledge, Chips and Cheese, or ServeTheHome.
 
 Relay does not implement authenticated scraping, paywall bypassing, PDF upload,
 OCR, SEC crawling, Twitter/X ingestion, or generic stock-news collection.
+
+### Macro thesis coverage audit
+
+**Sources** shows an explicit coverage result for each macro thesis:
+
+- **Automated** — at least one active first-party or specialist primary feed.
+- **Manual only** — strong first-party or specialist sources are configured,
+  but none is an active feed.
+- **Missing** — no strong mapped source is configured.
+
+Context sources remain visible in the audit but never satisfy coverage on their
+own. The same status appears on macro-thesis cards and detail pages. The mapping
+is explicit and reviewable in `src/server/ingestion/source-coverage.ts` rather
+than inferred from broad keyword overlap.
 
 ## Daily brief
 
@@ -240,13 +295,16 @@ Owner-management and history APIs include:
 | `POST` | `/api/companies` | Add or restore a company thesis. |
 | `DELETE` | `/api/companies/:ticker` | Archive a company thesis. |
 | `POST` | `/api/sources` | Add an RSS, release, or research feed. |
+| `POST` | `/api/source-profiles` | Register a trusted non-feed website profile. |
 | `DELETE` | `/api/sources/:id` | Archive a source. |
 | `POST` | `/api/sources/refresh` | Refresh feeds and return per-item outcomes. |
+| `POST` | `/api/sources/:id/refresh` | Refresh one automated feed. |
+| `DELETE` | `/api/updates/:id` | Delete a signal unless an accepted thesis change depends on it. |
 | `GET` | `/api/briefs` | List prior daily briefs. |
 | `GET` | `/api/briefs/:id` | Read one persisted brief. |
 
 SQLite remains the private system of record for source provenance, hashes,
-analysis status, immutable signals, exact claims, theses, thesis versions,
+analysis status, signals, exact claims, theses, thesis versions,
 evaluation proposals and reviews, evidence links, and briefs. Raw source
 records are internal provenance/cache data and are not presented as a document
 library.
@@ -291,7 +349,7 @@ NODE_ENV=production npm start
 | `HOST` | `127.0.0.1` | API bind address. Keep it on loopback without an auth/TLS boundary. |
 | `PORT` | `8787` | API and production web-server port. |
 | `RELAY_ALLOWED_HOSTS` | `127.0.0.1,localhost,::1` | API request-host allowlist. |
-| `RELAY_REFRESH_MAX_ITEMS` | `6` | Maximum new candidates analyzed per refresh; clamped to 1–12 and raised when needed to give each enabled feed one candidate. |
+| `RELAY_REFRESH_MAX_ITEMS` | `6` | Baseline analysis budget per refresh, clamped to 1–12. Enabled-feed count may raise the ceiling, while serving and context bucket caps still limit their share. |
 | `RELAY_DATABASE_PATH` | `data/relay.sqlite` | Optional local database path. |
 | `RELAY_DEMO_DATA` | `false` | Opt in to clearly labeled UI fixtures. |
 
@@ -371,12 +429,15 @@ analysis.
 - Feed refresh analyzes the content supplied by RSS/Atom entries. It does not
   automatically fetch every linked article.
 - Public pages without reliable feeds remain manual URL sources.
+- Built-in macro coverage mappings remain maintained in code. Trusted website
+  profiles can extend manual macro coverage from the UI.
 - Topic filtering and exact URL/content deduplication do not detect every
   semantically duplicated story.
 - Company theses can be added and archived in the UI, but macro theses are
   currently seeded in code and cannot yet be created or edited in the UI.
 - Pending thesis evaluations are visible in thesis detail and can be accepted,
-  rejected, or deferred in the UI.
+  rejected, or deferred. Deferred proposals remain in a separate later-review
+  section.
 - Confidence is a reviewable heuristic score, not a calibrated probability.
 - Source independence is approximated from Relay's source provenance IDs; it
   cannot prove that two publishers did not rely on the same upstream report.

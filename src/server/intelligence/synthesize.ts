@@ -129,7 +129,12 @@ export function selectBriefEligibleUpdates(
         impact.direction !== "not-material" &&
         hasConcreteThesisDelta(impact),
     );
-    if (thesisImpacts.length === 0) {
+    const hasDirectMacroImpact = (update.macroThesisImpacts ?? []).some(
+      (impact) =>
+        impact.relevance === "primary" ||
+        impact.relevance === "secondary",
+    );
+    if (thesisImpacts.length === 0 && !hasDirectMacroImpact) {
       return [];
     }
     return [

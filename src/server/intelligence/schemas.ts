@@ -10,6 +10,17 @@ const sentimentSchema = z.enum([
 ]);
 const materialitySchema = z.enum(["high", "medium", "low", "not-material"]);
 const confidenceSchema = z.enum(["high", "medium", "low"]);
+const thesisEvidenceStanceSchema = z.enum([
+  "supports",
+  "opposes",
+  "context",
+]);
+const macroThesisRelevanceSchema = z.enum([
+  "primary",
+  "secondary",
+  "context",
+  "not-relevant",
+]);
 export const noveltySchema = z.enum([
   "new",
   "confirmation",
@@ -66,10 +77,49 @@ export const analysisOutputSchema = z
           .strict(),
       )
       .max(24),
+    macroThesisDispositions: z
+      .array(
+        z
+          .object({
+            thesisId: z.string().trim().min(1).max(128),
+            relevance: macroThesisRelevanceSchema,
+            stance: thesisEvidenceStanceSchema,
+            rationale: z.string().trim().min(1).max(1_500),
+            claimLocators: z
+              .array(z.string().trim().min(1).max(50))
+              .max(24),
+          })
+          .strict(),
+      )
+      .max(50),
   })
   .strict();
 
 export type AnalysisOutput = z.infer<typeof analysisOutputSchema>;
+
+export const macroThesisRoutingOutputSchema = z
+  .object({
+    dispositions: z
+      .array(
+        z
+          .object({
+            thesisId: z.string().trim().min(1).max(128),
+            relevance: macroThesisRelevanceSchema,
+            stance: thesisEvidenceStanceSchema,
+            rationale: z.string().trim().min(1).max(1_500),
+            claimIds: z
+              .array(z.string().trim().min(1).max(128))
+              .max(24),
+          })
+          .strict(),
+      )
+      .max(50),
+  })
+  .strict();
+
+export type MacroThesisRoutingOutput = z.infer<
+  typeof macroThesisRoutingOutputSchema
+>;
 
 export const dailyBriefOutputSchema = z
   .object({
@@ -131,6 +181,9 @@ export const thesisEvaluationOutputSchema = z
               .array(thesisEvidenceReferenceSchema)
               .max(30),
             opposingEvidence: z
+              .array(thesisEvidenceReferenceSchema)
+              .max(30),
+            contextEvidence: z
               .array(thesisEvidenceReferenceSchema)
               .max(30),
             unknowns: z.array(shortTextSchema).max(30),

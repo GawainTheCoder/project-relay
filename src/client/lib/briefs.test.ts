@@ -78,6 +78,7 @@ function update(
     watchNext: [],
     claims: [],
     thesisImpacts: [],
+    macroThesisImpacts: [],
     model: "test",
   };
 }

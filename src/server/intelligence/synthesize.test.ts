@@ -53,6 +53,7 @@ function makeUpdate(): IntelligenceUpdate {
         decision: "proposed",
       },
     ],
+    macroThesisImpacts: [],
     model: "gpt-5.4-mini",
   };
 }

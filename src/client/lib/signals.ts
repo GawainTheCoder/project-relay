@@ -15,11 +15,17 @@ export function isThesisChangingImpact(impact: ThesisImpact): boolean {
 export function isThesisChangingSignal(
   update: IntelligenceUpdate,
 ): boolean {
+  const hasDirectMacroRoute = update.macroThesisImpacts.some(
+    (impact) =>
+      impact.relevance === "primary" ||
+      impact.relevance === "secondary",
+  );
   return (
     update.materiality !== "not-material" &&
     update.novelty !== "repetition" &&
     update.sentiment !== "not-material" &&
     update.claims.length > 0 &&
-    update.thesisImpacts.some(isThesisChangingImpact)
+    (update.thesisImpacts.some(isThesisChangingImpact) ||
+      hasDirectMacroRoute)
   );
 }

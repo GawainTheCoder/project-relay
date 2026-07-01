@@ -45,6 +45,7 @@ function makeSignal(): IntelligenceUpdate {
         decision: "proposed",
       },
     ],
+    macroThesisImpacts: [],
     model: "test",
   };
 }
@@ -85,5 +86,30 @@ describe("thesis-changing signal filters", () => {
         thesisImpacts: [],
       }),
     ).toBe(false);
+  });
+
+  it("includes direct macro routes without requiring a company impact", () => {
+    const signal = makeSignal();
+    signal.thesisImpacts = [];
+    signal.macroThesisImpacts = [
+      {
+        id: "macro-impact-1",
+        thesisId: "macro-memory-bottleneck",
+        relevance: "primary",
+        stance: "supports",
+        rationale:
+          "The exact claim directly bears on the memory bottleneck thesis.",
+        claimIds: ["claim-1"],
+      },
+    ];
+
+    expect(isThesisChangingSignal(signal)).toBe(true);
+
+    signal.macroThesisImpacts[0] = {
+      ...signal.macroThesisImpacts[0]!,
+      relevance: "context",
+      stance: "context",
+    };
+    expect(isThesisChangingSignal(signal)).toBe(false);
   });
 });

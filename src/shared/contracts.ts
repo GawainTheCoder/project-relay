@@ -27,6 +27,13 @@ export const thesisEvidenceStances = [
   "context",
 ] as const;
 export type ThesisEvidenceStance = (typeof thesisEvidenceStances)[number];
+export const macroThesisRelevances = [
+  "primary",
+  "secondary",
+  "context",
+] as const;
+export type MacroThesisRelevance =
+  (typeof macroThesisRelevances)[number];
 export const thesisEvaluationOutcomes = [
   "unchanged",
   "reinforced",
@@ -184,6 +191,15 @@ export interface ThesisEvaluationReviewInput {
   note?: string | undefined;
 }
 
+export interface ThesisEvaluationRequeueResult {
+  updateId: string;
+  requestedAt: string;
+  alreadyQueued: boolean;
+  invalidatedEvaluationIds: string[];
+  macroRouteCount: number;
+  routesClassified: boolean;
+}
+
 export interface ThesisImpact {
   id: string;
   companyTicker: string;
@@ -194,6 +210,15 @@ export interface ThesisImpact {
   thesisDelta: string;
   decision: ReviewDecision;
   review?: ImpactReview | null;
+}
+
+export interface MacroThesisImpact {
+  id: string;
+  thesisId: string;
+  relevance: MacroThesisRelevance;
+  stance: ThesisEvidenceStance;
+  rationale: string;
+  claimIds: string[];
 }
 
 export interface ImpactReview {
@@ -257,6 +282,7 @@ export interface IntelligenceUpdate {
   watchNext: string[];
   claims: EvidenceClaim[];
   thesisImpacts: ThesisImpact[];
+  macroThesisImpacts: MacroThesisImpact[];
   model: string | null;
 }
 
@@ -287,10 +313,14 @@ export interface ResearchSource {
   name: string;
   type: "rss" | "investor-relations" | "filing" | "paper" | "release" | "manual";
   url: string | null;
+  domain: string | null;
+  role: "primary" | "context";
+  authorityTier: "first-party" | "specialist" | "context" | "unknown";
   enabled: boolean;
   userAdded: boolean;
   layerIds: LayerId[];
   companyTickers: string[];
+  thesisIds: string[];
   status: "ready" | "syncing" | "error";
   lastSyncedAt: string | null;
   documentCount: number;
@@ -314,6 +344,25 @@ export interface SourceRefreshResult {
   items: SourceRefreshItem[];
 }
 
+export type SourceCoverageStatus = "automated" | "manual-only" | "missing";
+
+export interface SourceCoverageSource {
+  id: string;
+  name: string;
+  authorityTier: "first-party" | "specialist" | "context" | "unknown";
+  role: "primary" | "context";
+  automated: boolean;
+}
+
+export interface ThesisSourceCoverage {
+  thesisId: string;
+  thesisTitle: string;
+  layerIds: LayerId[];
+  status: SourceCoverageStatus;
+  sources: SourceCoverageSource[];
+  strongSourceCount: number;
+}
+
 export interface DailyBrief {
   id: string;
   date: string;
@@ -334,6 +383,7 @@ export interface DashboardPayload {
   layers: StackLayer[];
   companies: Company[];
   sources: ResearchSource[];
+  sourceCoverage: ThesisSourceCoverage[];
   demoData: boolean;
 }
 
@@ -341,6 +391,7 @@ export interface ImportSourceInput {
   title: string;
   publisher: string;
   sourceUrl?: string;
+  sourceProfileId?: string;
   publishedAt?: string;
   content?: string;
   sourceKind?: SourceKind;
@@ -366,4 +417,18 @@ export interface ResearchSourceInput {
   enabled?: boolean;
   layerIds?: LayerId[];
   companyTickers?: string[];
+}
+
+export interface SourceProfileInput {
+  name: string;
+  domain: string;
+  publicUrl: string;
+  role: Extract<ResearchSource["role"], "primary" | "context">;
+  authorityTier: Extract<
+    ResearchSource["authorityTier"],
+    "first-party" | "specialist" | "context"
+  >;
+  layerIds?: LayerId[];
+  companyTickers?: string[];
+  thesisIds?: string[];
 }

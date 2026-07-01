@@ -21,6 +21,7 @@ import { EvidenceRail } from "../features/beliefs/EvidenceRail";
 import { PendingEvaluations } from "../features/beliefs/PendingEvaluations";
 import { useBeliefDetail } from "../features/beliefs/useBeliefs";
 import { VersionTimeline } from "../features/beliefs/VersionTimeline";
+import { SourceCoverageBadge } from "../features/sources/SourceCoverageAudit";
 import {
   removeCompany,
   reviewBeliefEvaluation,
@@ -94,6 +95,9 @@ export function BeliefDetailPage() {
     }
   };
   const TypeIcon = belief.kind === "macro" ? Network : Building2;
+  const sourceCoverage = data.sourceCoverage.find(
+    (coverage) => coverage.thesisId === belief.id,
+  );
   const reviewEvaluation = async (
     evaluationId: string,
     decision: ThesisEvaluationReviewInput["decision"],
@@ -120,6 +124,11 @@ export function BeliefDetailPage() {
                   <TypeIcon aria-hidden="true" className="size-3.5" />
                   {belief.kind} thesis
                 </span>
+                {sourceCoverage ? (
+                  <Link to="/sources#macro-thesis-coverage">
+                    <SourceCoverageBadge status={sourceCoverage.status} />
+                  </Link>
+                ) : null}
                 {belief.layerIds.map((layerId) => (
                   <span key={layerId}>
                     {getLayerName(layerId as LayerId)}

@@ -49,6 +49,16 @@ function makeInput(): ThesisEvaluationInput {
         layerIds: ["networking"],
         whatHappened: "AI networking demand accelerated.",
         whyItMatters: "Cluster scale is increasing network requirements.",
+        macroThesisImpacts: [
+          {
+            thesisId: "thesis_networking",
+            relevance: "primary",
+            stance: "supports",
+            rationale:
+              "Direct first-party evidence of rising AI network demand.",
+            claimIds: ["claim_arista_demand"],
+          },
+        ],
         claims: [
           {
             id: "claim_arista_demand",
@@ -71,6 +81,16 @@ function makeInput(): ThesisEvaluationInput {
         layerIds: ["optics"],
         whatHappened: "High-speed optical demand remains supply constrained.",
         whyItMatters: "Optical availability can limit network deployment.",
+        macroThesisImpacts: [
+          {
+            thesisId: "thesis_networking",
+            relevance: "context",
+            stance: "context",
+            rationale:
+              "Optical supply is useful context for network deployment.",
+            claimIds: ["claim_optics_supply"],
+          },
+        ],
         claims: [
           {
             id: "claim_optics_supply",
@@ -104,6 +124,7 @@ function makeEvaluation(
       },
     ],
     opposingEvidence: [],
+    contextEvidence: [],
     unknowns: ["How quickly 1.6T deployments relieve congestion"],
     strengthenConditions: ["Sustained high-speed optics lead times"],
     weakenConditions: ["Falling network utilization"],
@@ -242,6 +263,15 @@ describe("buildThesisEvaluationBatch", () => {
   }
 
   it("accepts a revised belief only with independent corroboration", () => {
+    const input = makeInput();
+    input.signals[1]!.macroThesisImpacts[0] = {
+      thesisId: "thesis_networking",
+      relevance: "secondary",
+      stance: "supports",
+      rationale:
+        "Independent optical supply evidence supports the data-movement thesis.",
+      claimIds: ["claim_optics_supply"],
+    };
     const result = build(
       makeEvaluation({
         outcome: "revised",
@@ -264,6 +294,7 @@ describe("buildThesisEvaluationBatch", () => {
         unknowns: ["When deployments materially relieve data movement limits"],
         strengthenConditions: ["Persistent network and optical constraints"],
       }),
+      input,
     );
 
     expect(result.evaluations[0]).toEqual(
@@ -274,6 +305,18 @@ describe("buildThesisEvaluationBatch", () => {
         claimIds: ["claim_arista_demand", "claim_optics_supply"],
       }),
     );
+  });
+
+  it("changes the deterministic evaluation ID when proposal reasoning changes", () => {
+    const baseline = build(makeEvaluation()).evaluations[0];
+    const revisedRationale = build(
+      makeEvaluation({
+        rationale:
+          "The same claim remains below the threshold, but the unresolved deployment timing is now the controlling uncertainty.",
+      }),
+    ).evaluations[0];
+
+    expect(baseline?.id).not.toBe(revisedRationale?.id);
   });
 
   it("rejects a revised belief supported by only one provenance", () => {
@@ -377,6 +420,11 @@ describe("buildThesisEvaluationBatch", () => {
   });
 
   it("requires directional evidence for confidence movement", () => {
+    const opposingInput = makeInput();
+    opposingInput.signals[0]!.macroThesisImpacts[0] = {
+      ...opposingInput.signals[0]!.macroThesisImpacts[0]!,
+      stance: "opposes",
+    };
     expect(() =>
       build(
         makeEvaluation({
@@ -392,6 +440,7 @@ describe("buildThesisEvaluationBatch", () => {
             },
           ],
         }),
+        opposingInput,
       ),
     ).toThrow("requires supporting evidence");
 

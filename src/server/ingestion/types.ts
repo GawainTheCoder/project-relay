@@ -41,10 +41,16 @@ export type SourceAuthorityTier =
   | "specialist"
   | "context"
   | "unknown";
+export type SourceRefreshBucket =
+  | "infrastructure-primary"
+  | "serving-software"
+  | "context";
 
 export interface SourceTopicRules {
   includeAny?: readonly string[];
+  includeAnyGroups?: readonly (readonly string[])[];
   excludeAny?: readonly string[];
+  matchTitleOnly?: boolean;
   maxAgeDays?: number;
 }
 
@@ -56,6 +62,7 @@ export interface TrustedSourceDefinition {
   authorityTier: SourceAuthorityTier;
   layerIds: readonly LayerId[];
   companyTickers: readonly string[];
+  thesisIds?: readonly string[];
   intakeMode: SourceIntakeMode;
   fetchStrategy: SourceFetchStrategy;
   url: string | null;
@@ -63,6 +70,7 @@ export interface TrustedSourceDefinition {
   enabledByDefault: boolean;
   priority: number;
   perRefreshQuota: number;
+  refreshBucket?: SourceRefreshBucket;
   topicRules?: SourceTopicRules;
 }
 

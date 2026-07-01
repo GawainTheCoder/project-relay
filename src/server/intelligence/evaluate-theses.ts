@@ -29,6 +29,16 @@ const MAX_CLAIMS_PER_SIGNAL = 40;
 const nonEmptyIdSchema = z.string().trim().min(1).max(128);
 const boundedTextSchema = z.string().trim().min(1).max(4_000);
 const shortTextSchema = z.string().trim().min(1).max(500);
+const macroThesisRelevanceSchema = z.enum([
+  "primary",
+  "secondary",
+  "context",
+]);
+const thesisEvidenceStanceSchema = z.enum([
+  "supports",
+  "opposes",
+  "context",
+]);
 
 const versionedThesisInputSchema = z
   .object({
@@ -75,6 +85,19 @@ const thesisEvidenceSignalInputSchema = z
     layerIds: z.array(z.string().trim().min(1).max(64)).max(30),
     whatHappened: boundedTextSchema,
     whyItMatters: boundedTextSchema,
+    macroThesisImpacts: z
+      .array(
+        z
+          .object({
+            thesisId: nonEmptyIdSchema,
+            relevance: macroThesisRelevanceSchema,
+            stance: thesisEvidenceStanceSchema,
+            rationale: z.string().trim().min(1).max(1_500),
+            claimIds: z.array(nonEmptyIdSchema).min(1).max(24),
+          })
+          .strict(),
+      )
+      .max(30),
     claims: z
       .array(
         z
@@ -127,6 +150,7 @@ export interface ThesisEvaluation {
   rationale: string;
   supportingEvidence: ThesisEvaluationOutput["evaluations"][number]["supportingEvidence"];
   opposingEvidence: ThesisEvaluationOutput["evaluations"][number]["opposingEvidence"];
+  contextEvidence: ThesisEvaluationOutput["evaluations"][number]["contextEvidence"];
   signalIds: string[];
   claimIds: string[];
   independentSourceCount: number;
@@ -158,6 +182,17 @@ Rules:
 - Use only supplied thesis IDs, current version IDs, signal IDs, and claim IDs.
 - A claim ID may be cited only under the signal that contains it.
 - Every evaluation, including unchanged, must cite exact supplied claims.
+- Each signal includes evidence-grounded macroThesisImpacts produced by the
+  analysis pass. For every primary or secondary route whose thesis is supplied,
+  return one explicit evaluation; unchanged is a valid and often correct
+  outcome. Cite at least one routed claim from every primary/secondary
+  signal-thesis pair. Never silently omit a direct routed signal.
+- Macro evaluations may use only signals routed to that thesis. Context routes
+  may be cited only in contextEvidence and need not force an evaluation.
+- Put supports routes only in supportingEvidence and opposes routes only in
+  opposingEvidence. Put context routes only in contextEvidence.
+- Route relevance identifies how directly evidence bears on a thesis. It does
+  not predetermine direction, outcome, or confidence movement.
 - Evaluate source independence using sourceProvenance.id. Repeated reporting
   from one provenance is one source, not corroboration.
 - "unchanged" means proposedBelief is null and confidence, unknowns, and
@@ -278,6 +313,11 @@ export function buildThesisEvaluationBatch(
           "A thesis evaluation referenced an unknown thesis.",
         );
       }
+      validateMacroRouting(
+        thesis,
+        evaluation,
+        signalsById,
+      );
       if (evaluatedThesisIds.has(thesis.id)) {
         throw new EvidenceValidationError(
           "A thesis cannot have multiple evaluations in one batch.",
@@ -304,6 +344,50 @@ export function buildThesisEvaluationBatch(
       };
     },
   );
+
+  const requiredMacroThesisIds = new Set(
+    validatedInput.signals.flatMap((signal) =>
+      signal.macroThesisImpacts
+        .filter((impact) => impact.relevance !== "context")
+        .map((impact) => impact.thesisId),
+    ),
+  );
+  for (const thesisId of requiredMacroThesisIds) {
+    if (!evaluatedThesisIds.has(thesisId)) {
+      throw new EvidenceValidationError(
+        "Every primary or secondary macro-thesis route requires an explicit evaluation.",
+      );
+    }
+  }
+  const evaluationsByThesisId = new Map(
+    parsedOutput.data.evaluations.map(
+      (evaluation) => [evaluation.thesisId, evaluation] as const,
+    ),
+  );
+  for (const signal of validatedInput.signals) {
+    for (const route of signal.macroThesisImpacts) {
+      if (route.relevance === "context") {
+        continue;
+      }
+      const evaluation = evaluationsByThesisId.get(route.thesisId);
+      const references =
+        route.stance === "supports"
+          ? evaluation?.supportingEvidence
+          : evaluation?.opposingEvidence;
+      const cited = references?.some(
+        (reference) =>
+          reference.signalId === signal.id &&
+          reference.claimIds.some((claimId) =>
+            route.claimIds.includes(claimId),
+          ),
+      );
+      if (!cited) {
+        throw new EvidenceValidationError(
+          "Every direct signal-to-macro route must be cited by its thesis evaluation.",
+        );
+      }
+    }
+  }
 
   return { evaluatedAt, model, evaluations };
 }
@@ -334,8 +418,112 @@ function validateInput(input: ThesisEvaluationInput): ThesisEvaluationInput {
     ),
     "Evidence claim IDs must be globally unique.",
   );
+  const macroThesisIds = new Set(
+    parsed.data.theses
+      .filter((thesis) => thesis.type === "macro")
+      .map((thesis) => thesis.id),
+  );
+  for (const signal of parsed.data.signals) {
+    assertUnique(
+      signal.macroThesisImpacts.map((impact) => impact.thesisId),
+      "A signal cannot route to the same macro thesis more than once.",
+    );
+    const claimIds = new Set(signal.claims.map((claim) => claim.id));
+    for (const impact of signal.macroThesisImpacts) {
+      if (!macroThesisIds.has(impact.thesisId)) {
+        throw new EvidenceValidationError(
+          "A signal routed evidence to an unknown or non-macro thesis.",
+        );
+      }
+      assertUnique(
+        impact.claimIds,
+        "A macro-thesis route cannot repeat claim IDs.",
+      );
+      if (impact.claimIds.some((claimId) => !claimIds.has(claimId))) {
+        throw new EvidenceValidationError(
+          "A macro-thesis route cited a claim outside its signal.",
+        );
+      }
+      if (
+        impact.relevance === "context" &&
+        impact.stance !== "context"
+      ) {
+        throw new EvidenceValidationError(
+          "A context-only macro route must use context stance.",
+        );
+      }
+      if (
+        impact.relevance !== "context" &&
+        impact.stance === "context"
+      ) {
+        throw new EvidenceValidationError(
+          "A primary or secondary macro route must use directional evidence.",
+        );
+      }
+    }
+  }
 
   return parsed.data;
+}
+
+function validateMacroRouting(
+  thesis: VersionedThesisInput,
+  evaluation: ThesisEvaluationOutput["evaluations"][number],
+  signalsById: ReadonlyMap<string, ThesisEvidenceSignalInput>,
+): void {
+  if (thesis.type !== "macro") {
+    return;
+  }
+  const references = [
+    ...evaluation.supportingEvidence.map((reference) => ({
+      reference,
+      bucket: "supports" as const,
+    })),
+    ...evaluation.opposingEvidence.map((reference) => ({
+      reference,
+      bucket: "opposes" as const,
+    })),
+    ...evaluation.contextEvidence.map((reference) => ({
+      reference,
+      bucket: "context" as const,
+    })),
+  ];
+  for (const { reference, bucket } of references) {
+    const signal = signalsById.get(reference.signalId);
+    const route = signal?.macroThesisImpacts.find(
+      (impact) => impact.thesisId === thesis.id,
+    );
+    if (!route) {
+      throw new EvidenceValidationError(
+        "A macro-thesis evaluation cited a signal not routed to that thesis.",
+      );
+    }
+    if (
+      reference.claimIds.some(
+        (claimId) => !route.claimIds.includes(claimId),
+      )
+    ) {
+      throw new EvidenceValidationError(
+        "A macro-thesis evaluation cited evidence outside its analyzed route.",
+      );
+    }
+    if (route.stance !== bucket) {
+      throw new EvidenceValidationError(
+        "Macro-thesis route stance must match its evidence bucket.",
+      );
+    }
+  }
+  if (
+    evaluation.supportingEvidence.length === 0 &&
+    evaluation.opposingEvidence.length === 0 &&
+    evaluation.contextEvidence.length > 0 &&
+    (evaluation.outcome !== "unchanged" ||
+      evaluation.confidenceDelta !== 0)
+  ) {
+    throw new EvidenceValidationError(
+      "Context-only macro evidence cannot change a thesis or its confidence.",
+    );
+  }
 }
 
 function validateEvidenceReferences(
@@ -349,6 +537,7 @@ function validateEvidenceReferences(
   const references = [
     ...evaluation.supportingEvidence,
     ...evaluation.opposingEvidence,
+    ...evaluation.contextEvidence,
   ];
   if (references.length === 0) {
     throw new EvidenceValidationError(
@@ -511,6 +700,13 @@ function stableEvaluationId(
         outcome: evaluation.outcome,
         proposedBelief: evaluation.proposedBelief,
         proposedConfidenceScore: evaluation.proposedConfidenceScore,
+        rationale: evaluation.rationale,
+        unknowns: evaluation.unknowns,
+        strengthenConditions: evaluation.strengthenConditions,
+        weakenConditions: evaluation.weakenConditions,
+        supportingEvidence: evaluation.supportingEvidence,
+        opposingEvidence: evaluation.opposingEvidence,
+        contextEvidence: evaluation.contextEvidence,
         claimIds: [...claimIds].sort(),
       }),
     )

@@ -6,12 +6,22 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import type { LayerId } from "../../../shared/contracts";
+import type {
+  LayerId,
+  ThesisSourceCoverage,
+} from "../../../shared/contracts";
 import type { BeliefSummary } from "../../lib/api";
 import { formatDate, getLayerName } from "../../lib/format";
+import { SourceCoverageBadge } from "../sources/SourceCoverageAudit";
 import { ConfidenceMeter } from "./ConfidenceMeter";
 
-export function BeliefCard({ belief }: { belief: BeliefSummary }) {
+export function BeliefCard({
+  belief,
+  sourceCoverage,
+}: {
+  belief: BeliefSummary;
+  sourceCoverage: ThesisSourceCoverage | undefined;
+}) {
   const Icon = belief.kind === "macro" ? Network : Building2;
 
   return (
@@ -54,6 +64,9 @@ export function BeliefCard({ belief }: { belief: BeliefSummary }) {
             <span className="text-relay-warning">
               {belief.pendingEvaluationCount} pending review
             </span>
+          ) : null}
+          {sourceCoverage ? (
+            <SourceCoverageBadge status={sourceCoverage.status} />
           ) : null}
           <time dateTime={belief.updatedAt}>
             Updated{" "}

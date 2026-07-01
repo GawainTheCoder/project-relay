@@ -2,12 +2,19 @@ export {
   analyzeDocument,
   buildIntelligenceUpdate,
   type AnalysisContext,
+  type AnalysisMacroThesis,
   type AnalysisNovelty,
   type AnalysisRecentSignal,
   type AnalysisSourceProfile,
   type AnalysisWatchlistCompany,
   type AnalyzeDocumentOptions,
 } from "./analyze.js";
+export {
+  buildMacroThesisRoutes,
+  routeSignalToMacroTheses,
+  type MacroRoutingSignal,
+  type RouteSignalToMacroThesesOptions,
+} from "./route-macro-theses.js";
 export {
   EvidenceValidationError,
   IntelligenceConfigurationError,

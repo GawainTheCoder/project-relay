@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { gzipSync } from "node:zlib";
 
 import {
   canonicalizeUrl,
   normalizeManualDocument,
 } from "./normalize.js";
 import {
+  decodeBoundedBodyBytes,
   isPrivateOrReservedIp,
   secureFetchText,
   validateRemoteUrl,
@@ -170,6 +172,21 @@ describe("SSRF-safe source fetching", () => {
       }),
     ).rejects.toThrow("size limit");
     expect(bodyCancelled).toBe(true);
+  });
+
+  it("decodes compressed feed bodies with a decoded-size boundary", () => {
+    const xml = "<?xml version=\"1.0\"?><rss><channel /></rss>";
+    const compressed = gzipSync(xml);
+
+    expect(
+      decodeBoundedBodyBytes(compressed, "gzip", 1_000),
+    ).toBe(xml);
+    expect(() =>
+      decodeBoundedBodyBytes(compressed, "gzip", 10)
+    ).toThrow("safely decompressed");
+    expect(() =>
+      decodeBoundedBodyBytes(compressed, "compress", 1_000)
+    ).toThrow("Unsupported source content encoding");
   });
 });
 

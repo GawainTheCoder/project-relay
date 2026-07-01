@@ -1,4 +1,11 @@
-import { ExternalLink, PanelRight, Quote } from "lucide-react";
+import {
+  ExternalLink,
+  LoaderCircle,
+  PanelRight,
+  Quote,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 
 import type { IntelligenceUpdate } from "../../../shared/contracts";
 import { formatDate, getLayerName } from "../../lib/format";
@@ -9,7 +16,11 @@ import {
 
 interface UpdateAnalysisProps {
   onCitationSelect: (claimId: string) => void;
+  onDeleteRequest: () => void;
   onOpenInspector: () => void;
+  onReevaluationRequest: () => void;
+  reevaluationState: "idle" | "queuing" | "queued" | "error";
+  reevaluationMessage: string | null;
   update: IntelligenceUpdate;
 }
 
@@ -32,7 +43,11 @@ function AnalysisSection({
 
 export function UpdateAnalysis({
   onCitationSelect,
+  onDeleteRequest,
   onOpenInspector,
+  onReevaluationRequest,
+  reevaluationMessage,
+  reevaluationState,
   update,
 }: UpdateAnalysisProps) {
   return (
@@ -66,6 +81,15 @@ export function UpdateAnalysis({
               <ExternalLink aria-hidden="true" className="size-4" />
             </a>
           ) : null}
+          <button
+            aria-label="Delete signal"
+            className="rounded p-1.5 text-relay-muted hover:bg-relay-negative/10 hover:text-relay-negative"
+            onClick={onDeleteRequest}
+            title="Delete signal"
+            type="button"
+          >
+            <Trash2 aria-hidden="true" className="size-4" />
+          </button>
           <button
             aria-label="Open thesis and evidence inspector"
             className="rounded p-1.5 text-relay-muted hover:bg-relay-surface-2 hover:text-relay-accent xl:hidden"
@@ -101,6 +125,42 @@ export function UpdateAnalysis({
         <p className="mt-4 max-w-3xl border-l border-relay-border-strong pl-3 text-xs leading-5 text-relay-muted">
           {update.materialityReason}
         </p>
+        <div className="mt-4 flex max-w-3xl flex-wrap items-center gap-x-3 gap-y-2">
+          <button
+            className="inline-flex items-center gap-2 rounded-md border border-relay-border-strong px-3 py-2 text-xs font-medium text-relay-muted transition-colors hover:border-relay-accent/60 hover:text-relay-text disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={
+              reevaluationState === "queuing" ||
+              reevaluationState === "queued"
+            }
+            onClick={onReevaluationRequest}
+            type="button"
+          >
+            {reevaluationState === "queuing" ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-3.5 animate-spin"
+              />
+            ) : (
+              <RotateCcw aria-hidden="true" className="size-3.5" />
+            )}
+            {reevaluationState === "queuing"
+              ? "Queuing"
+              : reevaluationState === "queued"
+                ? "Queued for evaluation"
+                : "Queue thesis re-evaluation"}
+          </button>
+          <p
+            aria-live="polite"
+            className={`text-xs leading-5 ${
+              reevaluationState === "error"
+                ? "text-relay-negative"
+                : "text-relay-muted"
+            }`}
+          >
+            {reevaluationMessage ??
+              "Re-run this signal against active theses during the next Evaluate theses run."}
+          </p>
+        </div>
       </header>
 
       <div className="mx-auto max-w-3xl px-5 sm:px-7 lg:px-8">

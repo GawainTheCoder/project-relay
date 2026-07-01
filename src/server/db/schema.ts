@@ -438,6 +438,62 @@ const migrations = [
         WHERE thesis_versions.id = theses.id || '-v1'
       );
   `,
+  `
+    ALTER TABLE research_sources
+      ADD COLUMN domain TEXT;
+
+    ALTER TABLE research_sources
+      ADD COLUMN role TEXT NOT NULL DEFAULT 'primary'
+      CHECK (role IN ('primary', 'context'));
+
+    ALTER TABLE research_sources
+      ADD COLUMN authority_tier TEXT NOT NULL DEFAULT 'unknown'
+      CHECK (
+        authority_tier IN ('first-party', 'specialist', 'context', 'unknown')
+      );
+
+    ALTER TABLE research_sources
+      ADD COLUMN thesis_ids_json TEXT NOT NULL DEFAULT '[]';
+
+    CREATE INDEX IF NOT EXISTS research_sources_domain_idx
+      ON research_sources(domain, archived);
+  `,
+  `
+    ALTER TABLE source_documents
+      ADD COLUMN suppressed_at TEXT;
+
+    CREATE INDEX IF NOT EXISTS source_documents_suppressed_idx
+      ON source_documents(suppressed_at, content_hash);
+
+    CREATE TABLE IF NOT EXISTS thesis_evaluation_requeue (
+      update_id TEXT PRIMARY KEY
+        REFERENCES intelligence_updates(id) ON DELETE CASCADE,
+      requested_at TEXT NOT NULL,
+      reason TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_evaluation_requeue_requested_idx
+      ON thesis_evaluation_requeue(requested_at, update_id);
+  `,
+  `
+    CREATE TABLE IF NOT EXISTS update_macro_thesis_impacts (
+      id TEXT PRIMARY KEY,
+      update_id TEXT NOT NULL
+        REFERENCES intelligence_updates(id) ON DELETE CASCADE,
+      thesis_id TEXT NOT NULL
+        REFERENCES theses(id) ON DELETE CASCADE,
+      relevance TEXT NOT NULL
+        CHECK (relevance IN ('primary', 'secondary', 'context')),
+      stance TEXT NOT NULL
+        CHECK (stance IN ('supports', 'opposes', 'context')),
+      rationale TEXT NOT NULL,
+      claim_ids_json TEXT NOT NULL,
+      UNIQUE (update_id, thesis_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS update_macro_thesis_impacts_thesis_idx
+      ON update_macro_thesis_impacts(thesis_id, relevance, update_id);
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {

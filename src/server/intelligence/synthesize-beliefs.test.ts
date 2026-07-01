@@ -40,6 +40,7 @@ function makeUpdate(): IntelligenceUpdate {
       },
     ],
     thesisImpacts: [],
+    macroThesisImpacts: [],
     model: "analysis-model",
   };
 }
