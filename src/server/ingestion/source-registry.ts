@@ -8,6 +8,7 @@ import type {
   RefreshCandidate,
   RssEntry,
   SourceEntryBatch,
+  SourceRefreshBucket,
   TrustedSourceDefinition,
 } from "./types.js";
 
@@ -42,6 +43,82 @@ const LOW_SIGNAL_TOPICS = [
   "stock to watch",
   "wall street says",
 ] as const;
+
+const DATA_CENTER_TOPICS = [
+  "data center",
+  "datacenter",
+] as const;
+
+const POWER_COOLING_GRID_TOPICS = [
+  "cooling",
+  "electricity demand",
+  "energy flexibility",
+  "energy storage",
+  "energy demand",
+  "gigawatt",
+  "grid connection",
+  "grid constraint",
+  "grid interconnection",
+  "grid reliability",
+  "liquid cooling",
+  "megawatt",
+  "power capacity",
+  "power constraint",
+  "power demand",
+  "power grid",
+  "substation",
+  "transformer",
+  "utilities",
+  "utility",
+  "water demand",
+] as const;
+
+const MEMORY_AND_PACKAGING_TOPICS = [
+  "ai memory",
+  "advanced packaging",
+  "cowos",
+  "cxl memory",
+  "dram",
+  "hbm",
+  "high bandwidth memory",
+  "socamm",
+] as const;
+
+const NETWORKING_AND_OPTICS_TOPICS = [
+  "1.6t",
+  "800g",
+  "ai cluster",
+  "ai data center",
+  "ai datacenter",
+  "co-packaged optics",
+  "data center",
+  "datacenter",
+  "interconnect",
+  "network fabric",
+  "optical",
+  "transceiver",
+] as const;
+
+const HARDWARE_CONTEXT_TOPICS = [
+  "accelerator",
+  "ai server",
+  "cxl",
+  "data center",
+  "datacenter",
+  "gpu",
+  "hbm",
+  "inference",
+  "interconnect",
+  "memory bandwidth",
+  "network",
+  "optical",
+  "rack",
+] as const;
+
+export const DEFAULT_REFRESH_BUCKET_LIMITS = {
+  "serving-software": 2,
+  context: 1,
+} as const satisfies Partial<Record<SourceRefreshBucket, number>>;
 
 const BROAD_INFRASTRUCTURE_LAYERS = [
   "cloud",
@@ -83,6 +160,7 @@ export const TRUSTED_SOURCE_REGISTRY = [
     companyTickers: WATCHLIST_TICKERS,
     priority: 100,
     perRefreshQuota: 2,
+    refreshBucket: "infrastructure-primary",
     topicRules: {
       includeAny: AI_INFRASTRUCTURE_TOPICS,
       excludeAny: LOW_SIGNAL_TOPICS,
@@ -98,8 +176,9 @@ export const TRUSTED_SOURCE_REGISTRY = [
     authorityTier: "first-party",
     layerIds: ["serving", "accelerators"],
     companyTickers: [],
-    priority: 98,
+    priority: 90,
     perRefreshQuota: 1,
+    refreshBucket: "serving-software",
     topicRules: { maxAgeDays: 45 },
   }),
   feedSource({
@@ -111,8 +190,9 @@ export const TRUSTED_SOURCE_REGISTRY = [
     authorityTier: "first-party",
     layerIds: ["serving", "accelerators"],
     companyTickers: [],
-    priority: 97,
+    priority: 90,
     perRefreshQuota: 1,
+    refreshBucket: "serving-software",
     topicRules: { maxAgeDays: 45 },
   }),
   feedSource({
@@ -124,8 +204,9 @@ export const TRUSTED_SOURCE_REGISTRY = [
     authorityTier: "first-party",
     layerIds: ["serving", "accelerators"],
     companyTickers: ["NVDA"],
-    priority: 97,
+    priority: 90,
     perRefreshQuota: 1,
+    refreshBucket: "serving-software",
     topicRules: { maxAgeDays: 45 },
   }),
   feedSource({
@@ -137,8 +218,9 @@ export const TRUSTED_SOURCE_REGISTRY = [
     authorityTier: "first-party",
     layerIds: ["serving", "accelerators", "networking"],
     companyTickers: ["NVDA"],
-    priority: 97,
+    priority: 90,
     perRefreshQuota: 1,
+    refreshBucket: "serving-software",
     topicRules: { maxAgeDays: 45 },
   }),
   feedSource({
@@ -152,10 +234,128 @@ export const TRUSTED_SOURCE_REGISTRY = [
     companyTickers: [],
     priority: 72,
     perRefreshQuota: 1,
+    refreshBucket: "infrastructure-primary",
     topicRules: {
       includeAny: AI_INFRASTRUCTURE_TOPICS,
       excludeAny: LOW_SIGNAL_TOPICS,
       maxAgeDays: 14,
+    },
+  }),
+  feedSource({
+    id: "trendforce-semiconductors-feed",
+    name: "TrendForce — memory and advanced packaging",
+    type: "rss",
+    url: "https://www.trendforce.com/feed/Semiconductors.html",
+    fetchStrategy: "rss",
+    authorityTier: "specialist",
+    layerIds: ["memory", "manufacturing"],
+    companyTickers: ["MU", "SSNLF", "000660", "TSM"],
+    priority: 98,
+    perRefreshQuota: 1,
+    refreshBucket: "infrastructure-primary",
+    topicRules: {
+      includeAny: MEMORY_AND_PACKAGING_TOPICS,
+      excludeAny: LOW_SIGNAL_TOPICS,
+      maxAgeDays: 21,
+    },
+  }),
+  feedSource({
+    id: "delloro-feed",
+    name: "Dell'Oro Group — networking and optics",
+    type: "rss",
+    url: "https://www.delloro.com/feed/",
+    fetchStrategy: "rss",
+    authorityTier: "specialist",
+    layerIds: ["networking", "optics"],
+    companyTickers: ["NVDA", "AVGO", "MRVL", "ANET", "COHR", "LITE", "GLW"],
+    priority: 97,
+    perRefreshQuota: 1,
+    refreshBucket: "infrastructure-primary",
+    topicRules: {
+      includeAny: NETWORKING_AND_OPTICS_TOPICS,
+      excludeAny: LOW_SIGNAL_TOPICS,
+      matchTitleOnly: true,
+      maxAgeDays: 30,
+    },
+  }),
+  feedSource({
+    id: "data-center-dynamics-feed",
+    name: "Data Center Dynamics",
+    type: "rss",
+    url: "https://www.datacenterdynamics.com/en/rss/",
+    fetchStrategy: "rss",
+    authorityTier: "specialist",
+    layerIds: ["power-cooling", "cloud", "networking", "optics"],
+    companyTickers: ["VRT", "ETN", "GEV", "ANET", "COHR", "LITE"],
+    priority: 96,
+    perRefreshQuota: 2,
+    refreshBucket: "infrastructure-primary",
+    topicRules: {
+      includeAnyGroups: [
+        DATA_CENTER_TOPICS,
+        POWER_COOLING_GRID_TOPICS,
+      ],
+      excludeAny: [...LOW_SIGNAL_TOPICS, "sponsored"],
+      maxAgeDays: 14,
+    },
+  }),
+  feedSource({
+    id: "utility-dive-feed",
+    name: "Utility Dive — data-center grid coverage",
+    type: "rss",
+    url: "https://www.utilitydive.com/feeds/news/",
+    fetchStrategy: "rss",
+    authorityTier: "specialist",
+    layerIds: ["power-cooling", "materials-builders"],
+    companyTickers: ["VRT", "ETN", "GEV"],
+    priority: 94,
+    perRefreshQuota: 1,
+    refreshBucket: "infrastructure-primary",
+    topicRules: {
+      includeAnyGroups: [
+        DATA_CENTER_TOPICS,
+        POWER_COOLING_GRID_TOPICS,
+      ],
+      excludeAny: LOW_SIGNAL_TOPICS,
+      maxAgeDays: 21,
+    },
+  }),
+  feedSource({
+    id: "serve-the-home-feed",
+    name: "ServeTheHome — infrastructure context",
+    type: "rss",
+    role: "context",
+    url: "https://www.servethehome.com/feed/",
+    fetchStrategy: "rss",
+    authorityTier: "context",
+    layerIds: ["accelerators", "memory", "networking", "serving"],
+    companyTickers: ["NVDA", "AMD", "AVGO", "MRVL", "ANET", "MU"],
+    priority: 82,
+    perRefreshQuota: 1,
+    refreshBucket: "context",
+    topicRules: {
+      includeAny: HARDWARE_CONTEXT_TOPICS,
+      excludeAny: LOW_SIGNAL_TOPICS,
+      maxAgeDays: 21,
+    },
+  }),
+  feedSource({
+    id: "chips-and-cheese-feed",
+    name: "Chips and Cheese — architecture context",
+    type: "rss",
+    role: "context",
+    url: "https://chipsandcheese.com/feed/",
+    fetchStrategy: "rss",
+    authorityTier: "context",
+    layerIds: ["accelerators", "memory", "networking", "serving"],
+    companyTickers: ["NVDA", "AMD", "AVGO", "MRVL", "MU"],
+    priority: 81,
+    perRefreshQuota: 1,
+    refreshBucket: "context",
+    topicRules: {
+      includeAny: HARDWARE_CONTEXT_TOPICS,
+      excludeAny: LOW_SIGNAL_TOPICS,
+      maxAgeDays: 45,
     },
   }),
 
@@ -188,10 +388,13 @@ export const TRUSTED_SOURCE_REGISTRY = [
   officialCompanySource("lumentum-ir", "Lumentum official newsroom and investor relations", "https://investor.lumentum.com/news-releases", ["lumentum.com", "investor.lumentum.com"], 94, "LITE", ["optics"]),
   officialCompanySource("corning-ir", "Corning official newsroom and investor relations", "https://investor.corning.com/news-and-events/news-releases/", ["corning.com", "investor.corning.com"], 94, "GLW", ["optics", "materials-builders"]),
   officialCompanySource("micron-ir", "Micron official newsroom and investor relations", "https://investors.micron.com/", ["micron.com", "investors.micron.com"], 96, "MU", ["memory", "manufacturing"]),
+  officialCompanySource("samsung-memory", "Samsung Semiconductor HBM and memory", "https://semiconductor.samsung.com/dram/hbm/", ["samsung.com", "semiconductor.samsung.com"], 97, "SSNLF", ["memory", "manufacturing"]),
+  officialCompanySource("sk-hynix-newsroom", "SK hynix official newsroom", "https://news.skhynix.com/press-center/press-release/", ["skhynix.com", "news.skhynix.com"], 97, "000660", ["memory", "manufacturing"]),
   officialCompanySource("vertiv-ir", "Vertiv official newsroom and investor relations", "https://investors.vertiv.com/", ["vertiv.com", "investors.vertiv.com"], 95, "VRT", ["power-cooling"]),
   officialCompanySource("eaton-newsroom", "Eaton official newsroom", "https://www.eaton.com/us/en-us/company/news-insights/news-releases.html", ["eaton.com"], 94, "ETN", ["power-cooling"]),
   officialCompanySource("ge-vernova-newsroom", "GE Vernova official newsroom", "https://www.gevernova.com/news/press-releases", ["gevernova.com"], 94, "GEV", ["power-cooling", "materials-builders"]),
   officialCompanySource("tsmc-ir", "TSMC official newsroom and investor relations", "https://investor.tsmc.com/", ["tsmc.com", "investor.tsmc.com"], 97, "TSM", ["manufacturing"]),
+  officialCompanySource("tsmc-advanced-packaging", "TSMC CoWoS and advanced packaging", "https://www.tsmc.com/english/dedicatedFoundry/technology/advanced_packaging", ["tsmc.com"], 98, "TSM", ["manufacturing"]),
 
   publicUrlSource({
     id: "lightcounting",
@@ -204,12 +407,21 @@ export const TRUSTED_SOURCE_REGISTRY = [
   }),
   publicUrlSource({
     id: "trendforce-memory",
-    name: "TrendForce / DRAMeXchange",
+    name: "TrendForce memory research",
     url: "https://www.trendforce.com/",
-    allowedDomains: ["trendforce.com", "dramexchange.com"],
+    allowedDomains: ["trendforce.com"],
     priority: 94,
     layerIds: ["memory"],
     companyTickers: ["MU"],
+  }),
+  publicUrlSource({
+    id: "dramexchange",
+    name: "DRAMeXchange market data",
+    url: "https://www.dramexchange.com/",
+    allowedDomains: ["dramexchange.com"],
+    priority: 94,
+    layerIds: ["memory"],
+    companyTickers: ["MU", "SSNLF", "000660"],
   }),
   publicUrlSource({
     id: "delloro",
@@ -333,10 +545,14 @@ export const SOURCE_CATALOG_ROWS: readonly ResearchSource[] =
     name: source.name,
     type: source.type,
     url: source.url,
+    domain: source.allowedDomains[0] ?? null,
+    role: source.role,
+    authorityTier: source.authorityTier,
     enabled: source.enabledByDefault,
     userAdded: false,
     layerIds: [...source.layerIds],
     companyTickers: [...source.companyTickers],
+    thesisIds: [],
     status: "ready",
     lastSyncedAt: null,
     documentCount: 0,
@@ -376,7 +592,11 @@ export function findSourceForUrl(
 
 export function selectRefreshCandidates(
   batches: readonly SourceEntryBatch[],
-  options: { limit: number; now?: Date },
+  options: {
+    limit: number;
+    now?: Date;
+    bucketLimits?: Partial<Record<SourceRefreshBucket, number>>;
+  },
 ): RefreshCandidate[] {
   if (!Number.isSafeInteger(options.limit) || options.limit < 1) {
     return [];
@@ -392,6 +612,11 @@ export function selectRefreshCandidates(
     .filter((queue) => queue.candidates.length > 0);
   const selected: RefreshCandidate[] = [];
   const seenUrls = new Set<string>();
+  const bucketCounts = new Map<SourceRefreshBucket, number>();
+  const bucketLimits = {
+    ...DEFAULT_REFRESH_BUCKET_LIMITS,
+    ...options.bucketLimits,
+  };
   let round = 0;
 
   while (selected.length < options.limit) {
@@ -406,12 +631,22 @@ export function selectRefreshCandidates(
     }
 
     for (const candidate of roundCandidates) {
+      const bucket = candidate.source.refreshBucket ??
+        "infrastructure-primary";
+      const bucketLimit = bucketLimits[bucket];
+      if (
+        bucketLimit !== undefined &&
+        (bucketCounts.get(bucket) ?? 0) >= bucketLimit
+      ) {
+        continue;
+      }
       const canonicalUrl = canonicalCandidateUrl(candidate.entry.sourceUrl);
       if (seenUrls.has(canonicalUrl)) {
         continue;
       }
       seenUrls.add(canonicalUrl);
       selected.push(candidate);
+      bucketCounts.set(bucket, (bucketCounts.get(bucket) ?? 0) + 1);
       if (selected.length >= options.limit) {
         break;
       }
@@ -441,8 +676,19 @@ export function sourceEntryMatchesRules(
     return false;
   }
 
-  const searchable = `${entry.title}\n${entry.content}`.toLowerCase();
+  const searchable = (
+    rules.matchTitleOnly
+      ? entry.title
+      : `${entry.title}\n${entry.content}`
+  ).toLowerCase();
   if (rules.excludeAny?.some((term) => searchable.includes(term.toLowerCase()))) {
+    return false;
+  }
+  if (
+    rules.includeAnyGroups?.some((group) =>
+      !group.some((term) => searchable.includes(term.toLowerCase()))
+    )
+  ) {
     return false;
   }
   return !rules.includeAny ||
@@ -523,11 +769,11 @@ function feedSource(
   input: Omit<
     PublicSourceDefinition,
     "allowedDomains" | "enabledByDefault" | "intakeMode" | "role"
-  >,
+  > & { role?: TrustedSourceDefinition["role"] },
 ): PublicSourceDefinition {
   return {
     ...input,
-    role: "primary",
+    role: input.role ?? "primary",
     intakeMode: "feed",
     allowedDomains: [new URL(input.url).hostname],
     enabledByDefault: true,

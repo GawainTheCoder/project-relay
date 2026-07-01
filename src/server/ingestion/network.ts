@@ -3,6 +3,11 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { Readable } from "node:stream";
+import {
+  brotliDecompressSync,
+  gunzipSync,
+  inflateSync,
+} from "node:zlib";
 
 export const DEFAULT_FETCH_TIMEOUT_MS = 12_000;
 export const DEFAULT_MAX_BODY_BYTES = 2_000_000;
@@ -61,6 +66,7 @@ export async function secureFetchText(
     try {
       const requestHeaders = {
         Accept: acceptedContentTypes.join(", "),
+        "Accept-Encoding": "gzip, deflate, br",
         "User-Agent": RELAY_USER_AGENT,
       };
       const response = options.fetchImpl
@@ -108,7 +114,13 @@ export async function secureFetchText(
       }
 
       return {
-        body: await readBoundedBody(response, maxBodyBytes),
+        body: await readBoundedBody(
+          response,
+          maxBodyBytes,
+          options.fetchImpl
+            ? null
+            : response.headers.get("content-encoding"),
+        ),
         contentType,
         finalUrl: target.url,
       };
@@ -322,15 +334,15 @@ async function fetchPinnedTarget(
 async function readBoundedBody(
   response: Response,
   maxBodyBytes: number,
+  contentEncoding: string | null,
 ): Promise<string> {
   if (!response.body) {
     return "";
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const chunks: Uint8Array[] = [];
   let totalBytes = 0;
-  let body = "";
   while (true) {
     const { done, value } = await reader.read();
     if (done) {
@@ -341,10 +353,61 @@ async function readBoundedBody(
       await reader.cancel();
       throw new Error("Source body exceeds the configured size limit.");
     }
-    body += decoder.decode(value, { stream: true });
+    chunks.push(value);
   }
-  body += decoder.decode();
-  return body;
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return decodeBoundedBodyBytes(bytes, contentEncoding, maxBodyBytes);
+}
+
+export function decodeBoundedBodyBytes(
+  bytes: Uint8Array,
+  contentEncoding: string | null,
+  maxBodyBytes: number,
+): string {
+  const encoding = contentEncoding?.trim().toLowerCase() ?? "";
+  let decoded: Uint8Array;
+  try {
+    switch (encoding) {
+      case "":
+      case "identity":
+        decoded = bytes;
+        break;
+      case "gzip":
+      case "x-gzip":
+        decoded = gunzipSync(bytes, { maxOutputLength: maxBodyBytes });
+        break;
+      case "deflate":
+        decoded = inflateSync(bytes, { maxOutputLength: maxBodyBytes });
+        break;
+      case "br":
+        decoded = brotliDecompressSync(bytes, {
+          maxOutputLength: maxBodyBytes,
+        });
+        break;
+      default:
+        throw new Error(`Unsupported source content encoding: ${encoding}.`);
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Unsupported source content encoding:")
+    ) {
+      throw error;
+    }
+    throw new Error(
+      "Source body could not be safely decompressed within the configured size limit.",
+      { cause: error },
+    );
+  }
+  if (decoded.byteLength > maxBodyBytes) {
+    throw new Error("Source body exceeds the configured size limit.");
+  }
+  return new TextDecoder().decode(decoded);
 }
 
 async function discardResponse(response: Response): Promise<void> {

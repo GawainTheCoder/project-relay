@@ -7,6 +7,7 @@ import type {
   SourceRefreshResult,
   Thesis,
   ThesisEvaluation,
+  ThesisEvaluationRequeueResult,
 } from "../shared/contracts.js";
 
 import type { AppServices } from "./app.js";
@@ -16,6 +17,7 @@ import {
   analyzeImportedSource as analyzePastedSource,
   analyzeUrlSource,
   evaluateTheses as runThesisEvaluation,
+  routeSignalToMacroTheses as runMacroThesisRouting,
   selectBriefEligibleUpdates,
   type AnalysisContext,
   type AnalysisSourceProfile,
@@ -41,6 +43,8 @@ const DEFAULT_REFRESH_MAX_ITEMS = 6;
 const MAX_REFRESH_ITEMS = 12;
 const MAX_THESES_PER_EVALUATION = 50;
 const MAX_SIGNALS_PER_EVALUATION = 100;
+const MANUAL_REEVALUATION_REASON =
+  "Signal was manually queued after macro route classification.";
 
 export interface PersistedThesisEvaluationBatch {
   evaluatedAt: string;
@@ -53,6 +57,10 @@ export function createAppServices(repository: RelayRepository): AppServices {
     analyzeImportedSource: (input) =>
       analyzeImportedSource(repository, input),
     refreshSources: () => refreshPublicSources(repository),
+    refreshSource: (sourceId) =>
+      refreshPublicSource(repository, sourceId),
+    requeueSignalThesisEvaluation: (updateId) =>
+      requeueSignalThesisEvaluation(repository, updateId),
     evaluateTheses: () => evaluatePendingTheses(repository),
     generateBrief: () => generateDailyBrief(repository),
   };
@@ -63,7 +71,18 @@ export async function analyzeImportedSource(
   input: ImportSourceInput,
 ): Promise<IntelligenceUpdate> {
   const source =
-    (input.sourceUrl ? findSourceForUrl(input.sourceUrl) : undefined) ??
+    (input.sourceProfileId
+      ? configuredTrustedSource(
+          repository.getSourceProfile(
+            input.sourceProfileId,
+            input.sourceUrl,
+          ),
+        )
+      : input.sourceUrl
+      ? configuredTrustedSource(
+          repository.findSourceProfileForUrl(input.sourceUrl),
+        ) ?? findSourceForUrl(input.sourceUrl)
+      : undefined) ??
     findSourceById("manual-imports");
   const context = buildAnalysisContext(repository, source);
   if (input.content?.trim()) {
@@ -86,17 +105,34 @@ export async function analyzeImportedSource(
 export async function refreshPublicSources(
   repository: RelayRepository,
 ): Promise<SourceRefreshResult> {
+  const activeSources = repository
+    .listSources()
+    .filter((source) => source.enabled)
+    .map((source) => configuredAutomatedSource(source))
+    .filter((source): source is PublicSourceDefinition => source !== null);
+  return refreshConfiguredSources(repository, activeSources);
+}
+
+export async function refreshPublicSource(
+  repository: RelayRepository,
+  sourceId: string,
+): Promise<SourceRefreshResult> {
+  const source = configuredAutomatedSource(repository.getSource(sourceId));
+  if (!source) {
+    throw new RangeError(`Source is not refreshable: ${sourceId}`);
+  }
+  return refreshConfiguredSources(repository, [source]);
+}
+
+async function refreshConfiguredSources(
+  repository: RelayRepository,
+  activeSources: PublicSourceDefinition[],
+): Promise<SourceRefreshResult> {
   let imported = 0;
   let analyzed = 0;
   let processed = 0;
   const errors: string[] = [];
   const items: SourceRefreshItem[] = [];
-  const configuredSources = repository
-    .listSources()
-    .filter((source) => source.enabled);
-  const activeSources = configuredSources
-    .map((source) => configuredAutomatedSource(source))
-    .filter((source): source is PublicSourceDefinition => source !== null);
   const maxItems = Math.max(refreshLimit(), activeSources.length);
   const outcomes = await Promise.all(
     activeSources.map(async (source) => {
@@ -157,6 +193,19 @@ export async function refreshPublicSources(
       content: entry.content,
       researchSourceId: source.id,
     });
+    if (document.status === "suppressed") {
+      items.push({
+        sourceId: source.id,
+        sourceName: source.name,
+        title: entry.title,
+        sourceUrl: entry.sourceUrl,
+        isNew: false,
+        status: "duplicate",
+        updateId: null,
+        error: null,
+      });
+      continue;
+    }
     if (document.duplicate && document.status === "analyzed") {
       items.push({
         sourceId: source.id,
@@ -290,7 +339,7 @@ export async function generateDailyBrief(
     const sourceId = repository.getResearchSourceIdForUpdate(update.id);
     const source = sourceId
       ? findSourceById(sourceId) ??
-        configuredAutomatedSource(repository.getSource(sourceId))
+        configuredTrustedSource(repository.getSource(sourceId))
       : undefined;
     if (source) {
       sourceProfilesByUpdateId[update.id] = {
@@ -327,16 +376,26 @@ export async function evaluatePendingTheses(
 ): Promise<PersistedThesisEvaluationBatch> {
   const latestEvaluationCursor =
     repository.getLatestThesisEvaluationRunCursor();
-  const candidateUpdates = latestEvaluationCursor
+  const newUpdates = latestEvaluationCursor
     ? repository.listUpdatesIngestedAfter(latestEvaluationCursor)
     : repository.listAllUpdates();
-  const pendingUpdates = candidateUpdates.filter(
-    (update) => update.claims.length > 0,
+  const requeuedUpdates =
+    repository.listRequeuedThesisEvaluationUpdates();
+  const candidateUpdates = [
+    ...new Map(
+      [...newUpdates, ...requeuedUpdates].map((update) => [
+        update.id,
+        update,
+      ]),
+    ).values(),
+  ];
+  const pendingUpdates = selectThesisEvaluationEligibleUpdates(
+    candidateUpdates,
   );
   const signalIngestionCursor = candidateUpdates.reduce<string | null>(
     (latest, update) =>
       !latest || update.ingestedAt > latest ? update.ingestedAt : latest,
-    null,
+    latestEvaluationCursor,
   );
   const theses = repository.listTheses({ status: "active" });
   const thesisBatches = chunksOf(
@@ -364,6 +423,9 @@ export async function evaluatePendingTheses(
         completedAt: empty.evaluatedAt,
       });
     }
+    repository.clearThesisEvaluationRequeue(
+      requeuedUpdates.map((update) => update.id),
+    );
     return { ...empty, evaluations: [] };
   }
 
@@ -371,10 +433,18 @@ export async function evaluatePendingTheses(
   let model = "";
   const evaluations: ThesisEvaluation[] = [];
   for (const thesisBatch of thesisBatches) {
+    const thesisIdsInBatch = new Set(
+      thesisBatch.map((thesis) => thesis.id),
+    );
     for (const signalBatch of signalBatches) {
       const batch = await runThesisEvaluation({
         theses: thesisBatch,
-        signals: signalBatch,
+        signals: signalBatch.map((signal) => ({
+          ...signal,
+          macroThesisImpacts: signal.macroThesisImpacts.filter((impact) =>
+            thesisIdsInBatch.has(impact.thesisId),
+          ),
+        })),
       });
       evaluatedAt = batch.evaluatedAt;
       model = batch.model;
@@ -417,6 +487,13 @@ export async function evaluatePendingTheses(
                   rationale: reference.reason,
                 })),
               ),
+              ...(proposal.contextEvidence ?? []).flatMap((reference) =>
+                reference.claimIds.map((claimId) => ({
+                  claimId,
+                  stance: "context" as const,
+                  rationale: reference.reason,
+                })),
+              ),
             ],
             model: proposal.model,
           }),
@@ -433,7 +510,92 @@ export async function evaluatePendingTheses(
       completedAt: evaluatedAt,
     });
   }
+  repository.clearThesisEvaluationRequeue(
+    requeuedUpdates.map((update) => update.id),
+  );
   return { evaluatedAt, model, evaluations };
+}
+
+export async function routeStoredSignalToMacroTheses(
+  repository: RelayRepository,
+  updateId: string,
+): Promise<IntelligenceUpdate> {
+  const update = repository.getUpdate(updateId);
+  if (!update) {
+    throw new RangeError(`Unknown signal: ${updateId}`);
+  }
+  if (update.macroThesisImpacts.length > 0) {
+    return update;
+  }
+  if (
+    update.materiality === "not-material" ||
+    update.novelty === "repetition" ||
+    update.claims.length === 0
+  ) {
+    return update;
+  }
+  const macroTheses = repository
+    .listTheses({ kind: "macro", status: "active" })
+    .map((thesis) => ({
+      id: thesis.id,
+      title: thesis.title,
+      belief: thesis.currentVersion.belief,
+      confidenceScore: thesis.currentVersion.confidenceScore,
+      unknowns: thesis.currentVersion.unknowns,
+      strengtheningConditions:
+        thesis.currentVersion.strengtheningConditions,
+      weakeningConditions:
+        thesis.currentVersion.weakeningConditions,
+      layerIds: thesis.layerIds,
+    }));
+  const macroThesisImpacts = await runMacroThesisRouting(
+    update,
+    macroTheses,
+  );
+  return repository.persistAnalyzedUpdate({
+    ...update,
+    macroThesisImpacts,
+  });
+}
+
+export function selectThesisEvaluationEligibleUpdates(
+  updates: IntelligenceUpdate[],
+): IntelligenceUpdate[] {
+  return selectBriefEligibleUpdates(updates);
+}
+
+export async function requeueSignalThesisEvaluation(
+  repository: RelayRepository,
+  updateId: string,
+): Promise<ThesisEvaluationRequeueResult> {
+  let update = repository.getUpdate(updateId);
+  if (!update) {
+    throw new RangeError(`Unknown signal: ${updateId}`);
+  }
+  let routesClassified = false;
+  const wasManuallyPrepared =
+    repository.getThesisEvaluationRequeueReason(updateId) ===
+    MANUAL_REEVALUATION_REASON;
+  if (
+    (update.macroThesisImpacts ?? []).length === 0 &&
+    !wasManuallyPrepared
+  ) {
+    update = await routeStoredSignalToMacroTheses(repository, updateId);
+    routesClassified = true;
+  }
+  if (selectThesisEvaluationEligibleUpdates([update]).length === 0) {
+    throw new TypeError(
+      "This signal is not eligible for thesis evaluation. It needs at least one material company or macro thesis impact.",
+    );
+  }
+  return {
+    ...repository.queueThesisEvaluationUpdate(
+      updateId,
+      MANUAL_REEVALUATION_REASON,
+    ),
+    macroRouteCount: (update.macroThesisImpacts ?? []).length,
+    routesClassified,
+  };
 }
 
 function configuredAutomatedSource(
@@ -446,7 +608,7 @@ function configuredAutomatedSource(
     (definition) => definition.id === source.id,
   );
   if (builtIn) {
-    return builtIn;
+    return { ...builtIn, thesisIds: source.thesisIds };
   }
   if (!source.userAdded) {
     return null;
@@ -455,10 +617,11 @@ function configuredAutomatedSource(
     id: source.id,
     name: source.name,
     type: source.type as PublicSourceDefinition["type"],
-    role: "primary",
-    authorityTier: "unknown",
+    role: source.role,
+    authorityTier: source.authorityTier,
     layerIds: source.layerIds,
     companyTickers: source.companyTickers,
+    thesisIds: source.thesisIds,
     intakeMode: "feed",
     fetchStrategy: source.type === "release" ? "atom" : "rss",
     url: source.url,
@@ -469,6 +632,49 @@ function configuredAutomatedSource(
     topicRules: {
       maxAgeDays: source.type === "paper" ? 21 : 45,
     },
+  };
+}
+
+function configuredTrustedSource(
+  source: ResearchSource | null,
+): TrustedSourceDefinition | undefined {
+  if (!source) {
+    return undefined;
+  }
+  const builtIn = findSourceById(source.id);
+  if (builtIn) {
+    return { ...builtIn, thesisIds: source.thesisIds };
+  }
+  if (!source.userAdded) {
+    return undefined;
+  }
+  const automated = configuredAutomatedSource(source);
+  if (automated) {
+    return automated;
+  }
+  return {
+    id: source.id,
+    name: source.name,
+    type: source.type,
+    role: source.role,
+    authorityTier: source.authorityTier,
+    layerIds: source.layerIds,
+    companyTickers: source.companyTickers,
+    thesisIds: source.thesisIds,
+    intakeMode: source.url ? "public-url" : "manual-excerpt",
+    fetchStrategy: source.url ? "on-demand-url" : "manual",
+    url: source.url,
+    allowedDomains: source.domain ? [source.domain] : [],
+    enabledByDefault: false,
+    priority:
+      source.authorityTier === "first-party"
+        ? 95
+        : source.authorityTier === "specialist"
+          ? 90
+          : source.authorityTier === "context"
+            ? 75
+            : 50,
+    perRefreshQuota: 0,
   };
 }
 
@@ -506,8 +712,23 @@ function buildAnalysisContext(
           priority: source.priority,
           layerIds: source.layerIds,
           companyTickers: source.companyTickers,
+          thesisIds: source.thesisIds ?? [],
         }
       : null,
+    macroTheses: repository
+      .listTheses({ kind: "macro", status: "active" })
+      .map((thesis) => ({
+        id: thesis.id,
+        title: thesis.title,
+        belief: thesis.currentVersion.belief,
+        confidenceScore: thesis.currentVersion.confidenceScore,
+        unknowns: thesis.currentVersion.unknowns,
+        strengtheningConditions:
+          thesis.currentVersion.strengtheningConditions,
+        weakeningConditions:
+          thesis.currentVersion.weakeningConditions,
+        layerIds: thesis.layerIds,
+      })),
   };
 }
 
@@ -538,7 +759,9 @@ function toEvaluationSignal(
     repository.getResearchSourceIdForUpdate(update.id) ??
     update.claims[0]?.sourceId ??
     `publisher-${slugify(update.publisher)}`;
-  const sourceProfile = findSourceById(sourceId);
+  const sourceProfile =
+    findSourceById(sourceId) ??
+    configuredTrustedSource(repository.getSource(sourceId));
   return {
     id: update.id,
     title: update.title,
@@ -555,6 +778,13 @@ function toEvaluationSignal(
     layerIds: update.layerIds,
     whatHappened: update.whatHappened,
     whyItMatters: update.whyItMatters,
+    macroThesisImpacts: (update.macroThesisImpacts ?? []).map((impact) => ({
+      thesisId: impact.thesisId,
+      relevance: impact.relevance,
+      stance: impact.stance,
+      rationale: impact.rationale,
+      claimIds: impact.claimIds,
+    })),
     claims: update.claims.map((claim) => ({
       id: claim.id,
       quote: claim.quote,

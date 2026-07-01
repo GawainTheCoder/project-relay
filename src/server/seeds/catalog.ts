@@ -445,6 +445,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     watchNext: ["Rubin production availability", "Gross margin through the platform transition", "Cloud deployment timing"],
     claims: [{ id: "claim-nvda-dc", quote: "Record quarterly Data Center revenue of $62.3 billion, up 22% from Q3 and up 75% from a year ago", sourceId: "nvidia-ir", locator: "Q4 FY2026 results, highlights" }],
     thesisImpacts: [{ id: "impact-nvda-dc", companyTicker: "NVDA", direction: "bullish", summary: "Record growth supports the view that NVIDIA's platform demand remains structurally strong.", confidence: "high", horizon: "6–12 months", thesisDelta: "Strengthens confidence in durable platform demand.", decision: "proposed" }],
+    macroThesisImpacts: [],
     model: null,
   },
   {
@@ -467,6 +468,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     watchNext: ["XPU customer concentration", "Ethernet switch mix", "Sustainability beyond the initial program ramps"],
     claims: [{ id: "claim-avgo-ai", quote: "We expect AI semiconductor revenue to double year-over-year to $8.2 billion", sourceId: "broadcom-ir", locator: "Q4 FY2025 results, CEO commentary" }],
     thesisImpacts: [{ id: "impact-avgo-ai", companyTicker: "AVGO", direction: "bullish", summary: "The outlook validates both legs of the custom XPU and Ethernet thesis.", confidence: "high", horizon: "3–12 months", thesisDelta: "Strengthens confidence in custom XPU and Ethernet adoption.", decision: "proposed" }],
+    macroThesisImpacts: [],
     model: null,
   },
   {
@@ -489,6 +491,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     watchNext: ["Backlog conversion", "Cancellation rates", "Liquid-cooling production capacity"],
     claims: [{ id: "claim-vrt-backlog", quote: "backlog increased to $15.0 billion, up 109% compared to the same period last year", sourceId: "vertiv-ir", locator: "Q4 2025 results, financial highlights" }],
     thesisImpacts: [{ id: "impact-vrt-backlog", companyTicker: "VRT", direction: "bullish", summary: "Order coverage strongly supports a multi-year power and thermal infrastructure cycle.", confidence: "high", horizon: "12–24 months", thesisDelta: "Extends confidence in the duration of the power and cooling cycle.", decision: "proposed" }],
+    macroThesisImpacts: [],
     model: null,
   },
   {
@@ -511,6 +514,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     watchNext: ["HBM4 customer qualification", "Yield progression", "Calendar 2027 supply commitments"],
     claims: [{ id: "claim-mu-hbm", quote: "HBM4 36GB 12H in high-volume production, designed for NVIDIA Vera Rubin", sourceId: "micron-ir", locator: "March 16, 2026 release, news highlights" }],
     thesisImpacts: [{ id: "impact-mu-hbm", companyTicker: "MU", direction: "bullish", summary: "High-volume HBM4 production reinforces the durable mix-upgrade thesis.", confidence: "high", horizon: "3–12 months", thesisDelta: "Raises confidence in HBM mix and production timing.", decision: "proposed" }],
+    macroThesisImpacts: [],
     model: null,
   },
   {
@@ -533,6 +537,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     watchNext: ["Independent benchmark results", "Production adoption", "Integration with open inference frameworks"],
     claims: [{ id: "claim-nvda-dynamo", quote: "Dynamo boosts inference performance of NVIDIA Blackwell GPUs by up to 7x", sourceId: "nvidia-ir", locator: "Dynamo 1.0 release, news summary" }],
     thesisImpacts: [{ id: "impact-nvda-dynamo", companyTicker: "NVDA", direction: "bullish", summary: "Production serving software strengthens NVIDIA's full-stack differentiation.", confidence: "medium", horizon: "3–12 months", thesisDelta: "Strengthens the software component of the full-stack thesis.", decision: "proposed" }],
+    macroThesisImpacts: [],
     model: null,
   },
   {
@@ -555,6 +560,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     watchNext: ["Customer deployments", "Power per transported bit", "Optical port requirements"],
     claims: [{ id: "claim-avgo-jericho", quote: "Scales 1M+ XPU Clusters Beyond Single Facility Limits", sourceId: "broadcom-ir", locator: "Jericho4 release, subtitle" }],
     thesisImpacts: [{ id: "impact-anet-jericho", companyTicker: "ANET", direction: "bullish", summary: "Campus-scale AI validates a larger high-speed Ethernet switching opportunity.", confidence: "medium", horizon: "12–24 months", thesisDelta: "Broadens the expected addressable Ethernet deployment scope.", decision: "proposed" }],
+    macroThesisImpacts: [],
     model: null,
   },
   {
@@ -577,6 +583,7 @@ export const seedUpdates: IntelligenceUpdate[] = [
     watchNext: ["CoWoS capacity additions", "Packaging lead times", "Customer prepayments"],
     claims: [{ id: "claim-tsm-packaging", quote: "AI-related demand continues to be extremely robust.", sourceId: "tsmc-ir", locator: "Q1 2026 earnings call transcript" }],
     thesisImpacts: [{ id: "impact-tsm-packaging", companyTicker: "TSM", direction: "bullish", summary: "Shared dependence on advanced packaging reinforces TSMC's strategic position.", confidence: "medium", horizon: "12–24 months", thesisDelta: "Strengthens confidence in advanced-packaging scarcity and pricing power.", decision: "proposed" }],
+    macroThesisImpacts: [],
     model: null,
   },
 ];

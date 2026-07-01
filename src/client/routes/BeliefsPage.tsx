@@ -49,6 +49,16 @@ export function BeliefsPage() {
             .includes(normalizedQuery)),
     );
   }, [beliefs, kind, query]);
+  const coverageByThesisId = useMemo(
+    () =>
+      new Map(
+        (data?.sourceCoverage ?? []).map((coverage) => [
+          coverage.thesisId,
+          coverage,
+        ]),
+      ),
+    [data?.sourceCoverage],
+  );
 
   if (isLoading) {
     return <PageLoading label="Loading theses" />;
@@ -157,7 +167,11 @@ export function BeliefsPage() {
         {visibleBeliefs.length ? (
           <div className="border-t border-relay-border">
             {visibleBeliefs.map((belief) => (
-              <BeliefCard belief={belief} key={belief.id} />
+              <BeliefCard
+                belief={belief}
+                key={belief.id}
+                sourceCoverage={coverageByThesisId.get(belief.id)}
+              />
             ))}
           </div>
         ) : (

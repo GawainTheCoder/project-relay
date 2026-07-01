@@ -22,13 +22,15 @@ import type { ResearchSource } from "../../shared/contracts";
 import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { Button } from "../components/ui/Button";
 import { useDashboard } from "../context/useDashboard";
-import { AddResearchSourceDialog } from "../features/sources/AddResearchSourceDialog";
+import { AddAutomatedFeedDialog } from "../features/sources/AddAutomatedFeedDialog";
+import { AddTrustedWebsiteDialog } from "../features/sources/AddTrustedWebsiteDialog";
 import {
   ImportSourceDialog,
   type ImportSourceFeedback,
 } from "../features/sources/ImportSourceDialog";
-import { removeResearchSource } from "../lib/api";
-import { formatRelativeTime } from "../lib/format";
+import { SourceCoverageAudit } from "../features/sources/SourceCoverageAudit";
+import { refreshSource, removeResearchSource } from "../lib/api";
+import { formatRelativeTime, getLayerName } from "../lib/format";
 
 type Action = "refresh" | "evaluate" | "brief";
 
@@ -98,12 +100,19 @@ const sourceTypeLabels: Record<ResearchSource["type"], string> = {
   filing: "Company disclosure",
   paper: "Research feed",
   release: "Release feed",
-  manual: "On-demand source",
+  manual: "Trusted website",
+};
+
+const authorityLabels: Record<ResearchSource["authorityTier"], string> = {
+  "first-party": "First-party",
+  specialist: "Specialist",
+  context: "Context",
+  unknown: "Unclassified",
 };
 
 function SourceStatus({ source }: { source: ResearchSource }) {
   const label = !source.enabled
-    ? "On demand"
+    ? "Manual profile"
     : source.status === "ready"
       ? "Ready"
       : source.status === "syncing"
@@ -136,7 +145,11 @@ export function SourcesPage() {
     refreshAllSources,
   } = useDashboard();
   const [isImportOpen, setIsImportOpen] = useState(false);
-  const [isAddSourceOpen, setIsAddSourceOpen] = useState(false);
+  const [signalSourceProfileId, setSignalSourceProfileId] = useState<
+    string | null
+  >(null);
+  const [isAddFeedOpen, setIsAddFeedOpen] = useState(false);
+  const [isAddWebsiteOpen, setIsAddWebsiteOpen] = useState(false);
   const [activeAction, setActiveAction] = useState<Action | null>(null);
   const [actionMessage, setActionMessage] = useState<ActionFeedback | null>(
     null,
@@ -145,8 +158,20 @@ export function SourcesPage() {
   const [refreshItems, setRefreshItems] = useState<RefreshItemView[]>([]);
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [removingSourceId, setRemovingSourceId] = useState<string | null>(null);
-  const closeImport = useCallback(() => setIsImportOpen(false), []);
-  const closeAddSource = useCallback(() => setIsAddSourceOpen(false), []);
+  const [refreshingSourceId, setRefreshingSourceId] = useState<string | null>(
+    null,
+  );
+  const closeImport = useCallback(() => {
+    setIsImportOpen(false);
+    setSignalSourceProfileId(null);
+  }, []);
+  const closeAddFeed = useCallback(() => setIsAddFeedOpen(false), []);
+  const closeAddWebsite = useCallback(() => setIsAddWebsiteOpen(false), []);
+
+  const openImport = (sourceProfileId?: string) => {
+    setSignalSourceProfileId(sourceProfileId ?? null);
+    setIsImportOpen(true);
+  };
 
   if (isLoading) {
     return <PageLoading label="Checking trusted sources" />;
@@ -245,11 +270,43 @@ export function SourcesPage() {
     }
   };
 
+  const refreshOneSource = async (source: ResearchSource) => {
+    setRefreshingSourceId(source.id);
+    setActionMessage(null);
+    setActionError(null);
+    setRefreshItems([]);
+    try {
+      const result = await refreshSource(source.id);
+      setRefreshItems(refreshItemsFrom(result));
+      await reload();
+      setActionMessage({
+        message: `${source.name} refresh complete: ${result.imported} new, ${result.analyzed} analyzed${
+          result.errors.length
+            ? `, ${result.errors.length} error${result.errors.length === 1 ? "" : "s"}`
+            : ""
+        }.`,
+      });
+    } catch (caughtError) {
+      setActionError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : `${source.name} could not be refreshed.`,
+      );
+    } finally {
+      setRefreshingSourceId(null);
+    }
+  };
+
   const enabledSources = data.sources.filter((source) => source.enabled);
   const healthySources = enabledSources.filter(
     (source) => source.status === "ready",
   ).length;
   const onDemandSources = data.sources.length - enabledSources.length;
+  const trustedSourceProfiles = data.sources.filter(
+    (source) =>
+      Boolean(source.domain) &&
+      !["rss", "paper", "release"].includes(source.type),
+  );
 
   return (
     <div className="relay-enter min-h-screen">
@@ -266,7 +323,7 @@ export function SourcesPage() {
           <div className="flex w-full flex-wrap gap-2 sm:w-auto">
             <Button
               className="flex-1 sm:flex-none"
-              disabled={activeAction !== null}
+              disabled={activeAction !== null || refreshingSourceId !== null}
               onClick={() => void runAction("refresh")}
             >
               {activeAction === "refresh" ? (
@@ -277,11 +334,15 @@ export function SourcesPage() {
               ) : (
                 <RefreshCw aria-hidden="true" className="size-3.5" />
               )}
-              Refresh
+              Refresh all
             </Button>
             <Button
               className="flex-1 sm:flex-none"
-              disabled={activeAction !== null || data.updates.length === 0}
+              disabled={
+                activeAction !== null ||
+                refreshingSourceId !== null ||
+                data.updates.length === 0
+              }
               onClick={() => void runAction("evaluate")}
             >
               {activeAction === "evaluate" ? (
@@ -296,7 +357,11 @@ export function SourcesPage() {
             </Button>
             <Button
               className="flex-1 sm:flex-none"
-              disabled={activeAction !== null || data.updates.length === 0}
+              disabled={
+                activeAction !== null ||
+                refreshingSourceId !== null ||
+                data.updates.length === 0
+              }
               onClick={() => void runAction("brief")}
             >
               {activeAction === "brief" ? (
@@ -311,14 +376,21 @@ export function SourcesPage() {
             </Button>
             <Button
               className="flex-1 sm:flex-none"
-              onClick={() => setIsAddSourceOpen(true)}
+              onClick={() => setIsAddFeedOpen(true)}
+            >
+              <Rss aria-hidden="true" className="size-3.5" />
+              Add automated feed
+            </Button>
+            <Button
+              className="flex-1 sm:flex-none"
+              onClick={() => setIsAddWebsiteOpen(true)}
             >
               <Plus aria-hidden="true" className="size-3.5" />
-              Add source
+              Add trusted website
             </Button>
             <Button
               className="w-full sm:w-auto"
-              onClick={() => setIsImportOpen(true)}
+              onClick={() => openImport()}
               variant="primary"
             >
               <FilePlus2 aria-hidden="true" className="size-3.5" />
@@ -357,10 +429,12 @@ export function SourcesPage() {
           </div>
         ) : null}
 
+        <SourceCoverageAudit coverage={data.sourceCoverage} />
+
         {refreshItems.length ? (
           <section
             aria-labelledby="refresh-results-title"
-            className="mb-7 overflow-hidden rounded-md border border-relay-border bg-relay-surface"
+            className="mt-7 overflow-hidden rounded-md border border-relay-border bg-relay-surface"
           >
             <header className="border-b border-relay-border px-4 py-3">
               <h2
@@ -450,7 +524,7 @@ export function SourcesPage() {
 
         <section
           aria-label="Source health summary"
-          className="grid gap-px overflow-hidden rounded-md border border-relay-border bg-relay-border sm:grid-cols-3"
+          className="mt-7 grid gap-px overflow-hidden rounded-md border border-relay-border bg-relay-border sm:grid-cols-3"
         >
           <div className="bg-relay-surface p-5">
             <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-subtle">
@@ -476,7 +550,7 @@ export function SourcesPage() {
             </p>
             <p className="mt-2 text-2xl font-semibold">{onDemandSources}</p>
             <p className="mt-1 text-xs text-relay-muted">
-              URL or excerpt sources
+              trusted website profiles
             </p>
           </div>
         </section>
@@ -488,7 +562,8 @@ export function SourcesPage() {
                 Source health
               </h2>
               <p className="mt-1 text-sm text-relay-muted">
-                Specialist feeds, official company channels, and manual context.
+                Refresh automated feeds; use trusted website profiles for
+                attribution and coverage context.
               </p>
             </div>
             <div className="flex items-center gap-4">
@@ -507,7 +582,7 @@ export function SourcesPage() {
             <div className="divide-y divide-relay-border">
               {data.sources.map((source) => (
                 <article
-                  className="grid gap-4 py-5 lg:grid-cols-[minmax(220px,1fr)_140px_120px_140px_auto]"
+                  className="grid gap-4 py-5 lg:grid-cols-[minmax(220px,1fr)_140px_120px_140px_190px]"
                   key={source.id}
                 >
                   <div className="min-w-0">
@@ -532,13 +607,44 @@ export function SourcesPage() {
                         Add excerpts manually when permitted.
                       </p>
                     )}
+                    {source.layerIds.length ||
+                    source.companyTickers.length ||
+                    source.thesisIds.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {source.layerIds.map((layerId) => (
+                          <span
+                            className="rounded border border-relay-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle"
+                            key={layerId}
+                          >
+                            {getLayerName(layerId)}
+                          </span>
+                        ))}
+                        {source.companyTickers.length ? (
+                          <span className="rounded border border-relay-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle">
+                            {source.companyTickers.join(", ")}
+                          </span>
+                        ) : null}
+                        {source.thesisIds.length ? (
+                          <span className="rounded border border-relay-border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle">
+                            {source.thesisIds.length} macro{" "}
+                            {source.thesisIds.length === 1 ? "thesis" : "theses"}
+                          </span>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
                   <div>
                     <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-                      Source
+                      Classification
                     </p>
                     <p className="mt-1 text-xs text-relay-muted">
                       {sourceTypeLabels[source.type]}
+                    </p>
+                    <p className="mt-1 text-[10px] text-relay-subtle">
+                      {source.role === "primary"
+                        ? "Primary evidence"
+                        : "Context only"}{" "}
+                      · {authorityLabels[source.authorityTier]}
                     </p>
                   </div>
                   <div>
@@ -556,13 +662,47 @@ export function SourcesPage() {
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-relay-muted">
                       <Clock3 aria-hidden="true" className="size-3" />
                       {!source.enabled
-                        ? "On demand"
+                        ? "Not automated"
                         : source.lastSyncedAt
                           ? formatRelativeTime(source.lastSyncedAt)
                           : "Not yet checked"}
                     </p>
                   </div>
-                  <div className="flex items-center justify-end">
+                  <div className="flex flex-wrap items-center justify-end gap-1">
+                    {source.enabled ? (
+                      <Button
+                        aria-label={`Refresh ${source.name}`}
+                        disabled={
+                          activeAction !== null ||
+                          refreshingSourceId !== null ||
+                          removingSourceId !== null
+                        }
+                        onClick={() => void refreshOneSource(source)}
+                        variant="quiet"
+                      >
+                        {refreshingSourceId === source.id ? (
+                          <LoaderCircle
+                            aria-hidden="true"
+                            className="size-3.5 animate-spin"
+                          />
+                        ) : (
+                          <RefreshCw
+                            aria-hidden="true"
+                            className="size-3.5"
+                          />
+                        )}
+                        Refresh
+                      </Button>
+                    ) : (
+                      <Button
+                        aria-label={`Add a signal from ${source.name}`}
+                        onClick={() => openImport(source.id)}
+                        variant="quiet"
+                      >
+                        <FilePlus2 aria-hidden="true" className="size-3.5" />
+                        Add signal
+                      </Button>
+                    )}
                     {confirmRemoveId === source.id ? (
                       <div className="flex items-center gap-1">
                         <Button
@@ -616,31 +756,58 @@ export function SourcesPage() {
         </section>
 
         <section className="mt-10 border-l border-relay-border-strong pl-5">
-          <h2 className="text-sm font-semibold">Manual context boundary</h2>
+          <h2 className="text-sm font-semibold">
+            Websites are profiles; webpages are signals
+          </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-relay-muted">
-            Paste only the excerpts you are authorized to process. Relay uses
-            them as private context and keeps the supporting evidence local.
+            Register a domain here when Relay should recognize the publisher.
+            Use Add signal for an individual article or arbitrary public URL.
+            Paste only excerpts you are authorized to process.
           </p>
         </section>
       </main>
 
       <ImportSourceDialog
+        {...(signalSourceProfileId
+          ? { initialSourceProfileId: signalSourceProfileId }
+          : {})}
         isOpen={isImportOpen}
+        key={signalSourceProfileId ?? "generic-signal-intake"}
         onClose={closeImport}
         onImported={async () => {
           setIsImportOpen(false);
+          setSignalSourceProfileId(null);
           await reload();
         }}
         onResult={handleImportResult}
+        sourceProfiles={trustedSourceProfiles}
       />
-      <AddResearchSourceDialog
-        isOpen={isAddSourceOpen}
-        onClose={closeAddSource}
+      <AddAutomatedFeedDialog
+        isOpen={isAddFeedOpen}
+        onClose={closeAddFeed}
         onCreated={async (source) => {
-          setIsAddSourceOpen(false);
           await reload();
           setActionError(null);
-          setActionMessage({ message: `${source.name} was added.` });
+          setActionMessage({
+            message: `${source.name} was added as an automated feed.`,
+          });
+        }}
+        onError={(message) => {
+          setActionMessage(null);
+          setActionError(message);
+        }}
+      />
+      <AddTrustedWebsiteDialog
+        companies={data.companies}
+        isOpen={isAddWebsiteOpen}
+        macroTheses={data.sourceCoverage}
+        onClose={closeAddWebsite}
+        onCreated={async (source) => {
+          await reload();
+          setActionError(null);
+          setActionMessage({
+            message: `${source.name} was added as a trusted website profile.`,
+          });
         }}
         onError={(message) => {
           setActionMessage(null);

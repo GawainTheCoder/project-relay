@@ -21,7 +21,7 @@ import type {
 import { Button } from "../../components/ui/Button";
 import { createResearchSource } from "../../lib/api";
 
-interface AddResearchSourceDialogProps {
+interface AddAutomatedFeedDialogProps {
   isOpen: boolean;
   onClose: () => void;
   onCreated: (source: ResearchSource) => Promise<void>;
@@ -52,12 +52,12 @@ const sourceTypeOptions: Array<{
   },
 ];
 
-export function AddResearchSourceDialog({
+export function AddAutomatedFeedDialog({
   isOpen,
   onClose,
   onCreated,
   onError,
-}: AddResearchSourceDialogProps) {
+}: AddAutomatedFeedDialogProps) {
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [type, setType] = useState<SourceType>("rss");
@@ -139,7 +139,7 @@ export function AddResearchSourceDialog({
 
   return (
     <div
-      aria-labelledby="add-source-title"
+      aria-labelledby="add-automated-feed-title"
       aria-modal="true"
       className="fixed inset-0 z-50 grid place-items-center bg-black/70 p-4"
       onMouseDown={(event) => {
@@ -154,16 +154,16 @@ export function AddResearchSourceDialog({
           <div>
             <h2
               className="text-lg font-semibold tracking-tight"
-              id="add-source-title"
+              id="add-automated-feed-title"
             >
-              Add trusted source
+              Add automated feed
             </h2>
             <p className="mt-1 text-sm text-relay-muted">
-              Extend the sources Relay watches or accepts context from.
+              Relay periodically checks RSS, release, and research feeds.
             </p>
           </div>
           <button
-            aria-label="Close add source"
+            aria-label="Close add automated feed"
             className="rounded p-1.5 text-relay-muted hover:bg-relay-raised hover:text-relay-text"
             disabled={isSubmitting}
             onClick={closeDialog}
@@ -180,9 +180,9 @@ export function AddResearchSourceDialog({
               role="status"
             >
               <Check aria-hidden="true" className="size-4" />
-              <p className="mt-3 text-sm font-medium">Source added</p>
+              <p className="mt-3 text-sm font-medium">Automated feed added</p>
               <p className="mt-1 text-xs leading-5">
-                {createdSource.name} is now part of your trusted source list.
+                Relay can now check {createdSource.name} during feed refreshes.
               </p>
             </div>
             <div className="mt-5 flex justify-end">
@@ -249,6 +249,13 @@ export function AddResearchSourceDialog({
                 />
               </label>
 
+              <aside className="rounded-md border border-relay-border bg-relay-deep px-3 py-3 text-xs leading-5 text-relay-muted">
+                This form requires a feed URL. To register a publisher without
+                a feed, use <span className="font-medium text-relay-text">Add trusted website</span>.
+                To analyze one article or webpage, use{" "}
+                <span className="font-medium text-relay-text">Add signal</span>.
+              </aside>
+
               {error ? (
                 <div
                   className="flex items-start gap-2 rounded-md border border-relay-negative/35 bg-relay-negative/8 px-3 py-2.5 text-xs leading-5 text-relay-negative"
@@ -280,7 +287,7 @@ export function AddResearchSourceDialog({
                 ) : (
                   <Plus aria-hidden="true" className="size-3.5" />
                 )}
-                {isSubmitting ? "Adding source" : "Add source"}
+                {isSubmitting ? "Adding feed" : "Add automated feed"}
               </Button>
             </footer>
           </form>

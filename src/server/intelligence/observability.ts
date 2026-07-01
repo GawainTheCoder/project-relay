@@ -3,6 +3,7 @@ const MAX_METADATA_VALUE_LENGTH = 512;
 
 export type RelayOpenAIOperation =
   | "daily_brief"
+  | "macro_thesis_routing"
   | "signal_analysis"
   | "thesis_evaluation";
 

@@ -66,6 +66,7 @@ function makeOutput(): AnalysisOutput {
         horizon: "6-12 months",
       },
     ],
+    macroThesisDispositions: [],
   };
 }
 
@@ -246,7 +247,7 @@ describe("analyzeDocument", () => {
         NOW.toISOString(),
         "gpt-5.4-mini",
       ),
-    ).toThrow("requires watchlist thesis context");
+    ).toThrow("requires company or macro thesis context");
   });
 
   it("rejects thesis impacts for companies outside the watchlist", () => {

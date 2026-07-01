@@ -7,6 +7,7 @@ import type {
   IntelligenceUpdate,
   SourceRefreshResult,
   ThesisEvaluation,
+  ThesisEvaluationRequeueResult,
 } from "../shared/contracts.js";
 
 import { jsonError, validationDetails } from "./api/errors.js";
@@ -18,6 +19,7 @@ import {
   researchSourceInputSchema,
   resourceIdSchema,
   searchQuerySchema,
+  sourceProfileInputSchema,
   thesisEvaluationReviewInputSchema,
   thesisListQuerySchema,
   tickerSchema,
@@ -27,6 +29,7 @@ import {
   type RelayRepository,
 } from "./db/repository.js";
 import { createImpactReviewRepository } from "./evaluation/index.js";
+import { auditMacroThesisSourceCoverage } from "./ingestion/source-coverage.js";
 import { findSourceForUrl } from "./ingestion/source-registry.js";
 import { canonicalizeUrl } from "./ingestion/normalize.js";
 import { LocalSearchService } from "./search/index.js";
@@ -39,6 +42,10 @@ export interface AppServices {
     input: ImportSourceInput,
   ) => Promise<IntelligenceUpdate>;
   refreshSources?: () => Promise<SourceRefreshResult>;
+  refreshSource?: (sourceId: string) => Promise<SourceRefreshResult>;
+  requeueSignalThesisEvaluation?: (
+    updateId: string,
+  ) => Promise<ThesisEvaluationRequeueResult>;
   evaluateTheses?: () => Promise<{
     evaluatedAt: string;
     model: string;
@@ -202,7 +209,15 @@ export function createApp(options: CreateAppOptions = {}): Hono {
   });
 
   application.get("/api/dashboard", (context) => {
-    return context.json(getRepository().getDashboard());
+    const repository = getRepository();
+    const dashboard = repository.getDashboard();
+    return context.json({
+      ...dashboard,
+      sourceCoverage: auditMacroThesisSourceCoverage({
+        theses: repository.listTheses({ kind: "macro" }),
+        catalogSources: dashboard.sources,
+      }),
+    });
   });
 
   application.get("/api/theses", (context) => {
@@ -387,6 +402,105 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     return context.json(update);
   });
 
+  application.delete("/api/updates/:id", (context) => {
+    const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+    if (!parsedId.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The signal ID is invalid.",
+        validationDetails(parsedId.error),
+      );
+    }
+    try {
+      if (!getRepository().deleteUpdate(parsedId.data)) {
+        return jsonError(
+          context,
+          404,
+          "UPDATE_NOT_FOUND",
+          "The requested signal does not exist.",
+        );
+      }
+      return context.body(null, 204);
+    } catch (error) {
+      if (error instanceof TypeError) {
+        return jsonError(
+          context,
+          409,
+          "UPDATE_IN_USE",
+          error.message,
+        );
+      }
+      throw error;
+    }
+  });
+
+  application.post(
+    "/api/updates/:id/requeue-thesis-evaluation",
+    async (context) => {
+      const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+      if (!parsedId.success) {
+        return jsonError(
+          context,
+          400,
+          "VALIDATION_ERROR",
+          "The signal ID is invalid.",
+          validationDetails(parsedId.error),
+        );
+      }
+      if (!options.services?.requeueSignalThesisEvaluation) {
+        return jsonError(
+          context,
+          503,
+          "SERVICE_UNAVAILABLE",
+          "Signal thesis re-evaluation is not configured.",
+        );
+      }
+      const operationId = `signal-thesis-requeue:${parsedId.data}`;
+      if (activeOperations.has(operationId)) {
+        return jsonError(
+          context,
+          409,
+          "OPERATION_IN_PROGRESS",
+          "This signal is already being prepared for thesis re-evaluation.",
+        );
+      }
+      activeOperations.add(operationId);
+      try {
+        const result = await options.services.requeueSignalThesisEvaluation(
+          parsedId.data,
+        );
+        return context.json(result, result.alreadyQueued ? 200 : 201);
+      } catch (error) {
+        if (error instanceof RangeError) {
+          return jsonError(
+            context,
+            404,
+            "UPDATE_NOT_FOUND",
+            "The requested signal does not exist.",
+          );
+        }
+        if (error instanceof TypeError) {
+          return jsonError(
+            context,
+            409,
+            "UPDATE_NOT_ELIGIBLE",
+            error.message,
+          );
+        }
+        return jsonError(
+          context,
+          502,
+          "THESIS_REEVALUATION_QUEUE_FAILED",
+          "Relay could not prepare this signal for thesis re-evaluation.",
+        );
+      } finally {
+        activeOperations.delete(operationId);
+      }
+    },
+  );
+
   application.post("/api/impacts/:id/review", async (context) => {
     const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
     const parsedBody = impactReviewInputSchema.safeParse(
@@ -405,11 +519,19 @@ export function createApp(options: CreateAppOptions = {}): Hono {
       );
     }
     try {
+      const previousReview = getReviewRepository().getReview(parsedId.data);
       const review = getReviewRepository().reviewImpact({
         impactId: parsedId.data,
         decision: parsedBody.data.decision,
         reasonTags: parsedBody.data.reasonTags,
         ...(parsedBody.data.note ? { note: parsedBody.data.note } : {}),
+      });
+      getRepository().reconcileImpactReview({
+        updateId: review.updateId,
+        impactId: review.impactId,
+        companyTicker: review.companyTicker,
+        decision: review.decision,
+        previousDecision: previousReview?.decision ?? null,
       });
       return context.json(review);
     } catch (error) {
@@ -522,6 +644,37 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     return context.json(source, 201);
   });
 
+  application.post("/api/source-profiles", async (context) => {
+    const parsedBody = sourceProfileInputSchema.safeParse(
+      await requestJson(context),
+    );
+    if (!parsedBody.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The trusted source profile is invalid.",
+        validationDetails(parsedBody.error),
+      );
+    }
+    try {
+      return context.json(
+        getRepository().addSourceProfile(parsedBody.data),
+        201,
+      );
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          context,
+          400,
+          "VALIDATION_ERROR",
+          error.message,
+        );
+      }
+      throw error;
+    }
+  });
+
   application.get("/api/sources/:id", (context) => {
     const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
     if (!parsedId.success) {
@@ -567,6 +720,68 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     return context.body(null, 204);
   });
 
+  application.post("/api/sources/:id/refresh", async (context) => {
+    const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+    if (!parsedId.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The source ID is invalid.",
+        validationDetails(parsedId.error),
+      );
+    }
+    const source = getRepository().getSource(parsedId.data);
+    if (!source) {
+      return jsonError(
+        context,
+        404,
+        "SOURCE_NOT_FOUND",
+        "The requested source does not exist.",
+      );
+    }
+    if (
+      !source.enabled ||
+      !source.url ||
+      !["rss", "paper", "release"].includes(source.type)
+    ) {
+      return jsonError(
+        context,
+        409,
+        "SOURCE_NOT_REFRESHABLE",
+        "This source is a profile for manual signal intake, not an automated feed.",
+      );
+    }
+    if (!options.services?.refreshSource) {
+      return jsonError(
+        context,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Source refresh is not configured.",
+      );
+    }
+    const operationId = `source-refresh:${parsedId.data}`;
+    if (
+      activeOperations.has("source-refresh") ||
+      activeOperations.has(operationId)
+    ) {
+      return jsonError(
+        context,
+        409,
+        "OPERATION_IN_PROGRESS",
+        "This source is already being refreshed.",
+      );
+    }
+    activeOperations.add(operationId);
+    try {
+      return context.json(
+        await options.services.refreshSource(parsedId.data),
+      );
+    } finally {
+      activeOperations.delete(operationId);
+    }
+  });
+
   application.post("/api/sources/import", async (context) => {
     const parsedBody = importSourceInputSchema.safeParse(
       await requestJson(context),
@@ -587,6 +802,9 @@ export function createApp(options: CreateAppOptions = {}): Hono {
       ...(parsedBody.data.sourceUrl
         ? { sourceUrl: canonicalizeUrl(parsedBody.data.sourceUrl) }
         : {}),
+      ...(parsedBody.data.sourceProfileId
+        ? { sourceProfileId: parsedBody.data.sourceProfileId }
+        : {}),
       ...(parsedBody.data.publishedAt
         ? { publishedAt: parsedBody.data.publishedAt }
         : {}),
@@ -595,9 +813,37 @@ export function createApp(options: CreateAppOptions = {}): Hono {
         ? { sourceKind: parsedBody.data.sourceKind }
         : {}),
     };
+    let researchSourceId: string;
+    try {
+      researchSourceId = importedInput.sourceProfileId
+        ? getRepository().getSourceProfile(
+            importedInput.sourceProfileId,
+            importedInput.sourceUrl,
+          ).id
+        : (
+            importedInput.sourceUrl
+              ? (
+                  getRepository().findSourceProfileForUrl(
+                    importedInput.sourceUrl,
+                  ) ?? findSourceForUrl(importedInput.sourceUrl)
+                )?.id
+              : undefined
+          ) ?? "manual-imports";
+    } catch (error) {
+      if (error instanceof RangeError) {
+        return jsonError(
+          context,
+          400,
+          "INVALID_SOURCE_PROFILE",
+          error.message,
+        );
+      }
+      throw error;
+    }
     const result = await processImportedSource({
       activeOperations,
       input: importedInput,
+      researchSourceId,
       repository: getRepository(),
       ...(options.services ? { services: options.services } : {}),
     });
@@ -621,7 +867,10 @@ export function createApp(options: CreateAppOptions = {}): Hono {
         "Source refresh is not configured.",
       );
     }
-    if (activeOperations.has("source-refresh")) {
+    if (
+      activeOperations.has("source-refresh") ||
+      [...activeOperations].some((id) => id.startsWith("source-refresh:"))
+    ) {
       return jsonError(
         context,
         409,
@@ -740,6 +989,7 @@ export const app = createApp();
 async function processImportedSource(input: {
   activeOperations: Set<string>;
   input: ImportSourceInput;
+  researchSourceId: string;
   repository: RelayRepository;
   services?: AppServices;
 }): Promise<ImportSuccess | ImportFailure> {
@@ -748,11 +998,21 @@ async function processImportedSource(input: {
     content:
       input.input.content ??
       `URL import queued for secure retrieval: ${input.input.sourceUrl ?? ""}`,
-    researchSourceId:
-      (input.input.sourceUrl
-        ? findSourceForUrl(input.input.sourceUrl)?.id
-        : undefined) ?? "manual-imports",
+    researchSourceId: input.researchSourceId,
   });
+  if (document.status === "suppressed") {
+    return {
+      ok: true,
+      payload: {
+        documentId: document.id,
+        duplicate: true,
+        status: "suppressed",
+        message:
+          "This signal was deleted previously and remains suppressed.",
+      },
+      status: 200,
+    };
+  }
   if (document.duplicate && document.updateId) {
     const existingUpdate = input.repository.getUpdate(document.updateId);
     if (existingUpdate) {

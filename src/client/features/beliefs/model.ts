@@ -108,6 +108,8 @@ function buildCompanyBelief(
     .map(({ impact, update }) => ({
       id: impact.id,
       outcome: evaluationOutcome(impact),
+      reviewStatus:
+        impact.review?.decision === "deferred" ? "deferred" : "pending",
       proposedStatement: impact.thesisDelta || null,
       confidenceDelta: confidenceDelta(impact),
       rationale: impact.summary,
@@ -135,7 +137,9 @@ function buildCompanyBelief(
     updatedAt: company.updatedAt,
     supportingEvidenceCount: supportingEvidence.length,
     opposingEvidenceCount: opposingEvidence.length,
-    pendingEvaluationCount: pendingEvaluations.length,
+    pendingEvaluationCount: pendingEvaluations.filter(
+      (evaluation) => evaluation.reviewStatus === "pending",
+    ).length,
     whyItMatters: company.whyItMatters,
     latestChange: null,
     unknowns: [],

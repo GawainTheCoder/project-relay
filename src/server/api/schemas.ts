@@ -63,6 +63,26 @@ export const researchSourceInputSchema = z
   })
   .strict();
 
+export const sourceProfileInputSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    domain: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .regex(
+        /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/,
+        "Use a bare public domain such as example.com.",
+      ),
+    publicUrl: webUrlSchema,
+    role: z.enum(["primary", "context"]),
+    authorityTier: z.enum(["first-party", "specialist", "context"]),
+    layerIds: z.array(z.enum(layerIds)).max(layerIds.length).default([]),
+    companyTickers: z.array(tickerSchema).max(50).default([]),
+    thesisIds: z.array(resourceIdSchema).max(50).default([]),
+  })
+  .strict();
+
 export const briefListQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(30),
 });
@@ -79,6 +99,7 @@ export const importSourceInputSchema = z
     title: z.string().trim().min(1).max(500),
     publisher: z.string().trim().min(1).max(200),
     sourceUrl: webUrlSchema.optional(),
+    sourceProfileId: resourceIdSchema.optional(),
     publishedAt: z.iso.datetime({ offset: true }).optional(),
     sourceKind: z
       .enum([

@@ -10,9 +10,11 @@ import type {
   ResearchSource,
   ResearchSourceInput,
   SearchResult,
+  SourceProfileInput,
   SourceRefreshResult,
   Thesis,
   ThesisEvaluation,
+  ThesisEvaluationRequeueResult,
   ThesisEvaluationReviewInput,
 } from "../../shared/contracts";
 
@@ -41,6 +43,7 @@ export interface BeliefEvidence {
 export interface BeliefEvaluation {
   id: string;
   outcome: BeliefEvaluationOutcome;
+  reviewStatus: "pending" | "deferred";
   proposedStatement: string | null;
   confidenceDelta: number;
   rationale: string;
@@ -196,6 +199,25 @@ export function refreshSources(): Promise<RefreshSourcesResult> {
   });
 }
 
+export type SourceProfileRole = SourceProfileInput["role"];
+export type SourceAuthorityTier = SourceProfileInput["authorityTier"];
+
+export function createTrustedSourceProfile(
+  input: SourceProfileInput,
+): Promise<ResearchSource> {
+  return requestJson<ResearchSource>("/api/source-profiles", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function refreshSource(id: string): Promise<RefreshSourcesResult> {
+  return requestJson<RefreshSourcesResult>(
+    `/api/sources/${encodeURIComponent(id)}/refresh`,
+    { method: "POST" },
+  );
+}
+
 export function generateBrief(): Promise<DailyBrief> {
   return requestJson<DailyBrief>("/api/briefs/generate", {
     method: "POST",
@@ -254,6 +276,21 @@ export function removeResearchSource(id: string): Promise<void> {
   return requestJson<void>(`/api/sources/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
+}
+
+export function removeSignal(id: string): Promise<void> {
+  return requestJson<void>(`/api/updates/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
+export function requeueSignalThesisEvaluation(
+  id: string,
+): Promise<ThesisEvaluationRequeueResult> {
+  return requestJson<ThesisEvaluationRequeueResult>(
+    `/api/updates/${encodeURIComponent(id)}/requeue-thesis-evaluation`,
+    { method: "POST" },
+  );
 }
 
 export function listBriefs(
@@ -328,9 +365,7 @@ function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
       (evidence) => evidence.stance === "opposes",
     ).length,
     pendingEvaluationCount: thesis.evaluations.filter(
-      (evaluation) =>
-        evaluation.reviewStatus === "pending" ||
-        evaluation.reviewStatus === "deferred",
+      (evaluation) => evaluation.reviewStatus === "pending",
     ).length,
   };
 }
@@ -373,6 +408,7 @@ function thesisToBeliefDetail(thesis: Thesis): BeliefDetail {
       .map((evaluation) => ({
         id: evaluation.id,
         outcome: evaluation.outcome,
+        reviewStatus: evaluation.reviewStatus as "pending" | "deferred",
         proposedStatement: evaluation.proposedBelief || null,
         confidenceDelta: evaluation.confidenceDelta,
         rationale: evaluation.rationale,

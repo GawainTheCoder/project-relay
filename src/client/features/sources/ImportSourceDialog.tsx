@@ -6,6 +6,7 @@ import {
   LoaderCircle,
   Quote,
   Radar,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import {
@@ -17,15 +18,16 @@ import {
 } from "react";
 import { Link } from "react-router-dom";
 
-import type {
-  ImportSourceInput,
-  SourceKind,
-} from "../../../shared/contracts";
+import type { ResearchSource, SourceKind } from "../../../shared/contracts";
 import { Button } from "../../components/ui/Button";
 import {
   importSource,
   type ImportSourceResult,
 } from "../../lib/api";
+import {
+  buildSignalImportInput,
+  type SignalIntakeMode,
+} from "./signal-intake";
 
 export interface ImportSourceFeedback {
   kind: "success" | "error";
@@ -34,23 +36,31 @@ export interface ImportSourceFeedback {
 }
 
 interface ImportSourceDialogProps {
+  initialSourceProfileId?: string;
   isOpen: boolean;
   onClose: () => void;
   onImported: (result: ImportSourceResult) => Promise<void>;
   onResult?: (feedback: ImportSourceFeedback) => void;
+  sourceProfiles: ResearchSource[];
 }
 
-type IntakeMode = "url" | "excerpt";
-
 export function ImportSourceDialog({
+  initialSourceProfileId,
   isOpen,
   onClose,
   onImported,
   onResult,
+  sourceProfiles,
 }: ImportSourceDialogProps) {
-  const [mode, setMode] = useState<IntakeMode>("url");
+  const initialProfile = sourceProfiles.find(
+    (source) => source.id === initialSourceProfileId,
+  );
+  const [mode, setMode] = useState<SignalIntakeMode>("url");
   const [title, setTitle] = useState("");
-  const [publisher, setPublisher] = useState("");
+  const [publisher, setPublisher] = useState(initialProfile?.name ?? "");
+  const [sourceProfileId, setSourceProfileId] = useState(
+    initialProfile?.id ?? "",
+  );
   const [sourceUrl, setSourceUrl] = useState("");
   const [content, setContent] = useState("");
   const [sourceKind, setSourceKind] = useState<SourceKind>("other");
@@ -67,6 +77,7 @@ export function ImportSourceDialog({
     setSourceUrl("");
     setContent("");
     setSourceKind("other");
+    setSourceProfileId("");
     onClose();
   }, [onClose]);
 
@@ -113,20 +124,25 @@ export function ImportSourceDialog({
       return;
     }
 
-    const input: ImportSourceInput = {
+    const input = buildSignalImportInput({
       title: cleanTitle,
       publisher: cleanPublisher,
-      ...(mode === "url" ? { sourceUrl: cleanUrl } : { content: cleanContent }),
+      mode,
+      sourceUrl: cleanUrl,
+      content: cleanContent,
       sourceKind,
-    };
+      sourceProfileId,
+    });
 
     setIsSubmitting(true);
     try {
       const result = await importSource(input);
       const feedback: ImportSourceFeedback = {
         kind: "success",
-        message: result.duplicate
-          ? "This signal is already tracked. Relay kept the existing analysis."
+        message: result.status === "suppressed"
+          ? "This signal was previously deleted and remains suppressed."
+          : result.duplicate
+            ? "This signal is already tracked. Relay kept the existing analysis."
           : result.update
             ? "Signal added and analyzed."
             : "Signal added. Analysis is pending.",
@@ -230,6 +246,52 @@ export function ImportSourceDialog({
                 Pasted excerpt
               </button>
             </div>
+
+            <label className="block">
+              <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
+                <ShieldCheck aria-hidden="true" className="size-3.5" />
+                Trusted source profile{" "}
+                <span className="font-normal text-relay-subtle">
+                  (optional)
+                </span>
+              </span>
+              <select
+                className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm text-relay-text focus:border-relay-accent"
+                onChange={(event) => {
+                  const nextId = event.target.value;
+                  const currentProfile = sourceProfiles.find(
+                    (source) => source.id === sourceProfileId,
+                  );
+                  const nextProfile = sourceProfiles.find(
+                    (source) => source.id === nextId,
+                  );
+                  setSourceProfileId(nextId);
+                  if (nextProfile) {
+                    setPublisher(nextProfile.name);
+                  } else if (
+                    currentProfile &&
+                    publisher === currentProfile.name
+                  ) {
+                    setPublisher("");
+                  }
+                  setError(null);
+                  setSuccess(null);
+                }}
+                value={sourceProfileId}
+              >
+                <option value="">No linked profile</option>
+                {sourceProfiles.map((source) => (
+                  <option key={source.id} value={source.id}>
+                    {source.name}
+                    {source.domain ? ` · ${source.domain}` : ""}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-2 block text-[10px] leading-4 text-relay-subtle">
+                Linking a profile applies its trusted role, authority tier,
+                layers, companies, and macro theses to either intake mode.
+              </span>
+            </label>
 
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
