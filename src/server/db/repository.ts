@@ -570,6 +570,27 @@ export class RelayRepository {
     return this.getThesis(id);
   }
 
+  getCompanyThesisByTicker(ticker: string): Thesis | null {
+    const thesisRow = row(
+      this.database
+        .prepare(`
+          SELECT thesis.id
+          FROM theses AS thesis
+          INNER JOIN thesis_companies AS company
+            ON company.thesis_id = thesis.id
+          WHERE company.company_ticker = ?
+            AND thesis.type = 'company'
+            AND thesis.status = 'active'
+          ORDER BY thesis.updated_at DESC, thesis.id
+          LIMIT 1
+        `)
+        .get(ticker.toUpperCase()),
+    );
+    return thesisRow
+      ? this.getThesis(text(thesisRow, "id"))
+      : null;
+  }
+
   getThesisHistory(thesisId: string): ThesisVersion[] {
     return rows(
       this.database
@@ -716,6 +737,25 @@ export class RelayRepository {
     if (!input.summary.trim() || !input.rationale.trim()) {
       throw new TypeError("Thesis evaluations require a summary and rationale.");
     }
+    const reviewRecommendation = input.reviewRecommendation ?? null;
+    const reviewRecommendationReason =
+      input.reviewRecommendationReason?.trim() || null;
+    if (
+      Boolean(reviewRecommendation) !==
+      Boolean(reviewRecommendationReason)
+    ) {
+      throw new TypeError(
+        "An LLM review recommendation requires both a decision and a reason.",
+      );
+    }
+    if (
+      reviewRecommendationReason &&
+      reviewRecommendationReason.length > 240
+    ) {
+      throw new RangeError(
+        "An LLM review recommendation reason cannot exceed 240 characters.",
+      );
+    }
 
     const signalIds = uniqueStrings(input.signalIds);
     const evidence = input.evidence.map((item) => ({
@@ -848,6 +888,9 @@ export class RelayRepository {
         existingEvaluation.proposedBelief.trim() !== proposal.belief.trim() ||
         existingEvaluation.proposedConfidenceScore !==
           proposal.confidenceScore ||
+        existingEvaluation.reviewRecommendation !== reviewRecommendation ||
+        existingEvaluation.reviewRecommendationReason !==
+          reviewRecommendationReason ||
         !sameTextSet(existingEvaluation.proposedUnknowns, proposal.unknowns) ||
         !sameTextSet(
           existingEvaluation.proposedStrengtheningConditions,
@@ -881,10 +924,12 @@ export class RelayRepository {
             summary, rationale, proposed_belief, previous_confidence,
             proposed_confidence, proposed_unknowns_json,
             proposed_strengthening_conditions_json,
-            proposed_weakening_conditions_json, review_status, review_note,
-            model, created_at, reviewed_at
+            proposed_weakening_conditions_json, review_recommendation,
+            review_recommendation_reason, review_status, review_note, model,
+            created_at, reviewed_at
           ) VALUES (
-            ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, ?, ?, NULL
+            ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL,
+            ?, ?, NULL
           )
         `)
         .run(
@@ -902,6 +947,8 @@ export class RelayRepository {
             normalizeTextList(proposal.strengtheningConditions),
           ),
           JSON.stringify(normalizeTextList(proposal.weakeningConditions)),
+          reviewRecommendation,
+          reviewRecommendationReason,
           input.model ?? null,
           createdAt,
         );
@@ -2423,6 +2470,14 @@ export class RelayRepository {
       signalIds,
       claimIds: evidence.map((item) => item.claimId),
       evidence,
+      reviewRecommendation: nullableText(
+        evaluationRow,
+        "review_recommendation",
+      ) as ThesisEvaluation["reviewRecommendation"],
+      reviewRecommendationReason: nullableText(
+        evaluationRow,
+        "review_recommendation_reason",
+      ),
       reviewStatus: text(
         evaluationRow,
         "review_status",

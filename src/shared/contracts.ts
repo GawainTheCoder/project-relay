@@ -51,6 +51,7 @@ export const thesisEvaluationReviewStatuses = [
 ] as const;
 export type ThesisEvaluationReviewStatus =
   (typeof thesisEvaluationReviewStatuses)[number];
+export type ThesisEvaluationReviewRecommendation = "accept" | "reject";
 export type SignalNovelty =
   | "new"
   | "confirmation"
@@ -158,6 +159,8 @@ export interface ThesisEvaluationInput {
   proposedWeakeningConditions: string[];
   signalIds: string[];
   evidence: ThesisEvaluationEvidenceInput[];
+  reviewRecommendation?: ThesisEvaluationReviewRecommendation | null;
+  reviewRecommendationReason?: string | null;
   model?: string | null;
 }
 
@@ -179,6 +182,8 @@ export interface ThesisEvaluation {
   signalIds: string[];
   claimIds: string[];
   evidence: ThesisEvaluationEvidenceInput[];
+  reviewRecommendation: ThesisEvaluationReviewRecommendation | null;
+  reviewRecommendationReason: string | null;
   reviewStatus: ThesisEvaluationReviewStatus;
   reviewNote: string | null;
   model: string | null;

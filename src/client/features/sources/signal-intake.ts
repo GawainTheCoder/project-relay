@@ -31,7 +31,8 @@ export function buildSignalImportInput({
   return {
     title,
     publisher,
-    ...(mode === "url" ? { sourceUrl } : { content }),
+    ...(sourceUrl ? { sourceUrl } : {}),
+    ...(mode === "excerpt" ? { content } : {}),
     sourceKind,
     ...(sourceProfileId ? { sourceProfileId } : {}),
   };

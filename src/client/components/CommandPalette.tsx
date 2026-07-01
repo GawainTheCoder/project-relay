@@ -16,6 +16,10 @@ import type {
 } from "../../shared/contracts";
 import { useDashboard } from "../context/useDashboard";
 import { searchRelay } from "../lib/api";
+import {
+  companyThesisPath,
+  normalizeSearchResultHref,
+} from "../lib/thesisRoutes";
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -54,19 +58,6 @@ function getPersistedIcon(type: SearchResultType) {
     default:
       return Search;
   }
-}
-
-function normalizeResultHref(href: string) {
-  if (href.startsWith("/updates")) {
-    return href.replace("/updates", "/signals");
-  }
-  if (href.startsWith("/companies")) {
-    return href.replace("/companies", "/theses");
-  }
-  if (href.startsWith("/beliefs")) {
-    return href.replace("/beliefs", "/theses");
-  }
-  return href;
 }
 
 export function CommandPalette({
@@ -138,7 +129,7 @@ export function CommandPalette({
         key: `company-${company.ticker}`,
         label: `${company.ticker} · ${company.name}`,
         description: company.thesis,
-        href: `/theses/${company.ticker}`,
+        href: companyThesisPath(company.ticker),
         icon: BrainCircuit,
       })),
       ...data.updates.map((update) => ({
@@ -160,7 +151,7 @@ export function CommandPalette({
             key: `${result.type}-${result.id}`,
             label: result.title,
             description: result.snippet || result.subtitle,
-            href: normalizeResultHref(result.href),
+            href: normalizeSearchResultHref(result),
             icon: getPersistedIcon(result.type),
             meta: result.matchedField,
           }))

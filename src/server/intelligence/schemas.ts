@@ -177,6 +177,12 @@ export const thesisEvaluationOutputSchema = z
               .min(-MAX_THESIS_CONFIDENCE_DELTA)
               .max(MAX_THESIS_CONFIDENCE_DELTA),
             rationale: z.string().trim().min(1).max(4_000),
+            reviewRecommendation: z.enum(["accept", "reject"]),
+            reviewRecommendationReason: z
+              .string()
+              .trim()
+              .min(1)
+              .max(240),
             supportingEvidence: z
               .array(thesisEvidenceReferenceSchema)
               .max(30),

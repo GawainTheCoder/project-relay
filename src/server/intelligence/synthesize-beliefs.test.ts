@@ -66,6 +66,11 @@ function makeEvaluation(
     previousConfidenceScore: 60,
     proposedConfidenceScore: outcome === "unchanged" ? 60 : 66,
     confidenceDelta: outcome === "unchanged" ? 0 : 6,
+    reviewRecommendation: outcome === "unchanged" ? "reject" : "accept",
+    reviewRecommendationReason:
+      outcome === "unchanged"
+        ? "The evidence does not justify changing the thesis."
+        : "The evidence supports preserving the proposed thesis update.",
     proposedUnknowns: ["Duration of the constraint"],
     proposedStrengtheningConditions: ["Lead times remain elevated"],
     proposedWeakeningConditions: ["Capacity catches demand"],

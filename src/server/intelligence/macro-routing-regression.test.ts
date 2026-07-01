@@ -533,6 +533,11 @@ function makeEvaluation(
       outcome === "unchanged"
         ? "The evidence is useful context but does not clear the confidence-change threshold."
         : "The exact claim modestly reinforces the existing thesis without changing its scope.",
+    reviewRecommendation: outcome === "unchanged" ? "reject" : "accept",
+    reviewRecommendationReason:
+      outcome === "unchanged"
+        ? "The context does not justify a durable thesis update."
+        : "The exact routed claim supports the proposed confidence change.",
     supportingEvidence: [
       {
         signalId: UPDATE_ID,

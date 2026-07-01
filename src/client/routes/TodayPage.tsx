@@ -23,6 +23,7 @@ import {
   isThesisChangingImpact,
   isThesisChangingSignal,
 } from "../lib/signals";
+import { companyThesisPath } from "../lib/thesisRoutes";
 
 export function TodayPage() {
   const { data, error, isLoading, regenerateBrief, reload } = useDashboard();
@@ -338,7 +339,7 @@ export function TodayPage() {
                   <Link
                     className="group block py-4"
                     key={impact.id}
-                    to={`/theses/${impact.companyTicker}`}
+                    to={companyThesisPath(impact.companyTicker)}
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-mono text-sm font-semibold">

@@ -14,6 +14,7 @@ import type {
   SearchResultType,
 } from "../../shared/contracts";
 import { searchRelay } from "../lib/api";
+import { normalizeSearchResultHref } from "../lib/thesisRoutes";
 
 const supportedResultTypes = new Set<SearchResultType>([
   "brief",
@@ -38,19 +39,6 @@ function getResultPresentation(type: SearchResultType) {
     default:
       return { Icon: Search, label: "Signal" };
   }
-}
-
-function normalizeResultHref(href: string) {
-  if (href.startsWith("/updates")) {
-    return href.replace("/updates", "/signals");
-  }
-  if (href.startsWith("/companies")) {
-    return href.replace("/companies", "/theses");
-  }
-  if (href.startsWith("/beliefs")) {
-    return href.replace("/beliefs", "/theses");
-  }
-  return href;
 }
 
 export function SearchPage() {
@@ -187,7 +175,7 @@ export function SearchPage() {
                 <Link
                   className="group grid gap-3 py-5 sm:grid-cols-[120px_minmax(0,1fr)_160px]"
                   key={`${result.type}:${result.id}`}
-                  to={normalizeResultHref(result.href)}
+                  to={normalizeSearchResultHref(result)}
                 >
                   <span className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
                     <Icon aria-hidden="true" className="size-3.5" />

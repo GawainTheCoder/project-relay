@@ -148,6 +148,8 @@ export interface ThesisEvaluation {
   proposedConfidenceScore: number;
   confidenceDelta: number;
   rationale: string;
+  reviewRecommendation: "accept" | "reject";
+  reviewRecommendationReason: string;
   supportingEvidence: ThesisEvaluationOutput["evaluations"][number]["supportingEvidence"];
   opposingEvidence: ThesisEvaluationOutput["evaluations"][number]["opposingEvidence"];
   contextEvidence: ThesisEvaluationOutput["evaluations"][number]["contextEvidence"];
@@ -214,6 +216,14 @@ Rules:
 - Do not force every signal into an evaluation. Omit irrelevant signals.
 - Rationale must separate source facts from Relay's inference and explain why
   the outcome cleared or failed to clear the change threshold.
+- reviewRecommendation is decision support for the human reviewer, never an
+  automatic action. Recommend "accept" only when the cited evidence and
+  proposed outcome are grounded enough to preserve in the durable thesis
+  record. Recommend "reject" when attribution is weak, inference is
+  speculative, evidence does not support the proposed outcome, or the proposal
+  overstates what changed.
+- reviewRecommendationReason must be one short sentence of at most 240
+  characters explaining the decisive evidence-quality or threshold reason.
 - Preserve useful unknowns and strengthening/weakening conditions. Change those
   fields only with a revised or proposed-new belief.
 - Never invent facts, causal relationships, source independence, or citations.`;
@@ -701,6 +711,9 @@ function stableEvaluationId(
         proposedBelief: evaluation.proposedBelief,
         proposedConfidenceScore: evaluation.proposedConfidenceScore,
         rationale: evaluation.rationale,
+        reviewRecommendation: evaluation.reviewRecommendation,
+        reviewRecommendationReason:
+          evaluation.reviewRecommendationReason,
         unknowns: evaluation.unknowns,
         strengthenConditions: evaluation.strengthenConditions,
         weakenConditions: evaluation.weakenConditions,

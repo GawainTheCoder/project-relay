@@ -14,6 +14,7 @@ import type {
 } from "../../../shared/contracts";
 import { EvidencePanel } from "../../components/EvidencePanel";
 import { SentimentBadge } from "../../components/ui/StatusBadge";
+import { companyThesisPath } from "../../lib/thesisRoutes";
 
 interface ThesisDecisionPanelProps {
   macroThesisTitles: Readonly<Record<string, string>>;
@@ -104,7 +105,7 @@ export function ThesisDecisionPanel({
                   <div className="flex items-center justify-between gap-3">
                     <Link
                       className="font-mono text-xs font-semibold hover:text-relay-accent"
-                      to={`/theses/${impact.companyTicker}`}
+                      to={companyThesisPath(impact.companyTicker)}
                     >
                       {impact.companyTicker}
                     </Link>

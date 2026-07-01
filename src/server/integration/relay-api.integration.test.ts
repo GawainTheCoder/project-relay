@@ -230,6 +230,51 @@ describe("Relay API integration contracts", () => {
     expect(stored.error_message).not.toContain("sk-project");
   });
 
+  it.each([401, 403])(
+    "turns an upstream HTTP %i block into actionable excerpt guidance",
+    async (statusCode) => {
+      const app = createApp({
+        repository,
+        services: {
+          analyzeImportedSource: vi
+            .fn()
+            .mockRejectedValue(
+              new Error(`Source request failed with HTTP ${statusCode}.`),
+            ),
+        },
+      });
+
+      const response = await app.request("/api/sources/import", {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({
+          title: `Blocked publisher ${statusCode}`,
+          publisher: "Example Publisher",
+          sourceUrl: `https://example.com/blocked-${statusCode}`,
+        }),
+      });
+
+      expect(response.status).toBe(502);
+      await expect(response.json()).resolves.toEqual({
+        error: {
+          code: "SOURCE_RETRIEVAL_BLOCKED",
+          message:
+            "Publisher blocked automated retrieval—paste an excerpt.",
+        },
+      });
+      expect(
+        repository.database
+          .prepare(
+            "SELECT analysis_status, error_message FROM source_documents WHERE title = ?",
+          )
+          .get(`Blocked publisher ${statusCode}`),
+      ).toEqual({
+        analysis_status: "error",
+        error_message: `Source request failed with HTTP ${statusCode}.`,
+      });
+    },
+  );
+
   it("persists impact reviews across a database reopen", async () => {
     repository.close();
     const directory = mkdtempSync(join(tmpdir(), "relay-integration-"));
