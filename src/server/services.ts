@@ -472,6 +472,9 @@ export async function evaluatePendingTheses(
               proposal.strengthenConditions,
             proposedWeakeningConditions: proposal.weakenConditions,
             signalIds: proposal.signalIds,
+            reviewRecommendation: proposal.reviewRecommendation,
+            reviewRecommendationReason:
+              proposal.reviewRecommendationReason,
             evidence: [
               ...proposal.supportingEvidence.flatMap((reference) =>
                 reference.claimIds.map((claimId) => ({

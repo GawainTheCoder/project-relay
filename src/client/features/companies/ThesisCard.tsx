@@ -9,13 +9,14 @@ import { Link } from "react-router-dom";
 
 import type { Company } from "../../../shared/contracts";
 import { getLayerName, titleCase } from "../../lib/format";
+import { companyThesisPath } from "../../lib/thesisRoutes";
 
 export function ThesisCard({ company }: { company: Company }) {
   return (
     <Link
       aria-label={`Open ${company.ticker} thesis`}
       className="group block h-full bg-relay-surface transition-colors hover:bg-relay-surface-2"
-      to={`/theses/${encodeURIComponent(company.ticker)}`}
+      to={companyThesisPath(company.ticker)}
     >
       <article>
         <header className="border-b border-relay-border p-5">

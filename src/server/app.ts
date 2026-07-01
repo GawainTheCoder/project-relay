@@ -82,6 +82,11 @@ interface ImportFailure {
   status: 409 | 502;
 }
 
+const BLOCKED_SOURCE_RESPONSE_PATTERN =
+  /^Source request failed with HTTP (?:401|403)\.$/;
+const BLOCKED_SOURCE_MESSAGE =
+  "Publisher blocked automated retrieval—paste an excerpt.";
+
 async function requestJson(context: {
   req: { json: () => Promise<unknown> };
 }): Promise<unknown> {
@@ -255,7 +260,13 @@ export function createApp(options: CreateAppOptions = {}): Hono {
         validationDetails(parsedId.error),
       );
     }
-    const thesis = getRepository().getThesisDetail(parsedId.data);
+    const repository = getRepository();
+    const parsedTicker = tickerSchema.safeParse(parsedId.data);
+    const thesis =
+      repository.getThesisDetail(parsedId.data) ??
+      (parsedTicker.success
+        ? repository.getCompanyThesisByTicker(parsedTicker.data)
+        : null);
     if (!thesis) {
       return jsonError(
         context,
@@ -1072,15 +1083,23 @@ async function processImportedSource(input: {
       status: 201,
     };
   } catch (error) {
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown analysis error";
+    const sourceRetrievalBlocked =
+      BLOCKED_SOURCE_RESPONSE_PATTERN.test(errorMessage);
     input.repository.markSourceDocumentError(
       document.id,
-      error instanceof Error ? error.message : "Unknown analysis error",
+      errorMessage,
     );
     return {
       ok: false,
       error: {
-        code: "ANALYSIS_FAILED",
-        message: "The source was saved, but analysis failed.",
+        code: sourceRetrievalBlocked
+          ? "SOURCE_RETRIEVAL_BLOCKED"
+          : "ANALYSIS_FAILED",
+        message: sourceRetrievalBlocked
+          ? BLOCKED_SOURCE_MESSAGE
+          : "The source was saved, but analysis failed.",
       },
       status: 502,
     };

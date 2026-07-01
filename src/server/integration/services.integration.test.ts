@@ -213,6 +213,7 @@ describe("Relay service integration with mocked external boundaries", () => {
     const input: ImportSourceInput = {
       title: "Manual source",
       publisher: "Personal research",
+      sourceUrl: "https://example.com/research/manual-source",
       content:
         "A sufficiently complete pasted source for the mocked analysis boundary.",
     };

@@ -21,6 +21,7 @@ import { Link } from "react-router-dom";
 import type { ResearchSource, SourceKind } from "../../../shared/contracts";
 import { Button } from "../../components/ui/Button";
 import {
+  ApiError,
   importSource,
   type ImportSourceResult,
 } from "../../lib/api";
@@ -162,6 +163,12 @@ export function ImportSourceDialog({
           ? caughtError.message
           : "The signal could not be added.";
       setError(message);
+      if (
+        caughtError instanceof ApiError &&
+        caughtError.code === "SOURCE_RETRIEVAL_BLOCKED"
+      ) {
+        setMode("excerpt");
+      }
       onResult?.({ kind: "error", message });
     } finally {
       setIsSubmitting(false);
@@ -342,26 +349,32 @@ export function ImportSourceDialog({
               </select>
             </label>
 
-            {mode === "url" ? (
-              <label className="block">
-                <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
-                  <Link2 aria-hidden="true" className="size-3.5" />
-                  Public article URL
-                </span>
-                <input
-                  className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm placeholder:text-relay-subtle focus:border-relay-accent"
-                  onChange={(event) => setSourceUrl(event.target.value)}
-                  placeholder="https://…"
-                  required
-                  type="url"
-                  value={sourceUrl}
-                />
-                <span className="mt-2 block text-[10px] leading-4 text-relay-subtle">
-                  Use a public article page. Authenticated or paywalled sources
-                  should be added as a permitted excerpt.
-                </span>
-              </label>
-            ) : (
+            <label className="block">
+              <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
+                <Link2 aria-hidden="true" className="size-3.5" />
+                {mode === "url" ? "Public article URL" : "Source article URL"}
+                {mode === "excerpt" ? (
+                  <span className="font-normal text-relay-subtle">
+                    (optional)
+                  </span>
+                ) : null}
+              </span>
+              <input
+                className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm placeholder:text-relay-subtle focus:border-relay-accent"
+                onChange={(event) => setSourceUrl(event.target.value)}
+                placeholder="https://…"
+                required={mode === "url"}
+                type="url"
+                value={sourceUrl}
+              />
+              <span className="mt-2 block text-[10px] leading-4 text-relay-subtle">
+                {mode === "url"
+                  ? "Use a public article page. Authenticated or paywalled sources should be added as a permitted excerpt."
+                  : "Keeps the original article attached as provenance without fetching it again."}
+              </span>
+            </label>
+
+            {mode === "excerpt" ? (
               <label className="block">
                 <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">
                   <Quote aria-hidden="true" className="size-3.5" />
@@ -378,7 +391,7 @@ export function ImportSourceDialog({
                   {content.trim().length} characters
                 </span>
               </label>
-            )}
+            ) : null}
 
             {error ? (
               <div

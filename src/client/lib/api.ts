@@ -47,6 +47,8 @@ export interface BeliefEvaluation {
   proposedStatement: string | null;
   confidenceDelta: number;
   rationale: string;
+  reviewRecommendation: "accept" | "reject" | null;
+  reviewRecommendationReason: string | null;
   evidenceIds: string[];
   createdAt: string;
 }
@@ -88,11 +90,13 @@ export interface BeliefDetail extends BeliefSummary {
 }
 
 export class ApiError extends Error {
+  readonly code: string | null;
   readonly status: number;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code: string | null = null) {
     super(message);
     this.name = "ApiError";
+    this.code = code;
     this.status = status;
   }
 }
@@ -115,12 +119,17 @@ async function requestJson<T>(
   });
 
   if (!response.ok) {
+    let code: string | null = null;
     let message = `Request failed (${response.status})`;
     try {
       const payload = (await response.json()) as {
-        error?: string | { message?: string };
+        error?: string | { code?: string; message?: string };
         message?: string;
       };
+      code =
+        typeof payload.error === "object"
+          ? (payload.error?.code ?? null)
+          : null;
       message =
         typeof payload.error === "string"
           ? payload.error
@@ -128,7 +137,7 @@ async function requestJson<T>(
     } catch {
       // Keep the status-derived error when the server did not return JSON.
     }
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, code);
   }
 
   if (response.status === 204) {
@@ -412,6 +421,9 @@ function thesisToBeliefDetail(thesis: Thesis): BeliefDetail {
         proposedStatement: evaluation.proposedBelief || null,
         confidenceDelta: evaluation.confidenceDelta,
         rationale: evaluation.rationale,
+        reviewRecommendation: evaluation.reviewRecommendation,
+        reviewRecommendationReason:
+          evaluation.reviewRecommendationReason,
         evidenceIds: evaluation.claimIds,
         createdAt: evaluation.createdAt,
       })),

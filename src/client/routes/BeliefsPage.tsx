@@ -15,6 +15,7 @@ import { AddCompanyDialog } from "../features/companies/AddCompanyDialog";
 import { BeliefCard } from "../features/beliefs/BeliefCard";
 import { useBeliefs } from "../features/beliefs/useBeliefs";
 import type { BeliefKind } from "../lib/api";
+import { companyThesisPath } from "../lib/thesisRoutes";
 
 const beliefTabs: { icon: typeof Building2; id: BeliefKind; label: string }[] = [
   { icon: Building2, id: "company", label: "Company" },
@@ -208,7 +209,7 @@ export function BeliefsPage() {
         onClose={() => setIsAddDialogOpen(false)}
         onCreated={async (ticker) => {
           await reload();
-          navigate(`/theses/${encodeURIComponent(ticker)}`);
+          navigate(companyThesisPath(ticker));
         }}
       />
     </div>

@@ -12,6 +12,7 @@ import { Button } from "../components/ui/Button";
 import { useDashboard } from "../context/useDashboard";
 import { AddCompanyDialog } from "../features/companies/AddCompanyDialog";
 import { getLayerName, titleCase } from "../lib/format";
+import { companyThesisPath } from "../lib/thesisRoutes";
 
 export function CompaniesPage() {
   const { data, error, isLoading, reload } = useDashboard();
@@ -112,7 +113,7 @@ export function CompaniesPage() {
                 aria-label={`Open ${company.ticker} thesis`}
                 className="group grid w-full grid-cols-[62px_minmax(0,1fr)_auto] items-center gap-3 px-2 py-4 text-left transition-colors hover:bg-relay-surface focus-visible:bg-relay-surface sm:grid-cols-[72px_170px_minmax(0,1fr)_100px_auto]"
                 key={company.ticker}
-                to={`/theses/${encodeURIComponent(company.ticker)}`}
+                to={companyThesisPath(company.ticker)}
               >
                 <span className="font-mono text-sm font-semibold text-relay-text group-hover:text-relay-accent">
                   {company.ticker}
@@ -160,7 +161,7 @@ export function CompaniesPage() {
         onClose={() => setIsAddDialogOpen(false)}
         onCreated={async (ticker) => {
           await reload();
-          navigate(`/theses/${encodeURIComponent(ticker)}`);
+          navigate(companyThesisPath(ticker));
         }}
       />
     </div>

@@ -1,4 +1,11 @@
-import { Check, Clock3, LoaderCircle, Pause, X } from "lucide-react";
+import {
+  Check,
+  Clock3,
+  LoaderCircle,
+  Pause,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { useState } from "react";
 
 import type { ThesisEvaluationReviewInput } from "../../../shared/contracts";
@@ -58,6 +65,35 @@ function EvaluationRow({
             {evaluation.rationale}
           </p>
         ) : null}
+        {evaluation.reviewRecommendation ? (
+          <div className="mt-3 flex items-start gap-2 rounded border border-relay-border bg-relay-surface px-3 py-2.5">
+            <Sparkles
+              aria-hidden="true"
+              className="mt-0.5 size-3.5 shrink-0 text-relay-accent"
+            />
+            <p className="text-xs leading-5 text-relay-muted">
+              <span
+                className={
+                  evaluation.reviewRecommendation === "accept"
+                    ? "font-medium text-relay-positive"
+                    : "font-medium text-relay-negative"
+                }
+              >
+                LLM suggestion:{" "}
+                {evaluation.reviewRecommendation === "accept"
+                  ? "Accept"
+                  : "Reject"}
+              </span>
+              {evaluation.reviewRecommendationReason
+                ? ` — ${evaluation.reviewRecommendationReason}`
+                : null}
+            </p>
+          </div>
+        ) : (
+          <p className="mt-2 text-[11px] leading-5 text-relay-subtle">
+            LLM suggestion unavailable for this earlier evaluation.
+          </p>
+        )}
       </div>
       <div className="flex flex-wrap items-center justify-end gap-2">
         <span

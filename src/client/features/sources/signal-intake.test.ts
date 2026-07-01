@@ -37,9 +37,26 @@ describe("buildSignalImportInput", () => {
     ).toEqual({
       title: baseInput.title,
       publisher: baseInput.publisher,
+      sourceUrl: baseInput.sourceUrl,
       content: baseInput.content,
       sourceKind: "other",
       sourceProfileId: "source-profile-example",
+    });
+  });
+
+  it("keeps excerpt intake valid without a source URL", () => {
+    expect(
+      buildSignalImportInput({
+        ...baseInput,
+        mode: "excerpt",
+        sourceProfileId: "",
+        sourceUrl: "",
+      }),
+    ).toEqual({
+      title: baseInput.title,
+      publisher: baseInput.publisher,
+      content: baseInput.content,
+      sourceKind: "other",
     });
   });
 

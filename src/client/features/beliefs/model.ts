@@ -6,8 +6,6 @@ import type {
 } from "../../../shared/contracts";
 import type {
   BeliefDetail,
-  BeliefEvaluation,
-  BeliefEvaluationOutcome,
   BeliefEvidence,
   BeliefEvidenceStance,
   BeliefSummary,
@@ -27,40 +25,6 @@ function impactStance(impact: ThesisImpact): BeliefEvidenceStance {
     return "opposes";
   }
   return "context";
-}
-
-function evaluationOutcome(
-  impact: ThesisImpact,
-): BeliefEvaluationOutcome {
-  if (impact.direction === "bullish") {
-    return "reinforced";
-  }
-  if (impact.direction === "bearish") {
-    return "weakened";
-  }
-  return "revised";
-}
-
-function confidenceDelta(impact: ThesisImpact) {
-  const magnitude = {
-    high: 5,
-    medium: 3,
-    low: 1,
-  }[impact.confidence];
-  if (impact.direction === "bullish") {
-    return magnitude;
-  }
-  if (impact.direction === "bearish") {
-    return -magnitude;
-  }
-  return 0;
-}
-
-function isPendingImpact(impact: ThesisImpact) {
-  return (
-    impact.review?.decision === "deferred" ||
-    (!impact.review && impact.decision === "proposed")
-  );
 }
 
 function evidenceForUpdate(
@@ -103,19 +67,6 @@ function buildCompanyBelief(
   const evidence = impacts.flatMap(({ impact, update }) =>
     evidenceForUpdate(update, impactStance(impact)),
   );
-  const pendingEvaluations: BeliefEvaluation[] = impacts
-    .filter(({ impact }) => isPendingImpact(impact))
-    .map(({ impact, update }) => ({
-      id: impact.id,
-      outcome: evaluationOutcome(impact),
-      reviewStatus:
-        impact.review?.decision === "deferred" ? "deferred" : "pending",
-      proposedStatement: impact.thesisDelta || null,
-      confidenceDelta: confidenceDelta(impact),
-      rationale: impact.summary,
-      evidenceIds: update.claims.map((claim) => `${update.id}:${claim.id}`),
-      createdAt: update.ingestedAt,
-    }));
   const supportingEvidence = evidence.filter(
     (item) => item.stance === "supports",
   );
@@ -126,6 +77,9 @@ function buildCompanyBelief(
     (item) => item.stance === "context",
   );
 
+  // Dashboard impacts are source-analysis proposals, not persisted thesis
+  // evaluations. Keep the compatibility view read-only so their IDs can
+  // never be submitted to the thesis-evaluation review endpoint.
   return {
     id: company.ticker,
     kind: "company",
@@ -137,9 +91,7 @@ function buildCompanyBelief(
     updatedAt: company.updatedAt,
     supportingEvidenceCount: supportingEvidence.length,
     opposingEvidenceCount: opposingEvidence.length,
-    pendingEvaluationCount: pendingEvaluations.filter(
-      (evaluation) => evaluation.reviewStatus === "pending",
-    ).length,
+    pendingEvaluationCount: 0,
     whyItMatters: company.whyItMatters,
     latestChange: null,
     unknowns: [],
@@ -148,7 +100,7 @@ function buildCompanyBelief(
     supportingEvidence,
     opposingEvidence,
     contextualEvidence,
-    pendingEvaluations,
+    pendingEvaluations: [],
     versions: [
       {
         id: `${company.ticker}:current`,

@@ -494,6 +494,14 @@ const migrations = [
     CREATE INDEX IF NOT EXISTS update_macro_thesis_impacts_thesis_idx
       ON update_macro_thesis_impacts(thesis_id, relevance, update_id);
   `,
+  `
+    ALTER TABLE thesis_evaluations
+      ADD COLUMN review_recommendation TEXT
+      CHECK (review_recommendation IN ('accept', 'reject'));
+
+    ALTER TABLE thesis_evaluations
+      ADD COLUMN review_recommendation_reason TEXT;
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {

@@ -21,6 +21,7 @@ import {
   sentimentColor,
   titleCase,
 } from "../../lib/format";
+import { companyThesisPath } from "../../lib/thesisRoutes";
 
 interface StackInspectorProps {
   company: Company | null;
@@ -153,7 +154,7 @@ export function StackInspector({
         <div className="border-t border-relay-border p-5">
           <Link
             className="inline-flex items-center gap-2 text-sm font-medium text-relay-accent hover:text-white"
-            to={`/theses/${company.ticker}`}
+            to={companyThesisPath(company.ticker)}
           >
             View company thesis
             <ExternalLink aria-hidden="true" className="size-3.5" />

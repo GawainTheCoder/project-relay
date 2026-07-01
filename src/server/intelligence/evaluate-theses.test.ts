@@ -116,6 +116,9 @@ function makeEvaluation(
     confidenceDelta: 0,
     rationale:
       "The evidence is consistent with the belief but does not change its scope or confidence.",
+    reviewRecommendation: "accept",
+    reviewRecommendationReason:
+      "The cited evidence supports preserving this evaluation in the thesis record.",
     supportingEvidence: [
       {
         signalId: "signal_arista",
@@ -176,6 +179,9 @@ describe("evaluateTheses", () => {
           outcome: "reinforced",
           proposedBelief: null,
           proposedConfidenceScore: 75,
+          reviewRecommendation: "accept",
+          reviewRecommendationReason:
+            "The cited evidence supports preserving this evaluation in the thesis record.",
           signalIds: ["signal_arista"],
           claimIds: ["claim_arista_demand"],
           independentSourceCount: 1,

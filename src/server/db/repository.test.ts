@@ -202,6 +202,9 @@ describe("RelayRepository", () => {
       previousConfidenceScore: 85,
       proposedConfidenceScore: 88,
       confidenceDelta: 3,
+      reviewRecommendation: "accept",
+      reviewRecommendationReason:
+        "The cited evidence supports a modest confidence increase.",
       signalIds: ["nvda-fy26-q4"],
       claimIds: ["claim-nvda-dc"],
     });
@@ -1270,6 +1273,9 @@ function buildEvaluation(
         rationale: "Reported data-center growth supports durable demand.",
       },
     ],
+    reviewRecommendation: "accept",
+    reviewRecommendationReason:
+      "The cited evidence supports a modest confidence increase.",
     model: "test-evaluation-model",
     ...overrides,
   };

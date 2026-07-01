@@ -116,6 +116,6 @@ export function useBeliefDetail(
   const hasResolvedRemote = remoteState?.id === beliefId;
   return {
     belief: hasResolvedRemote ? (remoteState.belief ?? fallback) : fallback,
-    isResolving: !fallback && !hasResolvedRemote,
+    isResolving: Boolean(dashboard && beliefId) && !hasResolvedRemote,
   };
 }
