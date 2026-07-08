@@ -2,6 +2,7 @@ import {
   ArrowRight,
   BrainCircuit,
   Building2,
+  ChevronDown,
   Layers3,
   Network,
   Plus,
@@ -218,16 +219,25 @@ function CompanyThesisRow({ belief }: { belief: BeliefSummary }) {
 
 function MacroThesisSection({
   group,
+  isExpanded,
+  onToggle,
   sourceCoverage,
 }: {
   group: MacroThesisGroup;
+  isExpanded: boolean;
+  onToggle: () => void;
   sourceCoverage: ThesisSourceCoverage | undefined;
 }) {
+  const companiesId = `macro-companies-${group.macro.id}`;
+
   return (
     <section className="border-t border-relay-border">
-      <Link
-        className="group grid gap-5 px-2 py-6 transition-colors hover:bg-relay-surface focus-visible:bg-relay-surface sm:grid-cols-[minmax(0,1fr)_180px] sm:px-4"
-        to={`/theses/${encodeURIComponent(group.macro.id)}`}
+      <button
+        aria-controls={companiesId}
+        aria-expanded={isExpanded}
+        className="group grid w-full gap-5 px-2 py-6 text-left transition-colors hover:bg-relay-surface focus-visible:bg-relay-surface sm:grid-cols-[minmax(0,1fr)_220px] sm:px-4"
+        onClick={onToggle}
+        type="button"
       >
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2.5">
@@ -272,19 +282,42 @@ function MacroThesisSection({
               </div>
             ) : null}
           </div>
-          <ArrowRight
+          <ChevronDown
             aria-hidden="true"
-            className="size-4 shrink-0 text-relay-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-relay-accent"
+            className={`size-4 shrink-0 text-relay-subtle transition-transform group-hover:text-relay-accent ${
+              isExpanded ? "rotate-180" : ""
+            }`}
           />
         </div>
-      </Link>
-      {group.companies.length ? (
-        <div className="ml-4 border-l border-relay-border sm:ml-8">
+      </button>
+      <div className="flex items-center justify-between border-t border-relay-border px-4 py-3 sm:px-6">
+        <span className="font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
+          {group.companies.length
+            ? `${group.companies.length} related ${
+                group.companies.length === 1 ? "company" : "companies"
+              }`
+            : "No related companies"}
+        </span>
+        <Link
+          className="inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
+          to={`/theses/${encodeURIComponent(group.macro.id)}`}
+        >
+          Open macro thesis
+          <ArrowRight aria-hidden="true" className="size-3.5" />
+        </Link>
+      </div>
+      {isExpanded && group.companies.length ? (
+        <div
+          className="ml-4 border-l border-relay-border sm:ml-8"
+          id={companiesId}
+        >
           {group.companies.map((company) => (
             <CompanyThesisRow belief={company} key={company.id} />
           ))}
         </div>
-      ) : null}
+      ) : (
+        <div hidden id={companiesId} />
+      )}
     </section>
   );
 }
@@ -299,6 +332,9 @@ export function BeliefsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
+  const [collapsedMacroIds, setCollapsedMacroIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const status = normalizeStatus(searchParams.get("status"));
   const showStackContext = searchParams.get("context") === "stack";
@@ -354,6 +390,17 @@ export function BeliefsPage() {
     const next = new URLSearchParams(searchParams);
     next.set("context", "stack");
     setSearchParams(next);
+  };
+  const toggleMacroCompanies = (macroId: string) => {
+    setCollapsedMacroIds((current) => {
+      const next = new Set(current);
+      if (next.has(macroId)) {
+        next.delete(macroId);
+      } else {
+        next.add(macroId);
+      }
+      return next;
+    });
   };
 
   return (
@@ -456,7 +503,9 @@ export function BeliefsPage() {
             {grouped.groups.map((group) => (
               <MacroThesisSection
                 group={group}
+                isExpanded={!collapsedMacroIds.has(group.macro.id)}
                 key={group.macro.id}
+                onToggle={() => toggleMacroCompanies(group.macro.id)}
                 sourceCoverage={coverageByThesisId.get(group.macro.id)}
               />
             ))}
