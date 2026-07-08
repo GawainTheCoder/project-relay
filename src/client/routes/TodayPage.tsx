@@ -4,7 +4,6 @@ import {
   Building2,
   CalendarDays,
   ChevronRight,
-  Quote,
 } from "lucide-react";
 import {
   useCallback,
@@ -41,71 +40,107 @@ import {
 } from "../lib/signals";
 import { companyThesisPath } from "../lib/thesisRoutes";
 
-function CommandMetric({
-  label,
-  meta,
-  to,
-  value,
-}: {
-  label: string;
-  meta: string;
-  to: string;
-  value: string;
-}) {
-  return (
-    <Link
-      className="group border border-relay-border bg-relay-surface px-4 py-3 transition-colors hover:border-relay-border-strong hover:bg-relay-surface-2"
-      to={to}
-    >
-      <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-muted">
-        {label}
-      </span>
-      <span className="mt-2 block truncate text-sm font-semibold tracking-tight group-hover:text-relay-accent">
-        {value}
-      </span>
-      <span className="mt-1 block text-xs text-relay-subtle">{meta}</span>
-    </Link>
-  );
-}
-
-function CommandCenterStrip({
+function DecisionQueue({
   awaitingEvaluationTotal,
-  biggestThesisChange,
   pendingReviewTotal,
 }: {
   awaitingEvaluationTotal: number;
-  biggestThesisChange: IntelligenceUpdate | null;
   pendingReviewTotal: number;
 }) {
+  const rows = [
+    {
+      count: pendingReviewTotal,
+      label: "Thesis proposals to review",
+      meta: "Accept, reject, or defer",
+      to: "/theses?status=pending",
+    },
+    {
+      count: awaitingEvaluationTotal,
+      label: "Signals awaiting evaluation",
+      meta: "Routed evidence not yet evaluated",
+      to: "/theses?status=awaiting",
+    },
+  ].filter((row) => row.count > 0);
+
   return (
-    <section className="grid gap-3 border-b border-relay-border py-5 sm:grid-cols-3">
-      <CommandMetric
-        label="Biggest thesis change"
-        meta={
-          biggestThesisChange
-            ? biggestThesisChange.publisher
-            : "No signal yet"
-        }
-        to={
-          biggestThesisChange
-            ? `/signals?update=${encodeURIComponent(biggestThesisChange.id)}`
-            : "/signals"
-        }
-        value={biggestThesisChange?.title ?? "No thesis-changing signal"}
-      />
-      <CommandMetric
-        label="Pending reviews"
-        meta="Thesis proposals"
-        to="/theses?status=pending"
-        value={String(pendingReviewTotal)}
-      />
-      <CommandMetric
-        label="Awaiting evaluation"
-        meta="Routed evidence"
-        to="/theses?status=awaiting"
-        value={String(awaitingEvaluationTotal)}
-      />
+    <section aria-label="Needs your decision">
+      <div className="border-b border-relay-border pb-3">
+        <h2 className="text-sm font-semibold">Needs your decision</h2>
+      </div>
+      {rows.length ? (
+        <ol className="divide-y divide-relay-border">
+          {rows.map((row) => (
+            <li key={row.to}>
+              <Link className="group flex items-center gap-4 py-4" to={row.to}>
+                <span className="w-8 shrink-0 font-mono text-xl font-semibold tracking-tight text-relay-accent">
+                  {row.count}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm text-relay-text group-hover:text-relay-accent">
+                    {row.label}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-relay-subtle">
+                    {row.meta}
+                  </span>
+                </span>
+                <ChevronRight
+                  aria-hidden="true"
+                  className="size-4 shrink-0 text-relay-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-relay-accent"
+                />
+              </Link>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="py-5 text-sm leading-6 text-relay-muted">
+          Review queue is clear. New proposals appear here after evidence is
+          evaluated.
+        </p>
+      )}
     </section>
+  );
+}
+
+function DecisionChips({
+  awaitingEvaluationTotal,
+  className,
+  pendingReviewTotal,
+}: {
+  awaitingEvaluationTotal: number;
+  className?: string;
+  pendingReviewTotal: number;
+}) {
+  const chips = [
+    {
+      count: pendingReviewTotal,
+      label: "proposals to review",
+      to: "/theses?status=pending",
+    },
+    {
+      count: awaitingEvaluationTotal,
+      label: "awaiting evaluation",
+      to: "/theses?status=awaiting",
+    },
+  ].filter((chip) => chip.count > 0);
+
+  if (!chips.length) {
+    return null;
+  }
+  return (
+    <div className={`flex flex-wrap gap-2 ${className ?? ""}`}>
+      {chips.map((chip) => (
+        <Link
+          className="inline-flex h-8 items-center gap-2 rounded-full border border-relay-border bg-relay-surface px-3 text-xs text-relay-muted transition-colors hover:border-relay-border-strong hover:text-relay-text"
+          key={chip.to}
+          to={chip.to}
+        >
+          <span className="font-mono font-semibold text-relay-accent">
+            {chip.count}
+          </span>
+          {chip.label}
+        </Link>
+      ))}
+    </div>
   );
 }
 
@@ -264,43 +299,6 @@ export function BriefArchiveSection({
   );
 }
 
-function BriefEvidenceLead({
-  items,
-}: {
-  items: Array<{ claim: EvidenceClaim; update: IntelligenceUpdate }>;
-}) {
-  if (!items.length) {
-    return null;
-  }
-
-  return (
-    <section className="mb-8 border-b border-relay-border pb-6">
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">Cited evidence</h2>
-        <span className="font-mono text-[10px] text-relay-subtle">
-          {items.length} quotes
-        </span>
-      </div>
-      <ol className="mt-3 divide-y divide-relay-border border-y border-relay-border">
-        {items.slice(0, 3).map(({ claim, update }, index) => (
-          <li className="py-4" key={claim.id}>
-            <blockquote className="text-sm leading-7 text-relay-text">
-              “{claim.quote}”
-            </blockquote>
-            <Link
-              className="mt-2 inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
-              to={`/signals?update=${encodeURIComponent(update.id)}`}
-            >
-              [{index + 1}] {update.publisher} · {claim.locator}
-              <ArrowRight aria-hidden="true" className="size-3" />
-            </Link>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
-
 export function TodayPage() {
   const { data, error, isLoading, regenerateBrief, reload } = useDashboard();
   const beliefs = useBeliefs(data);
@@ -406,22 +404,6 @@ export function TodayPage() {
       )
       .slice(0, 6);
   }, [data]);
-  const biggestThesisChange = useMemo(() => {
-    if (!data) {
-      return null;
-    }
-    const briefUpdate = data.brief?.updateIds
-      .map((updateId) =>
-        data.updates.find((update) => update.id === updateId),
-      )
-      .find((update) => update && isThesisChangingSignal(update));
-    return (
-      briefUpdate ??
-      data.updates.find(isThesisChangingSignal) ??
-      data.updates[0] ??
-      null
-    );
-  }, [data]);
   const pendingReviewTotal = beliefs.reduce(
     (total, belief) => total + belief.pendingEvaluationCount,
     0,
@@ -464,78 +446,80 @@ export function TodayPage() {
   if (!brief) {
     return (
       <div className="relay-enter min-h-screen">
-        <header className="border-b border-relay-border px-5 py-5 sm:px-8 lg:px-10">
+        <header className="border-b border-relay-border px-5 py-6 sm:px-8 lg:px-10">
           <div className="mx-auto max-w-[1100px]">
-            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
-              AI infrastructure thesis monitor
-            </p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              What changed in your understanding
-            </h1>
+            <div className="flex flex-wrap items-center justify-between gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+              <span>AI infrastructure thesis monitor</span>
+              <span className="text-relay-subtle">
+                {data.updates.length} evidence record
+                {data.updates.length === 1 ? "" : "s"} monitored
+              </span>
+            </div>
+            <div className="mt-6 max-w-3xl border-l-2 border-relay-accent pl-5 sm:pl-7">
+              <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
+                <span className="size-1.5 rounded-full bg-relay-accent" />
+                What changed in your understanding
+              </p>
+              <h1 className="mt-3 text-3xl font-semibold leading-[1.12] tracking-[-0.025em] sm:text-[2.5rem]">
+                {thesisChangingSignalCount
+                  ? "Thesis updates are ready"
+                  : data.updates.length
+                    ? "No meaningful change"
+                    : "No evidence evaluated yet"}
+              </h1>
+              <p className="mt-4 max-w-2xl text-base leading-8 text-relay-muted">
+                {thesisChangingSignalCount
+                  ? `Relay found ${thesisChangingSignalCount} signal${
+                      thesisChangingSignalCount === 1 ? "" : "s"
+                    } that may change an infrastructure thesis. Generate today’s readout for the concise synthesis.`
+                  : data.updates.length
+                    ? `Relay analyzed ${data.updates.length} signal${
+                        data.updates.length === 1 ? "" : "s"
+                      } without finding a warranted thesis change.`
+                    : "Refresh trusted feeds or add a public article or permitted excerpt. A quiet day with no change in understanding is a valid result."}
+              </p>
+              <div className="mt-7 flex flex-wrap gap-3">
+                {thesisChangingSignalCount ? (
+                  <button
+                    className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0] disabled:cursor-wait disabled:opacity-60"
+                    disabled={isGeneratingBrief}
+                    onClick={() => void generateBrief()}
+                    type="button"
+                  >
+                    {isGeneratingBrief ? "Generating…" : "Generate understanding readout"}
+                    <ArrowRight aria-hidden="true" className="size-3.5" />
+                  </button>
+                ) : (
+                  <Link
+                    className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0]"
+                    to="/sources"
+                  >
+                    Sources
+                    <ArrowRight aria-hidden="true" className="size-3.5" />
+                  </Link>
+                )}
+                <Link
+                  className="inline-flex h-10 items-center rounded-md border border-relay-border px-4 text-sm text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
+                  to="/?archive=briefs"
+                >
+                  Brief archive
+                </Link>
+              </div>
+              {briefError ? (
+                <p className="mt-4 text-sm text-relay-negative" role="alert">
+                  {briefError}
+                </p>
+              ) : null}
+            </div>
           </div>
         </header>
-        <main className="mx-auto max-w-[1100px] px-5 py-7 sm:px-8 lg:px-10">
-          <CommandCenterStrip
-            awaitingEvaluationTotal={awaitingEvaluationTotal}
-            biggestThesisChange={biggestThesisChange}
-            pendingReviewTotal={pendingReviewTotal}
-          />
-          <section className="max-w-2xl border-l border-relay-border-strong pl-6">
-            <BookOpen
-              aria-hidden="true"
-              className="size-5 text-relay-subtle"
+        <main className="mx-auto max-w-[1100px] px-5 py-8 sm:px-8 lg:px-10">
+          <div className="max-w-md">
+            <DecisionQueue
+              awaitingEvaluationTotal={awaitingEvaluationTotal}
+              pendingReviewTotal={pendingReviewTotal}
             />
-            <h2 className="mt-5 text-2xl font-semibold tracking-tight">
-              {thesisChangingSignalCount
-                ? "Thesis updates are ready"
-                : data.updates.length
-                  ? "No meaningful change"
-                  : "No evidence evaluated yet"}
-            </h2>
-            <p className="mt-3 text-sm leading-7 text-relay-muted">
-              {thesisChangingSignalCount
-                ? `Relay found ${thesisChangingSignalCount} signal${
-                    thesisChangingSignalCount === 1 ? "" : "s"
-                  } that may change an infrastructure thesis. Generate today’s readout for the concise synthesis.`
-                : data.updates.length
-                  ? `Relay analyzed ${data.updates.length} signal${
-                      data.updates.length === 1 ? "" : "s"
-                    } without finding a warranted thesis change.`
-                  : "Refresh trusted feeds or add a public article or permitted excerpt. A quiet day with no change in understanding is a valid result."}
-            </p>
-            <div className="mt-7 flex flex-wrap gap-3">
-              {thesisChangingSignalCount ? (
-                <button
-                  className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0] disabled:cursor-wait disabled:opacity-60"
-                  disabled={isGeneratingBrief}
-                  onClick={() => void generateBrief()}
-                  type="button"
-                >
-                  {isGeneratingBrief ? "Generating…" : "Generate understanding readout"}
-                  <ArrowRight aria-hidden="true" className="size-3.5" />
-                </button>
-              ) : (
-                <Link
-                  className="inline-flex h-10 items-center gap-2 rounded-md bg-relay-accent px-4 text-sm font-medium text-white hover:bg-[#3f7cf0]"
-                  to="/sources"
-                >
-                  Sources
-                  <ArrowRight aria-hidden="true" className="size-3.5" />
-                </Link>
-              )}
-              <Link
-                className="inline-flex h-10 items-center rounded-md border border-relay-border px-4 text-sm text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
-                to="/?archive=briefs"
-              >
-                Brief archive
-              </Link>
-            </div>
-            {briefError ? (
-              <p className="mt-4 text-sm text-relay-negative" role="alert">
-                {briefError}
-              </p>
-            ) : null}
-          </section>
+          </div>
           {showBriefArchive ? (
             <BriefArchiveSection
               briefs={briefArchive}
@@ -557,74 +541,102 @@ export function TodayPage() {
 
   return (
     <div className="relay-enter min-h-screen">
-      <header className="border-b border-relay-border px-5 py-5 sm:px-8 lg:px-10">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-end justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+      <header className="border-b border-relay-border px-5 py-6 sm:px-8 lg:px-10">
+        <div className="mx-auto max-w-[1440px]">
+          <div className="flex flex-wrap items-center justify-between gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+            <span className="flex items-center gap-2">
               <CalendarDays aria-hidden="true" className="size-3.5" />
               {formatDate(brief.date, {
                 weekday: "long",
                 month: "long",
                 day: "numeric",
               })}
-            </div>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              What changed in your understanding
-            </h1>
+            </span>
+            <span className="text-relay-subtle">
+              {data.updates.length} evidence records
+              <span className="mx-2 text-relay-border-strong">·</span>
+              {brief.model ?? "Seed example"}
+            </span>
           </div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-subtle">
-            {data.updates.length} evidence records monitored
-            <span className="mx-2 text-relay-border-strong">·</span>
-            {brief.model ?? "Seed example"}
+          <div className="mt-6 max-w-4xl border-l-2 border-relay-accent pl-5 sm:pl-7">
+            <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
+              <span className="size-1.5 rounded-full bg-relay-accent" />
+              {hasBriefSignals ? "Largest thesis update" : "Daily conclusion"}
+            </p>
+            <h1 className="mt-3 text-3xl font-semibold leading-[1.12] tracking-[-0.025em] sm:text-[2.75rem]">
+              {brief.title}
+            </h1>
+            <p className="mt-4 max-w-3xl text-base leading-8 text-relay-muted sm:text-lg">
+              {brief.signal}
+            </p>
+            <DecisionChips
+              awaitingEvaluationTotal={awaitingEvaluationTotal}
+              className="mt-6 xl:hidden"
+              pendingReviewTotal={pendingReviewTotal}
+            />
           </div>
         </div>
       </header>
 
-      <div className="mx-auto grid max-w-[1440px] xl:grid-cols-[minmax(0,1fr)_350px]">
-        <main className="min-w-0 px-5 py-7 sm:px-8 lg:px-10 lg:py-10">
-          <CommandCenterStrip
-            awaitingEvaluationTotal={awaitingEvaluationTotal}
-            biggestThesisChange={biggestThesisChange}
-            pendingReviewTotal={pendingReviewTotal}
-          />
-          <BriefEvidenceLead items={briefEvidenceItems} />
-          <article className="max-w-4xl">
-            <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
-              <span className="size-1.5 rounded-full bg-relay-accent" />
-              {hasBriefSignals ? "Largest thesis update" : "Daily conclusion"}
-            </div>
-            <h2 className="mt-4 max-w-3xl text-3xl font-semibold leading-[1.15] tracking-[-0.025em] sm:text-4xl">
-              {brief.title}
-            </h2>
-            <p className="mt-5 max-w-3xl text-base leading-8 text-relay-muted sm:text-lg">
-              {brief.signal}
-            </p>
+      <div className="mx-auto grid max-w-[1440px] xl:grid-cols-[minmax(0,1fr)_340px]">
+        <main className="min-w-0 px-5 py-8 sm:px-8 lg:px-10">
+          <article className="max-w-3xl">
+            <section>
+              <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+                Mental-model synthesis
+              </p>
+              <p className="mt-3 text-[15px] leading-7 text-relay-text/90">
+                {brief.summary}
+              </p>
+            </section>
 
-            <div className="mt-8 border-y border-relay-border py-7">
-              <div className="flex items-start gap-4">
-                <BookOpen
-                  aria-hidden="true"
-                  className="mt-1 size-5 shrink-0 text-relay-subtle"
-                />
-                <div>
-                  <h3 className="text-sm font-semibold">
-                    Mental-model synthesis
-                  </h3>
-                  <p className="mt-3 max-w-3xl text-[15px] leading-7 text-relay-text/90">
-                    {brief.summary}
-                  </p>
+            {briefEvidenceItems.length ? (
+              <section className="mt-10">
+                <div className="flex items-end justify-between border-b border-relay-border pb-3">
+                  <h2 className="text-sm font-semibold">Cited evidence</h2>
+                  <span className="font-mono text-[10px] text-relay-subtle">
+                    {briefEvidenceItems.length} quote
+                    {briefEvidenceItems.length === 1 ? "" : "s"}
+                  </span>
                 </div>
-              </div>
-            </div>
+                <ol className="divide-y divide-relay-border border-b border-relay-border">
+                  {briefEvidenceItems.map(({ claim, update }, index) => (
+                    <li key={claim.id}>
+                      <button
+                        className="group grid w-full grid-cols-[32px_minmax(0,1fr)] gap-3 py-5 text-left"
+                        onClick={() => setSelectedClaimId(claim.id)}
+                        type="button"
+                      >
+                        <span className="font-mono text-xs text-relay-accent">
+                          [{index + 1}]
+                        </span>
+                        <span className="min-w-0">
+                          <blockquote className="text-sm leading-7 text-relay-text">
+                            “{claim.quote}”
+                          </blockquote>
+                          <span className="mt-2 block font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle group-hover:text-relay-muted">
+                            {update.publisher} · {claim.locator} ·{" "}
+                            {formatDate(update.publishedAt, {
+                              month: "short",
+                              day: "numeric",
+                            })}
+                          </span>
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : null}
 
             {primaryUpdate ? (
               <Link
-                className="group mt-7 flex items-center justify-between gap-5 rounded-md border border-relay-border bg-relay-surface px-5 py-4 transition-colors hover:border-relay-border-strong hover:bg-relay-surface-2"
+                className="group mt-8 flex items-center justify-between gap-5 rounded-md border border-relay-border bg-relay-surface px-5 py-4 transition-colors hover:border-relay-border-strong hover:bg-relay-surface-2"
                 to={`/signals?update=${encodeURIComponent(primaryUpdate.id)}`}
               >
                 <div className="min-w-0">
                   <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-muted">
-                    Inspect the underlying evidence
+                    Inspect the underlying signal
                   </span>
                   <p className="mt-1 truncate text-sm font-medium">
                     {primaryUpdate.title}
@@ -637,7 +649,7 @@ export function TodayPage() {
               </Link>
             ) : null}
 
-            <section className="mt-11">
+            <section className="mt-12">
               <div className="flex items-end justify-between border-b border-relay-border pb-3">
                 <div>
                   <h2 className="text-lg font-semibold tracking-tight">
@@ -718,8 +730,13 @@ export function TodayPage() {
           ) : null}
         </main>
 
-        <aside className="border-t border-relay-border bg-relay-deep px-5 py-7 sm:px-8 xl:border-l xl:border-t-0 xl:px-6 xl:py-10">
-          <section>
+        <aside className="border-t border-relay-border bg-relay-deep px-5 py-8 sm:px-8 xl:border-l xl:border-t-0 xl:px-6">
+          <DecisionQueue
+            awaitingEvaluationTotal={awaitingEvaluationTotal}
+            pendingReviewTotal={pendingReviewTotal}
+          />
+
+          <section className="mt-10">
             <div className="flex items-center justify-between border-b border-relay-border pb-3">
               <div>
                 <h2 className="text-sm font-semibold">Theses evaluated</h2>
@@ -756,53 +773,29 @@ export function TodayPage() {
                 ))}
               </div>
             ) : (
-              <p className="py-8 text-sm leading-6 text-relay-muted">
+              <p className="py-6 text-sm leading-6 text-relay-muted">
                 Today’s evidence did not warrant a thesis change.
               </p>
             )}
           </section>
 
-          <section className="mt-8">
-            <button
-              className="flex w-full items-center justify-between border-b border-relay-border pb-3 text-left"
-              onClick={() =>
-                setSelectedClaimId((current) =>
-                  current ? null : (briefClaims[0]?.id ?? null),
-                )
-              }
-              type="button"
+          <section className="mt-10 border-t border-relay-border pt-5">
+            <Link
+              className="group flex items-center justify-between gap-3 text-sm text-relay-muted hover:text-relay-text"
+              to="/?archive=briefs"
             >
-              <span>
-                <span className="block text-sm font-semibold">
-                  Supporting evidence
-                </span>
-                <span className="mt-1 block text-xs text-relay-muted">
-                  {briefClaims.length} source quotes
-                </span>
+              <span className="flex items-center gap-2.5">
+                <BookOpen
+                  aria-hidden="true"
+                  className="size-4 text-relay-subtle"
+                />
+                Brief archive
               </span>
-              <Quote aria-hidden="true" className="size-4 text-relay-subtle" />
-            </button>
-            <div className="mt-3 space-y-2">
-              {briefClaims.map((claim, index) => (
-                <button
-                  className={`flex w-full items-start gap-3 rounded-md border px-3 py-3 text-left transition-colors ${
-                    selectedClaimId === claim.id
-                      ? "border-relay-accent bg-relay-accent/8"
-                      : "border-relay-border bg-relay-surface hover:border-relay-border-strong"
-                  }`}
-                  key={claim.id}
-                  onClick={() => setSelectedClaimId(claim.id)}
-                  type="button"
-                >
-                  <span className="font-mono text-[10px] text-relay-accent">
-                    [{index + 1}]
-                  </span>
-                  <span className="line-clamp-2 text-xs leading-5 text-relay-muted">
-                    {claim.quote}
-                  </span>
-                </button>
-              ))}
-            </div>
+              <ArrowRight
+                aria-hidden="true"
+                className="size-3.5 text-relay-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-relay-accent"
+              />
+            </Link>
           </section>
         </aside>
       </div>
