@@ -55,6 +55,17 @@ export interface BeliefEvaluation {
   createdAt: string;
 }
 
+export interface BeliefRoutedSignal {
+  updateId: string;
+  title: string;
+  publisher: string;
+  publishedAt: string;
+  relevance: Thesis["routedSignals"][number]["relevance"];
+  materiality: Thesis["routedSignals"][number]["materiality"];
+  rationale: string;
+  evaluationState: Thesis["routedSignals"][number]["evaluationState"];
+}
+
 export interface BeliefVersion {
   id: string;
   version: number;
@@ -76,6 +87,7 @@ export interface BeliefSummary {
   supportingEvidenceCount: number;
   opposingEvidenceCount: number;
   pendingEvaluationCount: number;
+  awaitingEvaluationCount: number;
 }
 
 export interface BeliefDetail extends BeliefSummary {
@@ -87,6 +99,7 @@ export interface BeliefDetail extends BeliefSummary {
   supportingEvidence: BeliefEvidence[];
   opposingEvidence: BeliefEvidence[];
   contextualEvidence: BeliefEvidence[];
+  routedSignals: BeliefRoutedSignal[];
   pendingEvaluations: BeliefEvaluation[];
   versions: BeliefVersion[];
 }
@@ -390,6 +403,7 @@ export function getBelief(
 }
 
 function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
+  const routedSignals = thesis.routedSignals ?? [];
   return {
     id: thesis.id,
     kind: thesis.kind,
@@ -411,10 +425,16 @@ function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
     pendingEvaluationCount: thesis.evaluations.filter(
       (evaluation) => evaluation.reviewStatus === "pending",
     ).length,
+    awaitingEvaluationCount:
+      thesis.awaitingEvaluationCount ??
+      routedSignals.filter(
+        (signal) => signal.evaluationState === "awaiting-evaluation",
+      ).length,
   };
 }
 
 function thesisToBeliefDetail(thesis: Thesis): BeliefDetail {
+  const routedSignals = thesis.routedSignals ?? [];
   const currentEvaluation = thesis.currentVersion.createdByEvaluationId
     ? thesis.evaluations.find(
         (evaluation) =>
@@ -443,6 +463,16 @@ function thesisToBeliefDetail(thesis: Thesis): BeliefDetail {
     supportingEvidence: evidence.filter((item) => item.stance === "supports"),
     opposingEvidence: evidence.filter((item) => item.stance === "opposes"),
     contextualEvidence: evidence.filter((item) => item.stance === "context"),
+    routedSignals: routedSignals.map((signal) => ({
+      updateId: signal.updateId,
+      title: signal.title,
+      publisher: signal.publisher,
+      publishedAt: signal.publishedAt,
+      relevance: signal.relevance,
+      materiality: signal.materiality,
+      rationale: signal.rationale,
+      evaluationState: signal.evaluationState,
+    })),
     pendingEvaluations: thesis.evaluations
       .filter(
         (evaluation) =>

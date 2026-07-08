@@ -73,6 +73,207 @@ describe("RelayRepository", () => {
     });
   });
 
+  it("surfaces company routed signals and marks them evaluated after a thesis evaluation consumes them", () => {
+    const summary = repository.getThesis("company-nvda");
+    const detail = repository.getThesisDetail("company-nvda");
+
+    expect(summary?.routedSignals).toEqual([]);
+    expect(summary?.awaitingEvaluationCount).toBeGreaterThan(0);
+    expect(detail?.routedSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          updateId: "nvda-fy26-q4",
+          title: "NVIDIA data-center revenue reaches $62.3 billion",
+          publisher: "NVIDIA Investor Relations",
+          materiality: "high",
+          relevance: null,
+          rationale:
+            "Strengthens confidence in durable platform demand.",
+          evaluationState: "awaiting-evaluation",
+        }),
+      ]),
+    );
+
+    repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-company-route-consumed",
+        signalIds: ["nvda-fy26-q4"],
+        evidence: [
+          {
+            claimId: "claim-nvda-dc",
+            stance: "supports",
+            rationale:
+              "Reported data-center growth supports durable demand.",
+          },
+        ],
+      }),
+    );
+
+    const updatedDetail = repository.getThesisDetail("company-nvda");
+    expect(
+      updatedDetail?.routedSignals.find(
+        (signal) => signal.updateId === "nvda-fy26-q4",
+      ),
+    ).toMatchObject({
+      evaluationState: "evaluated",
+    });
+    expect(updatedDetail?.awaitingEvaluationCount).toBe(
+      (detail?.awaitingEvaluationCount ?? 0) - 1,
+    );
+  });
+
+  it("deduplicates company routed signals for multi-company theses", () => {
+    const seed = repository.getUpdate("nvda-fy26-q4");
+    if (!seed) {
+      throw new Error("Seed signal missing");
+    }
+    const update: IntelligenceUpdate = {
+      ...seed,
+      id: "multi-company-route-signal",
+      companyTickers: ["AMD", "NVDA"],
+      claims: seed.claims.map((claim) => ({
+        ...claim,
+        id: `multi-company-route-${claim.id}`,
+      })),
+      thesisImpacts: [
+        {
+          ...seed.thesisImpacts[0]!,
+          id: "multi-company-route-nvda",
+          thesisDelta: "Strengthens NVIDIA platform demand.",
+        },
+        {
+          ...seed.thesisImpacts[0]!,
+          id: "multi-company-route-amd",
+          companyTicker: "AMD",
+          summary: "The same signal informs AMD second-source demand.",
+          thesisDelta: "Keeps AMD competition in frame.",
+        },
+      ],
+    };
+    repository.persistAnalyzedUpdate(update);
+    const thesis = repository.createThesis({
+      id: "company-ai-accelerator-basket",
+      kind: "company",
+      title: "AI accelerator basket",
+      belief: "The accelerator leaders should be read together.",
+      confidenceScore: 62,
+      companyTickers: ["AMD", "NVDA"],
+      layerIds: ["accelerators"],
+      unknowns: [],
+      strengtheningConditions: [],
+      weakeningConditions: [],
+    });
+
+    const detail = repository.getThesisDetail(thesis.id);
+    const matchingSignals = detail?.routedSignals.filter(
+      (signal) => signal.updateId === update.id,
+    );
+
+    expect(repository.getThesis(thesis.id)?.awaitingEvaluationCount).toBe(
+      detail?.awaitingEvaluationCount,
+    );
+    expect(matchingSignals).toHaveLength(1);
+    expect(matchingSignals?.[0]).toMatchObject({
+      materiality: "high",
+      evaluationState: "awaiting-evaluation",
+    });
+    expect(matchingSignals?.[0]?.rationale).toContain(
+      "Strengthens NVIDIA platform demand.",
+    );
+    expect(matchingSignals?.[0]?.rationale).toContain(
+      "Keeps AMD competition in frame.",
+    );
+  });
+
+  it("surfaces macro routed signals and marks them evaluated after a thesis evaluation consumes them", () => {
+    const seed = repository.getUpdate("nvda-fy26-q4");
+    if (!seed) {
+      throw new Error("Seed signal missing");
+    }
+    repository.persistAnalyzedUpdate({
+      ...seed,
+      id: "macro-route-detail-signal",
+      title: "Custom silicon capacity signal",
+      publisher: "Primary custom silicon source",
+      sourceUrl: "https://example.com/custom-silicon",
+      publishedAt: "2026-07-01T08:00:00.000Z",
+      ingestedAt: "2026-07-01T08:05:00.000Z",
+      companyTickers: [],
+      claims: [
+        {
+          id: "claim-macro-route-detail",
+          quote: "Custom accelerators moved into broader production.",
+          sourceId: "manual-imports",
+          locator: "Excerpt",
+        },
+      ],
+      thesisImpacts: [],
+      macroThesisImpacts: [
+        {
+          id: "macro-route-detail-impact",
+          thesisId: "macro-custom-silicon",
+          relevance: "primary",
+          stance: "supports",
+          rationale:
+            "Broader production directly bears on custom silicon adoption.",
+          claimIds: ["claim-macro-route-detail"],
+        },
+      ],
+    });
+
+    const summary = repository.getThesis("macro-custom-silicon");
+    const detail = repository.getThesisDetail("macro-custom-silicon");
+
+    expect(summary?.routedSignals).toEqual([]);
+    expect(summary?.awaitingEvaluationCount).toBe(1);
+    expect(detail?.routedSignals).toEqual([
+      expect.objectContaining({
+        updateId: "macro-route-detail-signal",
+        publisher: "Primary custom silicon source",
+        relevance: "primary",
+        materiality: null,
+        rationale:
+          "Broader production directly bears on custom silicon adoption.",
+        evaluationState: "awaiting-evaluation",
+      }),
+    ]);
+
+    const macroThesis = repository.getThesis("macro-custom-silicon");
+    if (!macroThesis) {
+      throw new Error("Seed macro thesis missing");
+    }
+    repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-macro-route-consumed",
+        thesisId: "macro-custom-silicon",
+        signalIds: ["macro-route-detail-signal"],
+        evidence: [
+          {
+            claimId: "claim-macro-route-detail",
+            stance: "supports",
+            rationale:
+              "The routed claim supports custom accelerator adoption.",
+          },
+        ],
+        proposedConfidenceScore:
+          macroThesis.currentVersion.confidenceScore + 2,
+      }),
+    );
+
+    expect(
+      repository.getThesisDetail("macro-custom-silicon")?.routedSignals,
+    ).toEqual([
+      expect.objectContaining({
+        updateId: "macro-route-detail-signal",
+        evaluationState: "evaluated",
+      }),
+    ]);
+    expect(
+      repository.getThesis("macro-custom-silicon")
+        ?.awaitingEvaluationCount,
+    ).toBe(0);
+  });
+
   it("additively backfills legacy company theses when the belief migration runs", () => {
     const database = new DatabaseSync(":memory:");
     database.exec(`
@@ -522,6 +723,16 @@ describe("RelayRepository", () => {
         (update) => update.id,
       ),
     ).toEqual(["nvda-fy26-q4"]);
+    expect(
+      repository.getThesisDetail("company-nvda")?.routedSignals.find(
+        (signal) => signal.updateId === "nvda-fy26-q4",
+      ),
+    ).toMatchObject({
+      evaluationState: "awaiting-evaluation",
+    });
+    expect(
+      repository.getThesis("company-nvda")?.awaitingEvaluationCount,
+    ).toBeGreaterThan(0);
 
     expect(
       repository.queueThesisEvaluationUpdate("nvda-fy26-q4"),

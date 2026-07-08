@@ -112,6 +112,21 @@ export interface ThesisEvidence {
   claim: EvidenceClaim;
 }
 
+export type ThesisRoutedSignalEvaluationState =
+  | "awaiting-evaluation"
+  | "evaluated";
+
+export interface ThesisRoutedSignal {
+  updateId: string;
+  title: string;
+  publisher: string;
+  publishedAt: string;
+  relevance: MacroThesisRelevance | null;
+  materiality: Materiality | null;
+  rationale: string;
+  evaluationState: ThesisRoutedSignalEvaluationState;
+}
+
 export interface Thesis {
   id: string;
   kind: ThesisKind;
@@ -122,6 +137,8 @@ export interface Thesis {
   companyTickers: string[];
   layerIds: LayerId[];
   evidence: ThesisEvidence[];
+  routedSignals: ThesisRoutedSignal[];
+  awaitingEvaluationCount: number;
   evaluations: ThesisEvaluation[];
   createdAt: string;
   updatedAt: string;

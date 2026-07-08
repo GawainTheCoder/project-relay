@@ -92,6 +92,7 @@ function buildCompanyBelief(
     supportingEvidenceCount: supportingEvidence.length,
     opposingEvidenceCount: opposingEvidence.length,
     pendingEvaluationCount: 0,
+    awaitingEvaluationCount: 0,
     whyItMatters: company.whyItMatters,
     latestChange: null,
     unknowns: [],
@@ -100,6 +101,7 @@ function buildCompanyBelief(
     supportingEvidence,
     opposingEvidence,
     contextualEvidence,
+    routedSignals: [],
     pendingEvaluations: [],
     versions: [
       {
@@ -137,6 +139,7 @@ export function deriveBeliefSummaries(
     supportingEvidenceCount: belief.supportingEvidenceCount,
     opposingEvidenceCount: belief.opposingEvidenceCount,
     pendingEvaluationCount: belief.pendingEvaluationCount,
+    awaitingEvaluationCount: belief.awaitingEvaluationCount,
   }));
 }
 

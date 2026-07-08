@@ -22,6 +22,7 @@ import type {
   ThesisEvaluationReviewInput,
   ThesisEvidence,
   ThesisInput,
+  ThesisRoutedSignal,
   ThesisStatus,
   ThesisType,
   ThesisVersion,
@@ -56,6 +57,10 @@ interface CatalogSeed {
 export interface ThesisListFilters {
   kind?: ThesisType | undefined;
   status?: ThesisStatus | "all" | undefined;
+}
+
+interface ThesisReadOptions {
+  includeRoutedSignals?: boolean | undefined;
 }
 
 export interface ThesisEvaluationListFilters {
@@ -538,7 +543,10 @@ export class RelayRepository {
       .filter((thesis): thesis is Thesis => thesis !== null);
   }
 
-  getThesis(id: string): Thesis | null {
+  getThesis(
+    id: string,
+    options: ThesisReadOptions = {},
+  ): Thesis | null {
     const thesisRow = row(
       this.database.prepare("SELECT * FROM theses WHERE id = ?").get(id),
     );
@@ -577,9 +585,13 @@ export class RelayRepository {
         `)
         .all(id),
     );
+    const kind = text(thesisRow, "type") as Thesis["kind"];
+    const routedSignals = options.includeRoutedSignals
+      ? this.listThesisRoutedSignals(id, kind)
+      : [];
     return {
       id,
-      kind: text(thesisRow, "type") as Thesis["kind"],
+      kind,
       title: text(thesisRow, "title"),
       status: text(thesisRow, "status") as Thesis["status"],
       currentVersion: this.mapThesisVersion(versionRow),
@@ -591,6 +603,13 @@ export class RelayRepository {
         (layerRow) => text(layerRow, "layer_id") as Thesis["layerIds"][number],
       ),
       evidence: this.listThesisEvidence(id),
+      routedSignals,
+      awaitingEvaluationCount: options.includeRoutedSignals
+        ? routedSignals.filter(
+            (signal) =>
+              signal.evaluationState === "awaiting-evaluation",
+          ).length
+        : this.countAwaitingThesisRoutedSignals(id, kind),
       evaluations: this.listThesisEvaluations({ thesisId: id }),
       createdAt: text(thesisRow, "created_at"),
       updatedAt: text(thesisRow, "updated_at"),
@@ -598,7 +617,7 @@ export class RelayRepository {
   }
 
   getThesisDetail(id: string): Thesis | null {
-    return this.getThesis(id);
+    return this.getThesis(id, { includeRoutedSignals: true });
   }
 
   getCompanyThesisByTicker(ticker: string): Thesis | null {
@@ -618,7 +637,7 @@ export class RelayRepository {
         .get(ticker.toUpperCase()),
     );
     return thesisRow
-      ? this.getThesis(text(thesisRow, "id"))
+      ? this.getThesisDetail(text(thesisRow, "id"))
       : null;
   }
 
@@ -672,6 +691,245 @@ export class RelayRepository {
         locator: text(evidenceRow, "locator"),
       },
     }));
+  }
+
+  private listThesisRoutedSignals(
+    thesisId: string,
+    kind: Thesis["kind"],
+  ): ThesisRoutedSignal[] {
+    if (kind === "macro") {
+      if (!this.hasTable("update_macro_thesis_impacts")) {
+        return [];
+      }
+      return rows(
+        this.database
+          .prepare(`
+            SELECT
+              update_record.id AS update_id,
+              update_record.title,
+              update_record.publisher,
+              update_record.published_at,
+              route.relevance,
+              NULL AS materiality,
+              route.rationale,
+              CASE
+                WHEN NOT EXISTS (
+                  SELECT 1
+                  FROM thesis_evaluation_requeue AS requeue
+                  WHERE requeue.update_id = route.update_id
+                )
+                AND EXISTS (
+                  SELECT 1
+                  FROM thesis_evaluations AS evaluation
+                  INNER JOIN thesis_evaluation_updates AS evaluation_link
+                    ON evaluation_link.evaluation_id = evaluation.id
+                  WHERE evaluation.thesis_id = route.thesis_id
+                    AND evaluation_link.update_id = route.update_id
+                    AND evaluation.review_status IN (
+                      'pending', 'accepted', 'rejected', 'deferred'
+                    )
+                ) THEN 'evaluated'
+                ELSE 'awaiting-evaluation'
+              END AS evaluation_state
+            FROM update_macro_thesis_impacts AS route
+            INNER JOIN intelligence_updates AS update_record
+              ON update_record.id = route.update_id
+            WHERE route.thesis_id = ?
+            ORDER BY
+              CASE evaluation_state
+                WHEN 'awaiting-evaluation' THEN 0
+                ELSE 1
+              END,
+              CASE route.relevance
+                WHEN 'primary' THEN 1
+                WHEN 'secondary' THEN 2
+                ELSE 3
+              END,
+              update_record.published_at DESC,
+              update_record.ingested_at DESC,
+              update_record.id
+          `)
+          .all(thesisId),
+      ).map((signalRow) => this.mapThesisRoutedSignal(signalRow));
+    }
+
+    if (
+      !this.hasTable("update_companies") ||
+      !this.hasTable("thesis_impacts")
+    ) {
+      return [];
+    }
+    return rows(
+      this.database
+        .prepare(`
+          WITH company_routes AS (
+            SELECT DISTINCT
+              update_record.id AS update_id,
+              update_record.title,
+              update_record.publisher,
+              update_record.published_at,
+              update_record.materiality,
+              COALESCE(NULLIF(impact.thesis_delta, ''), impact.summary)
+                AS rationale
+            FROM thesis_companies AS thesis_company
+            INNER JOIN update_companies AS update_company
+              ON update_company.company_ticker = thesis_company.company_ticker
+            INNER JOIN thesis_impacts AS impact
+              ON impact.update_id = update_company.update_id
+             AND impact.company_ticker = thesis_company.company_ticker
+            INNER JOIN intelligence_updates AS update_record
+              ON update_record.id = update_company.update_id
+            WHERE thesis_company.thesis_id = ?
+          ),
+          routed_updates AS (
+            SELECT
+              update_id,
+              title,
+              publisher,
+              published_at,
+              materiality,
+              GROUP_CONCAT(rationale, ' / ') AS rationale
+            FROM company_routes
+            GROUP BY
+              update_id,
+              title,
+              publisher,
+              published_at,
+              materiality
+          )
+          SELECT
+            route.update_id,
+            route.title,
+            route.publisher,
+            route.published_at,
+            NULL AS relevance,
+            route.materiality,
+            route.rationale,
+            CASE
+              WHEN NOT EXISTS (
+                SELECT 1
+                FROM thesis_evaluation_requeue AS requeue
+                WHERE requeue.update_id = route.update_id
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM thesis_evaluations AS evaluation
+                INNER JOIN thesis_evaluation_updates AS evaluation_link
+                  ON evaluation_link.evaluation_id = evaluation.id
+                WHERE evaluation.thesis_id = thesis_company.thesis_id
+                  AND evaluation_link.update_id = route.update_id
+                  AND evaluation.review_status IN (
+                    'pending', 'accepted', 'rejected', 'deferred'
+                  )
+              ) THEN 'evaluated'
+              ELSE 'awaiting-evaluation'
+            END AS evaluation_state
+          FROM routed_updates AS route
+          CROSS JOIN (
+            SELECT ? AS thesis_id
+          ) AS thesis_company
+          WHERE thesis_company.thesis_id = ?
+          ORDER BY
+            CASE evaluation_state
+              WHEN 'awaiting-evaluation' THEN 0
+              ELSE 1
+            END,
+            CASE route.materiality
+              WHEN 'high' THEN 1
+              WHEN 'medium' THEN 2
+              WHEN 'low' THEN 3
+              ELSE 4
+            END,
+            route.published_at DESC,
+            route.update_id
+        `)
+        .all(thesisId, thesisId, thesisId),
+    ).map((signalRow) => this.mapThesisRoutedSignal(signalRow));
+  }
+
+  private countAwaitingThesisRoutedSignals(
+    thesisId: string,
+    kind: Thesis["kind"],
+  ): number {
+    if (
+      kind === "macro" &&
+      !this.hasTable("update_macro_thesis_impacts")
+    ) {
+      return 0;
+    }
+    if (
+      kind === "company" &&
+      (!this.hasTable("update_companies") ||
+        !this.hasTable("thesis_impacts"))
+    ) {
+      return 0;
+    }
+    const result =
+      kind === "macro"
+        ? row(
+            this.database
+              .prepare(`
+                SELECT COUNT(*) AS count
+                FROM update_macro_thesis_impacts AS route
+                WHERE route.thesis_id = ?
+                  AND (
+                    EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluation_requeue AS requeue
+                      WHERE requeue.update_id = route.update_id
+                    )
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluations AS evaluation
+                      INNER JOIN thesis_evaluation_updates AS evaluation_link
+                        ON evaluation_link.evaluation_id = evaluation.id
+                      WHERE evaluation.thesis_id = route.thesis_id
+                        AND evaluation_link.update_id = route.update_id
+                        AND evaluation.review_status IN (
+                          'pending', 'accepted', 'rejected', 'deferred'
+                        )
+                    )
+                  )
+              `)
+              .get(thesisId),
+          )
+        : row(
+            this.database
+              .prepare(`
+                SELECT COUNT(DISTINCT update_record.id) AS count
+                FROM thesis_companies AS thesis_company
+                INNER JOIN update_companies AS update_company
+                  ON update_company.company_ticker =
+                    thesis_company.company_ticker
+                INNER JOIN thesis_impacts AS impact
+                  ON impact.update_id = update_company.update_id
+                 AND impact.company_ticker =
+                    thesis_company.company_ticker
+                INNER JOIN intelligence_updates AS update_record
+                  ON update_record.id = update_company.update_id
+                WHERE thesis_company.thesis_id = ?
+                  AND (
+                    EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluation_requeue AS requeue
+                      WHERE requeue.update_id = update_record.id
+                    )
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluations AS evaluation
+                      INNER JOIN thesis_evaluation_updates AS evaluation_link
+                        ON evaluation_link.evaluation_id = evaluation.id
+                      WHERE evaluation.thesis_id = thesis_company.thesis_id
+                        AND evaluation_link.update_id = update_record.id
+                        AND evaluation.review_status IN (
+                          'pending', 'accepted', 'rejected', 'deferred'
+                        )
+                    )
+                  )
+              `)
+              .get(thesisId),
+          );
+    return result ? numeric(result, "count") : 0;
   }
 
   createThesis(input: ThesisInput): Thesis {
@@ -2872,6 +3130,44 @@ export class RelayRepository {
       createdAt: text(evaluationRow, "created_at"),
       reviewedAt: nullableText(evaluationRow, "reviewed_at"),
     };
+  }
+
+  private mapThesisRoutedSignal(
+    signalRow: SqlRow,
+  ): ThesisRoutedSignal {
+    return {
+      updateId: text(signalRow, "update_id"),
+      title: text(signalRow, "title"),
+      publisher: text(signalRow, "publisher"),
+      publishedAt: text(signalRow, "published_at"),
+      relevance: nullableText(
+        signalRow,
+        "relevance",
+      ) as ThesisRoutedSignal["relevance"],
+      materiality: nullableText(
+        signalRow,
+        "materiality",
+      ) as ThesisRoutedSignal["materiality"],
+      rationale: text(signalRow, "rationale"),
+      evaluationState: text(
+        signalRow,
+        "evaluation_state",
+      ) as ThesisRoutedSignal["evaluationState"],
+    };
+  }
+
+  private hasTable(name: string): boolean {
+    return Boolean(
+      row(
+        this.database
+          .prepare(`
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = ?
+          `)
+          .get(name),
+      ),
+    );
   }
 
   private assertKnownThesisAssociations(

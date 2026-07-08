@@ -114,6 +114,8 @@ function makeThesis(): Thesis {
     companyTickers: ["ANET"],
     layerIds: ["networking"],
     evidence: [],
+    routedSignals: [],
+    awaitingEvaluationCount: 0,
     evaluations: [],
     createdAt: "2026-06-01T00:00:00.000Z",
     updatedAt: "2026-06-01T00:00:00.000Z",

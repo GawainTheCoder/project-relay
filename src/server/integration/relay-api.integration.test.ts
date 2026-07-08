@@ -705,6 +705,87 @@ describe("Relay API integration contracts", () => {
     }
   });
 
+  it("returns routed thesis signals with awaiting counts through the thesis API", async () => {
+    const app = createApp({ repository });
+    const thesis = repository.getThesis("company-nvda");
+    const update = repository.getUpdate("nvda-fy26-q4");
+    if (!thesis || !update?.claims[0]) {
+      throw new Error("Expected seeded thesis and signal fixtures.");
+    }
+
+    const list = await app.request("/api/theses?kind=company");
+    expect(list.status).toBe(200);
+    const listBody = (await list.json()) as {
+      theses: Array<{
+        id: string;
+        awaitingEvaluationCount: number;
+        routedSignals: unknown[];
+      }>;
+    };
+    expect(
+      listBody.theses.find((candidate) => candidate.id === thesis.id),
+    ).toMatchObject({
+      awaitingEvaluationCount: expect.any(Number),
+      routedSignals: [],
+    });
+
+    const detail = await app.request(`/api/theses/${thesis.id}`);
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      id: thesis.id,
+      awaitingEvaluationCount: expect.any(Number),
+      routedSignals: expect.arrayContaining([
+        expect.objectContaining({
+          updateId: update.id,
+          title: update.title,
+          publisher: update.publisher,
+          publishedAt: update.publishedAt,
+          relevance: null,
+          materiality: "high",
+          rationale:
+            "Strengthens confidence in durable platform demand.",
+          evaluationState: "awaiting-evaluation",
+        }),
+      ]),
+    });
+
+    repository.persistThesisEvaluation({
+      id: "api-routed-signal-evaluation",
+      thesisId: thesis.id,
+      outcome: "reinforced",
+      summary: "The evidence reinforces the current belief.",
+      rationale:
+        "The cited source-backed evidence supports higher confidence.",
+      proposedBelief: thesis.currentVersion.belief,
+      proposedConfidenceScore: thesis.currentVersion.confidenceScore + 1,
+      proposedUnknowns: thesis.currentVersion.unknowns,
+      proposedStrengtheningConditions:
+        thesis.currentVersion.strengtheningConditions,
+      proposedWeakeningConditions:
+        thesis.currentVersion.weakeningConditions,
+      signalIds: [update.id],
+      evidence: [
+        {
+          claimId: update.claims[0].id,
+          stance: "supports",
+          rationale: "The exact claim supports the current belief.",
+        },
+      ],
+      model: "mock-evaluation-model",
+    });
+
+    const updatedDetail = await app.request(`/api/theses/${thesis.id}`);
+    expect(updatedDetail.status).toBe(200);
+    await expect(updatedDetail.json()).resolves.toMatchObject({
+      routedSignals: expect.arrayContaining([
+        expect.objectContaining({
+          updateId: update.id,
+          evaluationState: "evaluated",
+        }),
+      ]),
+    });
+  });
+
   it("persists accepted belief changes and their evidence across a database reopen", async () => {
     repository.close();
     const directory = mkdtempSync(join(tmpdir(), "relay-belief-integration-"));

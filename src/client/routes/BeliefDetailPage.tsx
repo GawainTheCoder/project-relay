@@ -1,5 +1,6 @@
 import {
   ArrowLeft,
+  ArrowUpRight,
   Building2,
   LoaderCircle,
   Network,
@@ -23,14 +24,211 @@ import { useBeliefDetail } from "../features/beliefs/useBeliefs";
 import { VersionTimeline } from "../features/beliefs/VersionTimeline";
 import { SourceCoverageBadge } from "../features/sources/SourceCoverageAudit";
 import {
+  type BeliefRoutedSignal,
   removeCompany,
   reviewBeliefEvaluation,
 } from "../lib/api";
 import { formatDate, getLayerName } from "../lib/format";
 
+function routedSignalPath(updateId: string): string {
+  return `/signals?update=${encodeURIComponent(updateId)}`;
+}
+
+function routedSignalBadge(signal: BeliefRoutedSignal): string {
+  return signal.relevance ?? signal.materiality ?? "routed";
+}
+
+function routedSignalBadgeClassName(signal: BeliefRoutedSignal): string {
+  const badge = routedSignalBadge(signal);
+  switch (badge) {
+    case "primary":
+    case "high":
+      return "border-relay-warning/40 bg-relay-warning/10 text-relay-warning";
+    case "secondary":
+    case "medium":
+      return "border-relay-accent/40 bg-relay-accent/10 text-relay-accent";
+    case "context":
+    case "low":
+      return "border-relay-border-strong bg-relay-raised text-relay-muted";
+    case "not-material":
+    default:
+      return "border-relay-border bg-relay-surface text-relay-subtle";
+  }
+}
+
+function RoutedSignalRow({
+  signal,
+  subdued = false,
+}: {
+  signal: BeliefRoutedSignal;
+  subdued?: boolean;
+}) {
+  return (
+    <article
+      className={`grid gap-3 py-4 sm:grid-cols-[minmax(0,1fr)_auto] ${
+        subdued ? "opacity-60" : ""
+      }`}
+    >
+      <div className="min-w-0">
+        <Link
+          className="inline-flex max-w-full items-start gap-1.5 text-sm font-medium leading-6 text-relay-text hover:text-relay-accent"
+          to={routedSignalPath(signal.updateId)}
+        >
+          <span className="line-clamp-2">{signal.title}</span>
+          <ArrowUpRight
+            aria-hidden="true"
+            className="mt-1 size-3 shrink-0"
+          />
+        </Link>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] leading-4 text-relay-muted">
+          <span>{signal.publisher}</span>
+          <time
+            className="font-mono text-[9px] uppercase tracking-[0.05em] text-relay-subtle"
+            dateTime={signal.publishedAt}
+          >
+            {formatDate(signal.publishedAt, {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </time>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-relay-muted">
+          {signal.rationale}
+        </p>
+      </div>
+      <div className="flex items-start justify-start sm:justify-end">
+        <span
+          className={`rounded border px-2 py-1 font-mono text-[9px] uppercase tracking-[0.07em] ${routedSignalBadgeClassName(
+            signal,
+          )}`}
+        >
+          {routedSignalBadge(signal)}
+        </span>
+      </div>
+    </article>
+  );
+}
+
+export function RoutedSignalsSection({
+  onEvaluate,
+  routedSignals,
+}: {
+  onEvaluate: () => Promise<void>;
+  routedSignals: BeliefRoutedSignal[];
+}) {
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [evaluationError, setEvaluationError] = useState<string | null>(
+    null,
+  );
+  const awaitingSignals = routedSignals.filter(
+    (signal) => signal.evaluationState === "awaiting-evaluation",
+  );
+  const evaluatedSignals = routedSignals.filter(
+    (signal) => signal.evaluationState === "evaluated",
+  );
+
+  const evaluate = async () => {
+    setIsEvaluating(true);
+    setEvaluationError(null);
+    try {
+      await onEvaluate();
+    } catch (caughtError) {
+      setEvaluationError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Relay could not evaluate theses.",
+      );
+    } finally {
+      setIsEvaluating(false);
+    }
+  };
+
+  return (
+    <section className="mt-10">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-relay-border pb-3">
+        <div>
+          <h2 className="text-sm font-semibold">Awaiting evaluation</h2>
+          <p className="mt-1 text-xs leading-5 text-relay-muted">
+            Routed signals are visible before they become thesis proposals.
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-[10px] text-relay-subtle">
+            {awaitingSignals.length}
+          </span>
+          <Button
+            className="min-h-8 px-2.5 text-xs"
+            disabled={isEvaluating || awaitingSignals.length === 0}
+            onClick={() => void evaluate()}
+            variant="secondary"
+          >
+            {isEvaluating ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-3.5 animate-spin"
+              />
+            ) : null}
+            {isEvaluating ? "Evaluating" : "Evaluate theses"}
+          </Button>
+        </div>
+      </div>
+      {evaluationError ? (
+        <p
+          className="mt-4 border-l border-relay-negative pl-3 text-xs leading-5 text-relay-negative"
+          role="alert"
+        >
+          {evaluationError}
+        </p>
+      ) : null}
+      {awaitingSignals.length ? (
+        <div className="divide-y divide-relay-border">
+          {awaitingSignals.map((signal) => (
+            <RoutedSignalRow key={signal.updateId} signal={signal} />
+          ))}
+        </div>
+      ) : (
+        <p className="py-6 text-sm leading-6 text-relay-subtle">
+          No routed signals are waiting for thesis evaluation.
+        </p>
+      )}
+      {evaluatedSignals.length ? (
+        <section className="mt-8">
+          <div className="flex items-end justify-between border-b border-relay-border pb-3">
+            <div>
+              <h3 className="text-sm font-semibold">Evaluated</h3>
+              <p className="mt-1 text-xs leading-5 text-relay-muted">
+                These routed signals already fed a thesis evaluation.
+              </p>
+            </div>
+            <span className="font-mono text-[10px] text-relay-subtle">
+              {evaluatedSignals.length}
+            </span>
+          </div>
+          <div className="divide-y divide-relay-border">
+            {evaluatedSignals.map((signal) => (
+              <RoutedSignalRow
+                key={signal.updateId}
+                signal={signal}
+                subdued
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
 export function BeliefDetailPage() {
   const { beliefId = "" } = useParams();
-  const { data, error, isLoading, reload } = useDashboard();
+  const {
+    data,
+    error,
+    evaluateAllBeliefs,
+    isLoading,
+    reload,
+  } = useDashboard();
   const [beliefRevision, setBeliefRevision] = useState(0);
   const { belief, isResolving } = useBeliefDetail(
     data,
@@ -103,6 +301,10 @@ export function BeliefDetailPage() {
     decision: ThesisEvaluationReviewInput["decision"],
   ) => {
     await reviewBeliefEvaluation(evaluationId, { decision });
+    setBeliefRevision((current) => current + 1);
+  };
+  const evaluateRoutedSignals = async () => {
+    await evaluateAllBeliefs();
     setBeliefRevision((current) => current + 1);
   };
 
@@ -204,6 +406,10 @@ export function BeliefDetailPage() {
             weakening={belief.weakeningConditions}
           />
           <VersionTimeline versions={belief.versions} />
+          <RoutedSignalsSection
+            onEvaluate={evaluateRoutedSignals}
+            routedSignals={belief.routedSignals}
+          />
           <PendingEvaluations
             evaluations={belief.pendingEvaluations}
             onReview={reviewEvaluation}
