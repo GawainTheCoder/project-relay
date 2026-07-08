@@ -332,7 +332,7 @@ export function BeliefsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
-  const [collapsedMacroIds, setCollapsedMacroIds] = useState<Set<string>>(
+  const [expandedMacroIds, setExpandedMacroIds] = useState<Set<string>>(
     () => new Set(),
   );
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -392,7 +392,7 @@ export function BeliefsPage() {
     setSearchParams(next);
   };
   const toggleMacroCompanies = (macroId: string) => {
-    setCollapsedMacroIds((current) => {
+    setExpandedMacroIds((current) => {
       const next = new Set(current);
       if (next.has(macroId)) {
         next.delete(macroId);
@@ -503,7 +503,7 @@ export function BeliefsPage() {
             {grouped.groups.map((group) => (
               <MacroThesisSection
                 group={group}
-                isExpanded={!collapsedMacroIds.has(group.macro.id)}
+                isExpanded={expandedMacroIds.has(group.macro.id)}
                 key={group.macro.id}
                 onToggle={() => toggleMacroCompanies(group.macro.id)}
                 sourceCoverage={coverageByThesisId.get(group.macro.id)}
