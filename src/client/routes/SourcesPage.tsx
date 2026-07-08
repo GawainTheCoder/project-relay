@@ -28,8 +28,14 @@ import {
   ImportSourceDialog,
   type ImportSourceFeedback,
 } from "../features/sources/ImportSourceDialog";
+import { FailedIngestionSection } from "../features/sources/FailedIngestionSection";
 import { SourceCoverageAudit } from "../features/sources/SourceCoverageAudit";
-import { refreshSource, removeResearchSource } from "../lib/api";
+import { useFailedSourceDocuments } from "../features/sources/useFailedSourceDocuments";
+import {
+  refreshSource,
+  removeResearchSource,
+  retryFailedSourceDocument,
+} from "../lib/api";
 import { formatRelativeTime, getLayerName } from "../lib/format";
 
 type Action = "refresh" | "evaluate" | "brief";
@@ -144,6 +150,7 @@ export function SourcesPage() {
     reload,
     refreshAllSources,
   } = useDashboard();
+  const failedSourceDocuments = useFailedSourceDocuments();
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [signalSourceProfileId, setSignalSourceProfileId] = useState<
     string | null
@@ -430,6 +437,14 @@ export function SourcesPage() {
         ) : null}
 
         <SourceCoverageAudit coverage={data.sourceCoverage} />
+
+        <FailedIngestionSection
+          documents={failedSourceDocuments.documents}
+          error={failedSourceDocuments.error}
+          isLoading={failedSourceDocuments.isLoading}
+          onReload={failedSourceDocuments.reload}
+          onRetry={retryFailedSourceDocument}
+        />
 
         {refreshItems.length ? (
           <section

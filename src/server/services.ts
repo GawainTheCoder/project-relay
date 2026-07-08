@@ -771,6 +771,8 @@ function toEvaluationSignal(
     publishedAt: update.publishedAt,
     sourceProvenance: {
       id: sourceId,
+      evidenceChainId:
+        repository.getEvidenceChainIdForUpdate(update.id) ?? sourceId,
       publisher:
         sourceProfile?.name ??
         repository.getSource(sourceId)?.name ??

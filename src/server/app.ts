@@ -14,6 +14,7 @@ import { jsonError, validationDetails } from "./api/errors.js";
 import {
   briefListQuerySchema,
   companyInputSchema,
+  failedSourceDocumentRecoveryInputSchema,
   impactReviewInputSchema,
   importSourceInputSchema,
   researchSourceInputSchema,
@@ -869,6 +870,206 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     return context.json(result.payload, result.status);
   });
 
+  application.get("/api/source-documents/failed", (context) =>
+    context.json({
+      documents: getRepository().listFailedSourceDocuments(),
+    }),
+  );
+
+  application.post("/api/source-documents/:id/retry", async (context) => {
+    const parsedId = resourceIdSchema.safeParse(context.req.param("id"));
+    if (!parsedId.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The source document ID is invalid.",
+        validationDetails(parsedId.error),
+      );
+    }
+    const parsedBody = failedSourceDocumentRecoveryInputSchema.safeParse(
+      (await requestJson(context)) ?? {},
+    );
+    if (!parsedBody.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The recovery input is invalid.",
+        validationDetails(parsedBody.error),
+      );
+    }
+
+    const repository = getRepository();
+    const document = repository.getSourceDocumentForRecovery(
+      parsedId.data,
+    );
+    if (!document) {
+      return jsonError(
+        context,
+        404,
+        "SOURCE_DOCUMENT_NOT_FOUND",
+        "The requested source document does not exist.",
+      );
+    }
+    if (document.status === "suppressed") {
+      return jsonError(
+        context,
+        409,
+        "SOURCE_DOCUMENT_SUPPRESSED",
+        "A deleted source document cannot be retried.",
+      );
+    }
+    if (document.status === "analyzed") {
+      return jsonError(
+        context,
+        409,
+        "SOURCE_DOCUMENT_ALREADY_ANALYZED",
+        "This source document has already been analyzed.",
+      );
+    }
+    if (document.status !== "error") {
+      return jsonError(
+        context,
+        409,
+        "SOURCE_DOCUMENT_NOT_FAILED",
+        "Only failed source documents can be retried.",
+      );
+    }
+    if (
+      !parsedBody.data.content &&
+      !document.sourceUrl &&
+      !parsedBody.data.sourceUrl
+    ) {
+      return jsonError(
+        context,
+        409,
+        "RECOVERY_CONTENT_REQUIRED",
+        "Paste an excerpt or provide the original article URL to retry this source.",
+      );
+    }
+    if (!options.services?.analyzeImportedSource) {
+      return jsonError(
+        context,
+        503,
+        "SERVICE_UNAVAILABLE",
+        "Source analysis is not configured.",
+      );
+    }
+
+    const operationId = `source-analysis:${document.id}`;
+    if (activeOperations.has(operationId)) {
+      return jsonError(
+        context,
+        409,
+        "OPERATION_IN_PROGRESS",
+        "This source is already being analyzed.",
+      );
+    }
+    activeOperations.add(operationId);
+    try {
+      let recoveredDocument;
+      try {
+        recoveredDocument = repository.updateSourceDocumentForRecovery(
+          document.id,
+          {
+            ...(parsedBody.data.title
+              ? { title: parsedBody.data.title }
+              : {}),
+            ...(parsedBody.data.publisher
+              ? { publisher: parsedBody.data.publisher }
+              : {}),
+            ...(parsedBody.data.publishedAt
+              ? { publishedAt: parsedBody.data.publishedAt }
+              : {}),
+            ...(parsedBody.data.sourceKind
+              ? { sourceKind: parsedBody.data.sourceKind }
+              : {}),
+            ...(parsedBody.data.content
+              ? { content: parsedBody.data.content }
+              : {}),
+            ...(parsedBody.data.sourceUrl
+              ? {
+                  sourceUrl: canonicalizeUrl(
+                    parsedBody.data.sourceUrl,
+                  ),
+                }
+              : {}),
+          },
+        );
+      } catch (error) {
+        if (error instanceof RangeError) {
+          return jsonError(
+            context,
+            409,
+            "DUPLICATE_SOURCE_DOCUMENT",
+            "This recovery content is already stored as another source document.",
+          );
+        }
+        if (error instanceof TypeError) {
+          return jsonError(
+            context,
+            409,
+            "SOURCE_URL_MISMATCH",
+            error.message,
+          );
+        }
+        throw error;
+      }
+
+      const recoverySourceProfile = recoveredDocument.researchSourceId
+        ? repository.getSource(recoveredDocument.researchSourceId)
+        : null;
+      const recoveryInput: ImportSourceInput = {
+        title: recoveredDocument.title,
+        publisher: recoveredDocument.publisher,
+        ...(recoveredDocument.sourceUrl
+          ? { sourceUrl: recoveredDocument.sourceUrl }
+          : {}),
+        ...(recoverySourceProfile?.type === "manual" &&
+        recoverySourceProfile.id !== "manual-imports"
+          ? { sourceProfileId: recoverySourceProfile.id }
+          : {}),
+        publishedAt: recoveredDocument.publishedAt,
+        sourceKind: recoveredDocument.sourceKind,
+        ...(parsedBody.data.content
+          ? { content: parsedBody.data.content }
+          : {}),
+      };
+      repository.recordSourceDocumentRetryAttempt(document.id);
+      try {
+        const analyzedUpdate =
+          await options.services.analyzeImportedSource(recoveryInput);
+        const update = repository.persistAnalyzedUpdate(analyzedUpdate);
+        repository.markSourceDocumentAnalyzed(document.id, update.id);
+        return context.json(
+          {
+            documentId: document.id,
+            duplicate: false,
+            status: "analyzed",
+            update,
+          },
+          201,
+        );
+      } catch (error) {
+        const failure = sourceAnalysisFailure(error);
+        repository.markSourceDocumentError(
+          document.id,
+          failure.internalMessage,
+          { recordAttempt: false },
+        );
+        return jsonError(
+          context,
+          502,
+          failure.code,
+          failure.publicMessage,
+        );
+      }
+    } finally {
+      activeOperations.delete(operationId);
+    }
+  });
+
   application.post("/api/sources/refresh", async (context) => {
     if (!options.services?.refreshSources) {
       return jsonError(
@@ -1083,29 +1284,42 @@ async function processImportedSource(input: {
       status: 201,
     };
   } catch (error) {
-    const errorMessage =
-      error instanceof Error ? error.message : "Unknown analysis error";
-    const sourceRetrievalBlocked =
-      BLOCKED_SOURCE_RESPONSE_PATTERN.test(errorMessage);
+    const failure = sourceAnalysisFailure(error);
     input.repository.markSourceDocumentError(
       document.id,
-      errorMessage,
+      failure.internalMessage,
     );
     return {
       ok: false,
       error: {
-        code: sourceRetrievalBlocked
-          ? "SOURCE_RETRIEVAL_BLOCKED"
-          : "ANALYSIS_FAILED",
-        message: sourceRetrievalBlocked
-          ? BLOCKED_SOURCE_MESSAGE
-          : "The source was saved, but analysis failed.",
+        code: failure.code,
+        message: failure.publicMessage,
       },
       status: 502,
     };
   } finally {
     input.activeOperations.delete(operationId);
   }
+}
+
+function sourceAnalysisFailure(error: unknown): {
+  code: "ANALYSIS_FAILED" | "SOURCE_RETRIEVAL_BLOCKED";
+  internalMessage: string;
+  publicMessage: string;
+} {
+  const internalMessage =
+    error instanceof Error ? error.message : "Unknown analysis error";
+  const sourceRetrievalBlocked =
+    BLOCKED_SOURCE_RESPONSE_PATTERN.test(internalMessage);
+  return {
+    code: sourceRetrievalBlocked
+      ? "SOURCE_RETRIEVAL_BLOCKED"
+      : "ANALYSIS_FAILED",
+    internalMessage,
+    publicMessage: sourceRetrievalBlocked
+      ? BLOCKED_SOURCE_MESSAGE
+      : "The source was saved, but analysis failed.",
+  };
 }
 
 function normalizeHostname(value: string): string {

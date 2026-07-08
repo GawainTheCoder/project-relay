@@ -3,6 +3,8 @@ import type {
   CompanyInput,
   DashboardPayload,
   DailyBrief,
+  FailedSourceDocument as SharedFailedSourceDocument,
+  FailedSourceDocumentRecoveryInput,
   ImpactReview,
   ImpactReviewInput,
   ImportSourceInput,
@@ -160,6 +162,15 @@ export interface ImportSourceResult {
   update?: IntelligenceUpdate;
 }
 
+export type FailedSourceDocument = SharedFailedSourceDocument;
+
+export interface FailedSourceDocumentsResult {
+  documents: FailedSourceDocument[];
+}
+
+export type RetryFailedSourceDocumentInput =
+  FailedSourceDocumentRecoveryInput;
+
 export function importSource(
   input: ImportSourceInput,
 ): Promise<ImportSourceResult> {
@@ -167,6 +178,30 @@ export function importSource(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function getFailedSourceDocuments(
+  signal?: AbortSignal,
+): Promise<FailedSourceDocumentsResult> {
+  return requestJson<FailedSourceDocumentsResult>(
+    "/api/source-documents/failed",
+    {
+      ...(signal ? { signal } : {}),
+    },
+  );
+}
+
+export function retryFailedSourceDocument(
+  documentId: string,
+  input: RetryFailedSourceDocumentInput = {},
+): Promise<ImportSourceResult> {
+  return requestJson<ImportSourceResult>(
+    `/api/source-documents/${encodeURIComponent(documentId)}/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export interface SearchResponse {

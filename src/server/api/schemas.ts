@@ -123,6 +123,30 @@ export const importSourceInputSchema = z
     path: ["content"],
   });
 
+export const failedSourceDocumentRecoveryInputSchema = z
+  .object({
+    title: z.string().trim().min(1).max(500).optional(),
+    publisher: z.string().trim().min(1).max(200).optional(),
+    sourceUrl: webUrlSchema.optional(),
+    publishedAt: z.iso.datetime({ offset: true }).optional(),
+    sourceKind: z
+      .enum([
+        "earnings-release",
+        "transcript",
+        "paper",
+        "technical",
+        "other",
+      ])
+      .optional(),
+    content: z
+      .string()
+      .trim()
+      .min(20)
+      .max(MAX_MANUAL_DOCUMENT_CHARS)
+      .optional(),
+  })
+  .strict();
+
 export const impactReviewInputSchema = z
   .object({
     decision: z.enum(impactReviewDecisions),

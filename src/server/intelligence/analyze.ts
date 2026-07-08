@@ -30,6 +30,7 @@ import {
   MIN_EVIDENCE_QUOTE_CHARS,
   type AnalysisOutput,
 } from "./schemas.js";
+import { routeSignalToMacroTheses } from "./route-macro-theses.js";
 
 export interface AnalyzeDocumentOptions extends OpenAIRequestOptions {
   model?: string;
@@ -120,8 +121,9 @@ Rules:
 - A route's stance describes the evidence relationship: supports, opposes, or
   context. Relevance never implies a confidence change.
 - Each primary, secondary, or context disposition must cite one or more
-  claimLocators from the exact claims you extracted. A not-relevant disposition
-  must use context stance and an empty claimLocators array.
+  zero-based claimIndexes from the exact claims array you extracted in this
+  response. Do not put paragraph locators in claimIndexes. A not-relevant
+  disposition must use context stance and an empty claimIndexes array.
 - Source-profile thesis IDs are routing hints only. Validate them against the
   document evidence and the full supplied thesis before creating a route.
 - novelty is "new" for genuinely new evidence, "confirmation" for evidence that
@@ -151,6 +153,8 @@ const MAX_CONTEXT_MACRO_THESES = 50;
 const MAX_RECENT_SIGNALS = 20;
 const MAX_CONTEXT_LIST_ITEMS = 8;
 
+class MacroThesisDispositionValidationError extends EvidenceValidationError {}
+
 export async function analyzeDocument(
   document: NormalizedDocument,
   options: AnalyzeDocumentOptions = {},
@@ -169,39 +173,101 @@ export async function analyzeDocument(
   const client = resolveOpenAIClient(options.client);
   const updateId =
     options.idFactory?.() ?? stableId("update", document.id);
+  const input = buildAnalysisInput(document, options.context);
 
   try {
-    const response = await client.responses.parse({
-      model,
-      store: shouldStoreOpenAIResponses(),
-      metadata: buildOpenAIResponseMetadata("signal_analysis", {
-        relay_update_id: updateId,
-        relay_source_id: document.id,
-        relay_source_title: document.title,
-        relay_source_publisher: document.publisher,
-        relay_source_published_at: document.publishedAt,
-        relay_source_type: document.sourceType,
-        relay_source_profile_id: options.context?.sourceProfile?.id,
-        relay_watchlist_count: options.context?.watchlistCompanies.length ?? 0,
-        relay_recent_signal_count: options.context?.recentSignals?.length ?? 0,
-      }),
-      instructions: ANALYSIS_INSTRUCTIONS,
-      input: buildAnalysisInput(document, options.context),
-      text: {
-        format: zodTextFormat(analysisOutputSchema, "relay_intelligence_update"),
-      },
-      max_output_tokens: 8_000,
-    });
-    const output = requireParsedOutput(response, response.output_parsed);
-    const now = (options.now ?? (() => new Date()))().toISOString();
+    let validationFeedback: string | null = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const response = await client.responses.parse({
+        model,
+        store: shouldStoreOpenAIResponses(),
+        metadata: buildOpenAIResponseMetadata("signal_analysis", {
+          relay_update_id: updateId,
+          relay_source_id: document.id,
+          relay_source_title: document.title,
+          relay_source_publisher: document.publisher,
+          relay_source_published_at: document.publishedAt,
+          relay_source_type: document.sourceType,
+          relay_source_profile_id: options.context?.sourceProfile?.id,
+          relay_watchlist_count:
+            options.context?.watchlistCompanies.length ?? 0,
+          relay_recent_signal_count:
+            options.context?.recentSignals?.length ?? 0,
+          relay_analysis_attempt: attempt,
+          relay_validation_retry: attempt === 2 ? 1 : 0,
+        }),
+        instructions: ANALYSIS_INSTRUCTIONS,
+        input: validationFeedback
+          ? buildValidationRetryInput(input, validationFeedback)
+          : input,
+        text: {
+          format: zodTextFormat(
+            analysisOutputSchema,
+            "relay_intelligence_update",
+          ),
+        },
+        max_output_tokens: 8_000,
+      });
+      const output = requireParsedOutput(
+        response,
+        response.output_parsed,
+      );
+      const now = (options.now ?? (() => new Date()))().toISOString();
 
-    return buildIntelligenceUpdate(
-      document,
-      output,
-      updateId,
-      now,
-      model,
-      options.context,
+      try {
+        return buildIntelligenceUpdate(
+          document,
+          output,
+          updateId,
+          now,
+          model,
+          options.context,
+        );
+      } catch (error) {
+        if (
+          error instanceof EvidenceValidationError &&
+          attempt === 1
+        ) {
+          validationFeedback = error.message;
+          continue;
+        }
+        if (
+          error instanceof MacroThesisDispositionValidationError &&
+          (options.context?.macroTheses?.length ?? 0) > 0
+        ) {
+          const provisionalUpdate = buildIntelligenceUpdate(
+            document,
+            output,
+            updateId,
+            now,
+            model,
+            options.context,
+            {
+              allowUnroutedMaterial: true,
+              macroThesisImpacts: [],
+            },
+          );
+          const macroThesisImpacts =
+            await routeSignalToMacroTheses(
+              provisionalUpdate,
+              options.context?.macroTheses ?? [],
+              { client, model },
+            );
+          return buildIntelligenceUpdate(
+            document,
+            output,
+            updateId,
+            now,
+            model,
+            options.context,
+            { macroThesisImpacts },
+          );
+        }
+        throw error;
+      }
+    }
+    throw new EvidenceValidationError(
+      "The model did not return provenance-valid analysis.",
     );
   } catch (error) {
     if (error instanceof EvidenceValidationError) {
@@ -218,9 +284,17 @@ export function buildIntelligenceUpdate(
   analyzedAt: string,
   model: string,
   context?: AnalysisContext,
+  buildOptions: {
+    allowUnroutedMaterial?: boolean;
+    macroThesisImpacts?: MacroThesisImpact[];
+  } = {},
 ): IntelligenceUpdate {
-  const claims = buildEvidenceClaims(document, output.claims, updateId);
-  validateAnalysisSemantics(output, claims, context);
+  const builtClaims = buildEvidenceClaims(
+    document,
+    output.claims,
+    updateId,
+  );
+  const { claims } = builtClaims;
 
   const companyTickers = unique(
     output.companyTickers.map(normalizeTicker).filter(Boolean),
@@ -228,10 +302,25 @@ export function buildIntelligenceUpdate(
   const thesisImpacts = output.thesisImpacts.map((impact) =>
     buildThesisImpact(impact, updateId),
   );
-  const macroThesisImpacts = buildMacroThesisImpacts(
+  if (buildOptions.macroThesisImpacts === undefined) {
+    validateMacroThesisDispositions(output, context);
+  }
+  const macroThesisImpacts =
+    buildOptions.macroThesisImpacts ??
+    buildMacroThesisImpacts(
+      output,
+      builtClaims.claimIdsByOutputIndex,
+      updateId,
+    );
+  validateAnalysisSemantics(
     output,
     claims,
-    updateId,
+    macroThesisImpacts,
+    context,
+    {
+      allowUnroutedMaterial:
+        buildOptions.allowUnroutedMaterial ?? false,
+    },
   );
 
   return {
@@ -342,13 +431,38 @@ function buildAnalysisInput(
   )}\n\nSOURCE PARAGRAPHS\n${paragraphs}`;
 }
 
+function buildValidationRetryInput(
+  originalInput: string,
+  validationFeedback: string,
+): string {
+  return `${originalInput}
+
+VALIDATION RETRY
+The previous structured result failed Relay's strict evidence validation:
+${validationFeedback}
+
+Return a complete corrected analysis. Copy every claim quote verbatim from one
+source paragraph, keep its exact paragraph locator, and make every relevant
+macro-thesis disposition cite only zero-based indexes into the claims array in
+this response. Index 0 means the first claim, index 1 means the second claim,
+and so on. Every primary, secondary, or context route needs at least one valid
+index; only not-relevant routes use an empty array. Do not weaken, omit,
+paraphrase, or fabricate evidence to satisfy validation.`;
+}
+
+interface BuiltEvidenceClaims {
+  claims: EvidenceClaim[];
+  claimIdsByOutputIndex: string[];
+}
+
 function buildEvidenceClaims(
   document: NormalizedDocument,
   claims: AnalysisOutput["claims"],
   updateId: string,
-): EvidenceClaim[] {
-  const seen = new Set<string>();
+): BuiltEvidenceClaims {
+  const seen = new Map<string, string>();
   const result: EvidenceClaim[] = [];
+  const claimIdsByOutputIndex: string[] = [];
 
   for (const claim of claims) {
     const quote = claim.quote.trim();
@@ -378,19 +492,26 @@ function buildEvidenceClaims(
     }
 
     const dedupeKey = `${paragraph.locator}\u0000${quote}`;
-    if (seen.has(dedupeKey)) {
+    const existingClaimId = seen.get(dedupeKey);
+    if (existingClaimId) {
+      claimIdsByOutputIndex.push(existingClaimId);
       continue;
     }
-    seen.add(dedupeKey);
+    const id = stableId("claim", updateId, paragraph.locator, quote);
+    seen.set(dedupeKey, id);
+    claimIdsByOutputIndex.push(id);
     result.push({
-      id: stableId("claim", updateId, paragraph.locator, quote),
+      id,
       quote,
       sourceId: document.id,
       locator: paragraph.locator,
     });
   }
 
-  return result;
+  return {
+    claims: result,
+    claimIdsByOutputIndex,
+  };
 }
 
 function buildThesisImpact(
@@ -418,52 +539,50 @@ function buildThesisImpact(
 
 function buildMacroThesisImpacts(
   output: AnalysisOutput,
-  claims: EvidenceClaim[],
+  claimIdsByOutputIndex: string[],
   updateId: string,
 ): MacroThesisImpact[] {
-  const claimsByLocator = new Map<string, string[]>();
-  for (const claim of claims) {
-    const locatorClaims = claimsByLocator.get(claim.locator) ?? [];
-    locatorClaims.push(claim.id);
-    claimsByLocator.set(claim.locator, locatorClaims);
-  }
-
   return output.macroThesisDispositions.flatMap((impact) => {
-      if (impact.relevance === "not-relevant") {
-        return [];
-      }
-      const claimIds = unique(
-        impact.claimLocators.flatMap(
-          (locator) => claimsByLocator.get(locator) ?? [],
-        ),
+    if (impact.relevance === "not-relevant") {
+      return [];
+    }
+    const claimIds = unique(
+      impact.claimIndexes.flatMap((index) => {
+        const claimId = claimIdsByOutputIndex[index];
+        return claimId ? [claimId] : [];
+      }),
+    );
+    if (claimIds.length === 0) {
+      throw new MacroThesisDispositionValidationError(
+        "A macro-thesis route must cite an extracted claim index.",
       );
-      if (claimIds.length === 0) {
-        throw new EvidenceValidationError(
-          "A macro-thesis route must cite an extracted claim locator.",
-        );
-      }
-      return {
-        id: stableId(
-          "macro-impact",
-          updateId,
-          impact.thesisId,
-        ),
-        thesisId: impact.thesisId,
-        relevance: impact.relevance,
-        stance: impact.stance,
-        rationale: impact.rationale.trim(),
-        claimIds,
-      };
-    });
+    }
+    return {
+      id: stableId(
+        "macro-impact",
+        updateId,
+        impact.thesisId,
+      ),
+      thesisId: impact.thesisId,
+      relevance: impact.relevance,
+      stance: impact.stance,
+      rationale: impact.rationale.trim(),
+      claimIds,
+    };
+  });
 }
 
 function validateAnalysisSemantics(
   output: AnalysisOutput,
   claims: EvidenceClaim[],
+  macroThesisImpacts: MacroThesisImpact[],
   context?: AnalysisContext,
+  options: {
+    allowUnroutedMaterial: boolean;
+  } = {
+    allowUnroutedMaterial: false,
+  },
 ): void {
-  validateMacroThesisDispositions(output, claims, context);
-
   if (output.materiality === "not-material") {
     if (output.sentiment !== "not-material") {
       throw new EvidenceValidationError(
@@ -475,11 +594,7 @@ function validateAnalysisSemantics(
         "A not-material update cannot contain actionable thesis impacts.",
       );
     }
-    if (
-      output.macroThesisDispositions.some(
-        (impact) => impact.relevance !== "not-relevant",
-      )
-    ) {
+    if (macroThesisImpacts.length > 0) {
       throw new EvidenceValidationError(
         "A not-material update cannot contain macro-thesis routes.",
       );
@@ -517,8 +632,9 @@ function validateAnalysisSemantics(
     );
   }
   if (
+    !options.allowUnroutedMaterial &&
     output.thesisImpacts.length === 0 &&
-    !output.macroThesisDispositions.some(
+    !macroThesisImpacts.some(
       (impact) =>
         impact.relevance === "primary" ||
         impact.relevance === "secondary",
@@ -555,12 +671,10 @@ function validateAnalysisSemantics(
       );
     }
   }
-
 }
 
 function validateMacroThesisDispositions(
   output: AnalysisOutput,
-  claims: EvidenceClaim[],
   context?: AnalysisContext,
 ): void {
   const knownMacroTheses = new Set(
@@ -574,24 +688,24 @@ function validateMacroThesisDispositions(
     new Set(dispositionIds).size !== dispositionIds.length ||
     dispositionIds.some((thesisId) => !knownMacroTheses.has(thesisId))
   ) {
-    throw new EvidenceValidationError(
+    throw new MacroThesisDispositionValidationError(
       "Macro-thesis dispositions must cover every active macro thesis exactly once.",
     );
   }
 
   for (const impact of output.macroThesisDispositions) {
     if (!knownMacroTheses.has(impact.thesisId)) {
-      throw new EvidenceValidationError(
+      throw new MacroThesisDispositionValidationError(
         "A macro-thesis route referenced a thesis outside the active macro context.",
       );
     }
     if (impact.relevance === "not-relevant") {
       if (
         impact.stance !== "context" ||
-        impact.claimLocators.length !== 0
+        impact.claimIndexes.length !== 0
       ) {
-        throw new EvidenceValidationError(
-          "A not-relevant macro disposition must use context stance without claim locators.",
+        throw new MacroThesisDispositionValidationError(
+          "A not-relevant macro disposition must use context stance without claim indexes.",
         );
       }
       continue;
@@ -600,7 +714,7 @@ function validateMacroThesisDispositions(
       impact.relevance === "context" &&
       impact.stance !== "context"
     ) {
-      throw new EvidenceValidationError(
+      throw new MacroThesisDispositionValidationError(
         "A context-only macro route must use context stance.",
       );
     }
@@ -608,23 +722,33 @@ function validateMacroThesisDispositions(
       impact.relevance !== "context" &&
       impact.stance === "context"
     ) {
-      throw new EvidenceValidationError(
+      throw new MacroThesisDispositionValidationError(
         "A primary or secondary macro route must use directional evidence.",
       );
     }
-    const citedLocators = new Set(impact.claimLocators);
-    if (citedLocators.size !== impact.claimLocators.length) {
-      throw new EvidenceValidationError(
-        "A macro-thesis route cannot repeat claim locators.",
+    const citedIndexes = new Set(impact.claimIndexes);
+    if (citedIndexes.size !== impact.claimIndexes.length) {
+      throw new MacroThesisDispositionValidationError(
+        "A macro-thesis route cannot repeat claim indexes.",
       );
     }
-    if (
-      impact.claimLocators.some(
-        (locator) => !claims.some((claim) => claim.locator === locator),
-      )
-    ) {
-      throw new EvidenceValidationError(
-        "A macro-thesis route must cite an extracted claim locator.",
+    if (impact.claimIndexes.length === 0) {
+      throw new MacroThesisDispositionValidationError(
+        `Macro-thesis route "${impact.thesisId}" is ${impact.relevance} and must cite at least one extracted claim index. The claims array contains ${output.claims.length} ${output.claims.length === 1 ? "entry" : "entries"}; only not-relevant routes may use an empty claimIndexes array.`,
+      );
+    }
+    const invalidIndexes = impact.claimIndexes.filter(
+      (index) => index >= output.claims.length,
+    );
+    if (invalidIndexes.length > 0) {
+      const validRange =
+        output.claims.length === 0
+          ? "no valid indexes"
+          : output.claims.length === 1
+            ? "only index 0"
+            : `valid indexes 0 through ${output.claims.length - 1}`;
+      throw new MacroThesisDispositionValidationError(
+        `Macro-thesis route "${impact.thesisId}" cited out-of-range claim ${invalidIndexes.length === 1 ? "index" : "indexes"} ${invalidIndexes.join(", ")}. The claims array contains ${output.claims.length} ${output.claims.length === 1 ? "entry" : "entries"} (${validRange}).`,
       );
     }
   }

@@ -22,7 +22,7 @@ of the stack.
 
 ```mermaid
 flowchart LR
-    SOURCES["Trusted feeds, public URLs, excerpts"] --> FILTER["Topic, recency, and duplicate filters"]
+    SOURCES["Trusted feeds, public URLs, excerpts"] --> FILTER["Topic, recency, duplicate, and story-lineage filters"]
     FILTER --> SIGNAL["Immutable signal and exact claims"]
     SIGNAL --> EVALUATE["Evaluate company and macro theses"]
     EVALUATE --> PROPOSAL{"Thesis outcome"}
@@ -50,9 +50,10 @@ Relay deliberately separates source analysis from thesis evaluation:
 Valid evaluation outcomes are `unchanged`, `reinforced`, `weakened`,
 `contradicted`, and `revised`. Relay does not force every signal to update a
 thesis. Confidence can move by at most 10 points per evaluation, and a revision
-to thesis text requires evidence from at least two independent source
-provenances. The model proposes changes; it never silently rewrites the current
-thesis.
+to thesis text requires evidence from at least two independent evidence chains.
+Reports conservatively identified as coverage of the same underlying story stay
+individually inspectable but count as one chain. The model proposes changes; it
+never silently rewrites the current thesis.
 
 ## Product surfaces
 
@@ -103,6 +104,10 @@ a trusted-source catalog:
 - Use **Add signal** for a public article URL or a permitted pasted excerpt.
   Relay leaves a persistent success or error result after the dialog closes;
   successful analysis includes a direct **View signal** link.
+- Failed analysis remains in **Failed ingestion** with its original URL,
+  publisher, publication date, attempt history, and error. Retry the stored URL
+  or paste a permitted excerpt; recovery updates the same source document
+  rather than creating a provenance-breaking replacement.
 
 Use a source row's **Refresh** control to check one automated feed, or
 **Refresh all** to check every enabled feed. The result ledger names every feed item Relay handled and
@@ -299,6 +304,8 @@ Owner-management and history APIs include:
 | `DELETE` | `/api/sources/:id` | Archive a source. |
 | `POST` | `/api/sources/refresh` | Refresh feeds and return per-item outcomes. |
 | `POST` | `/api/sources/:id/refresh` | Refresh one automated feed. |
+| `GET` | `/api/source-documents/failed` | List durable failed-ingestion records. |
+| `POST` | `/api/source-documents/:id/retry` | Retry a failed URL or recover it with a permitted excerpt. |
 | `DELETE` | `/api/updates/:id` | Delete a signal unless an accepted thesis change depends on it. |
 | `GET` | `/api/briefs` | List prior daily briefs. |
 | `GET` | `/api/briefs/:id` | Read one persisted brief. |
@@ -431,16 +438,20 @@ analysis.
 - Public pages without reliable feeds remain manual URL sources.
 - Built-in macro coverage mappings remain maintained in code. Trusted website
   profiles can extend manual macro coverage from the UI.
-- Topic filtering and exact URL/content deduplication do not detect every
-  semantically duplicated story.
+- Story clustering is intentionally conservative: it requires overlapping
+  company context, a bounded publication window, and strong normalized-title
+  overlap. It prevents clear syndicated duplicates from inflating
+  corroboration, but may leave materially rewritten headlines as separate
+  evidence chains for owner review.
 - Company theses can be added and archived in the UI, but macro theses are
   currently seeded in code and cannot yet be created or edited in the UI.
 - Pending thesis evaluations are visible in thesis detail and can be accepted,
   rejected, or deferred. Deferred proposals remain in a separate later-review
   section.
 - Confidence is a reviewable heuristic score, not a calibrated probability.
-- Source independence is approximated from Relay's source provenance IDs; it
-  cannot prove that two publishers did not rely on the same upstream report.
+- Evidence-chain independence is inferred from deterministic story lineage; it
+  cannot prove that two materially different reports did not rely on an
+  undisclosed common upstream source.
 - Model availability, cost, latency, and output quality depend on the configured
   OpenAI account and models.
 

@@ -124,6 +124,25 @@ function mockClient(output: AnalysisOutput | null, refusal?: string): OpenAI {
   } as unknown as OpenAI;
 }
 
+function mockClientSequence(outputs: unknown[]): {
+  client: OpenAI;
+  parse: ReturnType<typeof vi.fn>;
+} {
+  const parse = vi.fn();
+  outputs.forEach((output) => {
+    parse.mockResolvedValueOnce({
+      output_parsed: output,
+      output: [],
+    });
+  });
+  return {
+    client: {
+      responses: { parse },
+    } as unknown as OpenAI,
+    parse,
+  };
+}
+
 afterEach(() => {
   vi.unstubAllEnvs();
 });
@@ -205,14 +224,212 @@ describe("analyzeDocument", () => {
       quote: "Optics revenue tripled.",
       locator: "P1",
     };
+    const client = mockClient(output);
 
     await expect(
       analyzeDocument(makeDocument(), {
-        client: mockClient(output),
+        client,
         now: () => NOW,
         context: makeContext(),
       }),
     ).rejects.toBeInstanceOf(EvidenceValidationError);
+    expect(client.responses.parse).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries once with provenance feedback and accepts corrected exact evidence", async () => {
+    const invalidOutput = makeOutput();
+    invalidOutput.claims[0] = {
+      quote: "Orders for optical components increased sharply.",
+      locator: "P1",
+    };
+    const { client, parse } = mockClientSequence([
+      invalidOutput,
+      makeOutput(),
+    ]);
+
+    const result = await analyzeDocument(makeDocument(), {
+      client,
+      now: () => NOW,
+      idFactory: () => "update_retry",
+      context: makeContext(),
+    });
+
+    expect(result.claims[0]).toMatchObject({
+      quote: "Orders for 1.6T optical components doubled year over year.",
+      locator: "P1",
+    });
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(parse).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        input: expect.stringContaining("VALIDATION RETRY"),
+        metadata: expect.objectContaining({
+          relay_analysis_attempt: "2",
+          relay_validation_retry: "1",
+        }),
+      }),
+    );
+    expect(parse).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        input: expect.stringContaining(
+          "The model returned a quote that is not present verbatim in the source.",
+        ),
+      }),
+    );
+  });
+
+  it("retries an invalid macro claim index without relaxing provenance", async () => {
+    const context: AnalysisContext = {
+      ...makeContext(),
+      macroTheses: [
+        {
+          id: "macro-optics-supply",
+          title: "Advanced optics supply remains constrained",
+          belief:
+            "Qualified advanced-optics supply remains tighter than AI-link demand.",
+          confidenceScore: 65,
+          unknowns: ["How quickly qualified supply can expand"],
+          strengtheningConditions: ["Lead times remain elevated"],
+          weakeningConditions: ["Qualified supply exceeds demand"],
+          layerIds: ["optics"],
+        },
+      ],
+    };
+    const invalidOutput = makeOutput();
+    invalidOutput.macroThesisDispositions = [
+      {
+        thesisId: "macro-optics-supply",
+        relevance: "primary",
+        stance: "supports",
+        rationale:
+          "Order growth and constrained supply directly support the thesis.",
+        claimIndexes: [1],
+      },
+    ];
+    const correctedOutput: AnalysisOutput = {
+      ...invalidOutput,
+      macroThesisDispositions: [
+        {
+          ...invalidOutput.macroThesisDispositions[0]!,
+          claimIndexes: [0],
+        },
+      ],
+    };
+    const { client, parse } = mockClientSequence([
+      invalidOutput,
+      correctedOutput,
+    ]);
+
+    const result = await analyzeDocument(makeDocument(), {
+      client,
+      now: () => NOW,
+      idFactory: () => "update_macro_retry",
+      context,
+    });
+
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(parse).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        input: expect.stringContaining(
+          'Macro-thesis route "macro-optics-supply" cited out-of-range claim index 1.',
+        ),
+      }),
+    );
+    expect(result.macroThesisImpacts).toEqual([
+      expect.objectContaining({
+        thesisId: "macro-optics-supply",
+        claimIds: [result.claims[0]!.id],
+      }),
+    ]);
+  });
+
+  it("falls back to exact generated claim IDs when claim indexes remain invalid", async () => {
+    const context: AnalysisContext = {
+      ...makeContext(),
+      macroTheses: [
+        {
+          id: "macro-optics-supply",
+          title: "Advanced optics supply remains constrained",
+          belief:
+            "Qualified advanced-optics supply remains tighter than AI-link demand.",
+          confidenceScore: 65,
+          unknowns: ["How quickly qualified supply can expand"],
+          strengtheningConditions: ["Lead times remain elevated"],
+          weakeningConditions: ["Qualified supply exceeds demand"],
+          layerIds: ["optics"],
+        },
+      ],
+    };
+    const invalidOutput = makeOutput();
+    invalidOutput.macroThesisDispositions = [
+      {
+        thesisId: "macro-optics-supply",
+        relevance: "primary",
+        stance: "supports",
+        rationale:
+          "Order growth and constrained supply directly support the thesis.",
+        claimIndexes: [1],
+      },
+    ];
+    const correctedOutput: AnalysisOutput = {
+      ...invalidOutput,
+      macroThesisDispositions: [
+        {
+          ...invalidOutput.macroThesisDispositions[0]!,
+          claimIndexes: [0],
+        },
+      ],
+    };
+    const expectedClaimId = buildIntelligenceUpdate(
+      makeDocument(),
+      correctedOutput,
+      "update_macro_id_fallback",
+      NOW.toISOString(),
+      "gpt-5.4-mini",
+      context,
+    ).claims[0]!.id;
+    const { client, parse } = mockClientSequence([
+      invalidOutput,
+      invalidOutput,
+      {
+        dispositions: [
+          {
+            thesisId: "macro-optics-supply",
+            relevance: "primary",
+            stance: "supports",
+            rationale:
+              "The exact order-growth claim supports constrained optics supply.",
+            claimIds: [expectedClaimId],
+          },
+        ],
+      },
+    ]);
+
+    const result = await analyzeDocument(makeDocument(), {
+      client,
+      now: () => NOW,
+      idFactory: () => "update_macro_id_fallback",
+      context,
+    });
+
+    expect(parse).toHaveBeenCalledTimes(3);
+    expect(parse).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        input: expect.stringContaining(expectedClaimId),
+        metadata: expect.objectContaining({
+          relay_operation: "macro_thesis_routing",
+        }),
+      }),
+    );
+    expect(result.macroThesisImpacts).toEqual([
+      expect.objectContaining({
+        thesisId: "macro-optics-supply",
+        claimIds: [expectedClaimId],
+      }),
+    ]);
   });
 
   it("rejects trivial evidence quotes in structured output", () => {

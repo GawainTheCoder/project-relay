@@ -117,6 +117,23 @@ export function UpdateAnalysis({
             </span>
           ))}
         </div>
+        {update.sourceLineage ? (
+          <div
+            aria-label="Source lineage"
+            className="mt-4 max-w-3xl rounded-md border border-relay-accent/25 bg-relay-accent/5 px-3 py-2"
+          >
+            <p className="text-xs font-medium text-relay-text">
+              Shared story · {update.sourceLineage.reportCount} publisher{" "}
+              {update.sourceLineage.reportCount === 1 ? "report" : "reports"} ·
+              1 evidence chain
+            </p>
+            <p className="mt-1 text-[10px] leading-4 text-relay-muted">
+              {update.sourceLineage.publishers.join(", ")} cover the same
+              underlying event. Relay keeps each report inspectable but counts
+              them once when evaluating thesis corroboration.
+            </p>
+          </div>
+        ) : null}
         {update.companyTickers.length ? (
           <p className="mt-4 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
             Affected: {update.companyTickers.join(", ")}

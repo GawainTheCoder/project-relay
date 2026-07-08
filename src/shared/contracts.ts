@@ -289,6 +289,14 @@ export interface IntelligenceUpdate {
   thesisImpacts: ThesisImpact[];
   macroThesisImpacts: MacroThesisImpact[];
   model: string | null;
+  sourceLineage?: {
+    evidenceChainId: string;
+    reportCount: number;
+    publishers: string[];
+    updateIds: string[];
+    matchScore: number | null;
+    matchReason: string | null;
+  };
 }
 
 export interface Company {
@@ -397,6 +405,28 @@ export interface ImportSourceInput {
   publisher: string;
   sourceUrl?: string;
   sourceProfileId?: string;
+  publishedAt?: string;
+  content?: string;
+  sourceKind?: SourceKind;
+}
+
+export interface FailedSourceDocument {
+  id: string;
+  title: string;
+  publisher: string;
+  sourceUrl: string | null;
+  publishedAt: string;
+  sourceKind: SourceKind;
+  errorMessage: string;
+  attemptCount: number;
+  lastAttemptedAt: string | null;
+  ingestedAt: string;
+}
+
+export interface FailedSourceDocumentRecoveryInput {
+  title?: string;
+  publisher?: string;
+  sourceUrl?: string;
   publishedAt?: string;
   content?: string;
   sourceKind?: SourceKind;

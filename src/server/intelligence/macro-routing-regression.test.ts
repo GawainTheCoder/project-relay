@@ -11,9 +11,10 @@ import {
   type ThesisEvaluationInput,
   type VersionedThesisInput,
 } from "./evaluate-theses.js";
-import type {
-  AnalysisOutput,
-  ThesisEvaluationOutput,
+import {
+  analysisOutputSchema,
+  type AnalysisOutput,
+  type ThesisEvaluationOutput,
 } from "./schemas.js";
 
 const ANALYZED_AT = "2026-07-01T08:00:00.000Z";
@@ -152,7 +153,7 @@ function makeAnalysisOutput(): AnalysisOutput {
         stance: "supports",
         rationale:
           "The source explicitly identifies memory bandwidth as a throughput limit.",
-        claimLocators: ["P2"],
+        claimIndexes: [1],
       },
       {
         thesisId: "macro-networking",
@@ -160,7 +161,7 @@ function makeAnalysisOutput(): AnalysisOutput {
         stance: "supports",
         rationale:
           "The source reports rising fabric utilization as clusters scale.",
-        claimLocators: ["P3"],
+        claimIndexes: [2],
       },
       {
         thesisId: "macro-optics",
@@ -168,7 +169,7 @@ function makeAnalysisOutput(): AnalysisOutput {
         stance: "context",
         rationale:
           "A proprietary fabric does not establish optical component demand or supply.",
-        claimLocators: [],
+        claimIndexes: [],
       },
       {
         thesisId: "macro-power",
@@ -176,7 +177,7 @@ function makeAnalysisOutput(): AnalysisOutput {
         stance: "context",
         rationale:
           "Internal voltage results are weak context without deployment-level power evidence.",
-        claimLocators: ["P4"],
+        claimIndexes: [3],
       },
       {
         thesisId: "macro-custom",
@@ -184,7 +185,7 @@ function makeAnalysisOutput(): AnalysisOutput {
         stance: "supports",
         rationale:
           "Customer validation and contracted production directly address adoption of workload-specific accelerators.",
-        claimLocators: ["P1"],
+        claimIndexes: [0],
       },
       {
         thesisId: "macro-portability",
@@ -192,7 +193,7 @@ function makeAnalysisOutput(): AnalysisOutput {
         stance: "context",
         rationale:
           "The source provides no compiler, runtime, or workload-migration evidence.",
-        claimLocators: [],
+        claimIndexes: [],
       },
     ],
   };
@@ -224,6 +225,14 @@ describe("generalized macro-thesis analysis routing", () => {
     expect(
       update.macroThesisImpacts.flatMap((impact) => impact.claimIds),
     ).toHaveLength(4);
+    const claimsByLocator = new Map(
+      update.claims.map((claim) => [claim.locator, claim.id]),
+    );
+    expect(
+      update.macroThesisImpacts.find(
+        (impact) => impact.thesisId === "macro-memory",
+      )?.claimIds,
+    ).toEqual([claimsByLocator.get("P2")]);
     expect(
       update.macroThesisImpacts.some(
         (impact) =>
@@ -245,7 +254,7 @@ describe("generalized macro-thesis analysis routing", () => {
         ...disposition,
         relevance: "not-relevant" as const,
         stance: "context" as const,
-        claimLocators: [],
+        claimIndexes: [],
       }));
 
     expect(() =>
@@ -267,7 +276,7 @@ describe("generalized macro-thesis analysis routing", () => {
         ...disposition,
         relevance: "not-relevant" as const,
         stance: "context" as const,
-        claimLocators: [],
+        claimIndexes: [],
       }));
 
     expect(() =>
@@ -280,6 +289,46 @@ describe("generalized macro-thesis analysis routing", () => {
         context,
       ),
     ).toThrow("company thesis delta or a direct macro-thesis route");
+  });
+
+  it("rejects macro routes that cite outside the extracted claims array", () => {
+    const output = makeAnalysisOutput();
+    output.macroThesisDispositions[0]!.claimIndexes = [99];
+
+    expect(() =>
+      buildIntelligenceUpdate(
+        document,
+        output,
+        UPDATE_ID,
+        ANALYZED_AT,
+        "test-analysis-model",
+        context,
+      ),
+    ).toThrow(
+      'route "macro-memory" cited out-of-range claim index 99',
+    );
+  });
+
+  it("does not accept the former free-form locator route contract", () => {
+    const output = makeAnalysisOutput();
+    const firstRoute = output.macroThesisDispositions[0]!;
+    const legacyRoute = {
+      thesisId: firstRoute.thesisId,
+      relevance: firstRoute.relevance,
+      stance: firstRoute.stance,
+      rationale: firstRoute.rationale,
+      claimLocators: ["P2"],
+    };
+
+    expect(
+      analysisOutputSchema.safeParse({
+        ...output,
+        macroThesisDispositions: [
+          legacyRoute,
+          ...output.macroThesisDispositions.slice(1),
+        ],
+      }).success,
+    ).toBe(false);
   });
 });
 

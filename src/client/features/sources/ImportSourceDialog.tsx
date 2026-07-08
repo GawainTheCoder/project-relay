@@ -63,6 +63,7 @@ export function ImportSourceDialog({
     initialProfile?.id ?? "",
   );
   const [sourceUrl, setSourceUrl] = useState("");
+  const [publishedAt, setPublishedAt] = useState("");
   const [content, setContent] = useState("");
   const [sourceKind, setSourceKind] = useState<SourceKind>("other");
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +77,7 @@ export function ImportSourceDialog({
     setTitle("");
     setPublisher("");
     setSourceUrl("");
+    setPublishedAt("");
     setContent("");
     setSourceKind("other");
     setSourceProfileId("");
@@ -130,6 +132,7 @@ export function ImportSourceDialog({
       publisher: cleanPublisher,
       mode,
       sourceUrl: cleanUrl,
+      publishedAt,
       content: cleanContent,
       sourceKind,
       sourceProfileId,
@@ -155,6 +158,7 @@ export function ImportSourceDialog({
       setTitle("");
       setPublisher("");
       setSourceUrl("");
+      setPublishedAt("");
       setContent("");
       setSourceKind("other");
     } catch (caughtError) {
@@ -328,26 +332,42 @@ export function ImportSourceDialog({
               </label>
             </div>
 
-            <label className="block">
-              <span className="text-xs font-medium text-relay-muted">
-                Signal type
-              </span>
-              <select
-                className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm text-relay-text focus:border-relay-accent"
-                onChange={(event) =>
-                  setSourceKind(event.target.value as SourceKind)
-                }
-                value={sourceKind}
-              >
-                <option value="other">Article or research note</option>
-                <option value="earnings-release">
-                  Official company update
-                </option>
-                <option value="technical">Technical release</option>
-                <option value="paper">Research paper</option>
-                <option value="transcript">Interview or transcript</option>
-              </select>
-            </label>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-xs font-medium text-relay-muted">
+                  Signal type
+                </span>
+                <select
+                  className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm text-relay-text focus:border-relay-accent"
+                  onChange={(event) =>
+                    setSourceKind(event.target.value as SourceKind)
+                  }
+                  value={sourceKind}
+                >
+                  <option value="other">Article or research note</option>
+                  <option value="earnings-release">
+                    Official company update
+                  </option>
+                  <option value="technical">Technical release</option>
+                  <option value="paper">Research paper</option>
+                  <option value="transcript">Interview or transcript</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-relay-muted">
+                  Publication date{" "}
+                  <span className="font-normal text-relay-subtle">
+                    (optional)
+                  </span>
+                </span>
+                <input
+                  className="mt-2 h-10 w-full rounded-md border border-relay-border bg-relay-deep px-3 text-sm text-relay-text focus:border-relay-accent"
+                  onChange={(event) => setPublishedAt(event.target.value)}
+                  type="date"
+                  value={publishedAt}
+                />
+              </label>
+            </div>
 
             <label className="block">
               <span className="flex items-center gap-2 text-xs font-medium text-relay-muted">

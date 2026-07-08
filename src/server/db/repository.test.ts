@@ -992,6 +992,102 @@ describe("RelayRepository", () => {
     ]);
   });
 
+  it("persists syndicated reports as one auditable evidence chain", () => {
+    const baseUpdate: IntelligenceUpdate = {
+      id: "meta-bloomberg",
+      title:
+        "Meta is building a cloud business to sell excess AI computing capacity",
+      publisher: "Bloomberg",
+      sourceUrl: "https://example.com/bloomberg/meta-cloud",
+      publishedAt: "2026-07-01T15:33:59.703Z",
+      ingestedAt: "2026-07-01T15:34:59.703Z",
+      layerIds: ["cloud"],
+      companyTickers: ["META"],
+      materiality: "high",
+      materialityReason:
+        "The report describes a new route to monetize AI infrastructure.",
+      novelty: "new",
+      sentiment: "bullish",
+      whatHappened: "Meta plans to sell excess AI compute capacity.",
+      whyItMatters: "The move could change cloud capacity economics.",
+      beneficiaries: ["AI cloud customers"],
+      threatened: [],
+      watchNext: ["Commercial availability"],
+      claims: [
+        {
+          id: "meta-bloomberg-claim",
+          quote: "Meta plans to sell excess AI computing capacity.",
+          sourceId: "manual-imports",
+          locator: "Excerpt",
+        },
+      ],
+      thesisImpacts: [],
+      macroThesisImpacts: [
+        {
+          id: "meta-bloomberg-macro-impact",
+          thesisId: "macro-custom-silicon",
+          relevance: "secondary",
+          stance: "supports",
+          rationale:
+            "Commercializing spare capacity bears on custom-silicon economics.",
+          claimIds: ["meta-bloomberg-claim"],
+        },
+      ],
+      model: "test-model",
+    };
+    const reutersUpdate: IntelligenceUpdate = {
+      ...baseUpdate,
+      id: "meta-reuters",
+      title:
+        "Meta plans cloud business to sell excess AI computing capacity, Bloomberg News reports",
+      publisher: "Reuters",
+      sourceUrl: "https://example.com/reuters/meta-cloud",
+      publishedAt: "2026-07-01T15:35:05.519Z",
+      ingestedAt: "2026-07-01T15:36:05.519Z",
+      claims: [
+        {
+          id: "meta-reuters-claim",
+          quote: "Meta plans a cloud business for excess AI capacity.",
+          sourceId: "manual-imports",
+          locator: "Excerpt",
+        },
+      ],
+      macroThesisImpacts: [
+        {
+          id: "meta-reuters-macro-impact",
+          thesisId: "macro-custom-silicon",
+          relevance: "secondary",
+          stance: "supports",
+          rationale:
+            "Commercializing spare capacity bears on custom-silicon economics.",
+          claimIds: ["meta-reuters-claim"],
+        },
+      ],
+    };
+
+    repository.persistAnalyzedUpdate(baseUpdate);
+    const persistedReuters =
+      repository.persistAnalyzedUpdate(reutersUpdate);
+    const persistedBloomberg = repository.getUpdate(baseUpdate.id);
+
+    expect(persistedReuters.sourceLineage).toMatchObject({
+      evidenceChainId: expect.stringMatching(/^story-[a-f0-9]{20}$/),
+      reportCount: 2,
+      publishers: ["Bloomberg", "Reuters"],
+      updateIds: ["meta-bloomberg", "meta-reuters"],
+      matchScore: expect.any(Number),
+    });
+    expect(persistedBloomberg?.sourceLineage).toMatchObject({
+      evidenceChainId:
+        persistedReuters.sourceLineage?.evidenceChainId,
+      reportCount: 2,
+    });
+    expect(
+      repository.getEvidenceChainIdForUpdate(baseUpdate.id),
+    ).toBe(repository.getEvidenceChainIdForUpdate(reutersUpdate.id));
+    expect(persistedReuters.companyTickers).toEqual([]);
+  });
+
   it("deletes a signal and any generated brief or unaccepted evaluation that cites it", () => {
     const document = repository.persistSourceDocument({
       title: "NVIDIA quarterly results",
@@ -1155,6 +1251,121 @@ describe("RelayRepository", () => {
     expect(duplicate).toMatchObject({
       duplicate: true,
       id: first.id,
+    });
+  });
+
+  it("lists durable failed documents with retry metadata and no raw content", () => {
+    const first = repository.persistSourceDocument({
+      title: "Blocked article",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/blocked",
+      publishedAt: "2026-07-01T10:00:00.000Z",
+      content:
+        "URL import queued for secure retrieval: https://example.com/blocked",
+      sourceKind: "technical",
+    });
+    repository.markSourceDocumentError(
+      first.id,
+      "Source request failed with HTTP 403.",
+    );
+    repository.markSourceDocumentError(
+      first.id,
+      "Source request failed with HTTP 403.",
+    );
+
+    const failed = repository.listFailedSourceDocuments();
+
+    expect(failed).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        title: "Blocked article",
+        publisher: "Example Publisher",
+        sourceUrl: "https://example.com/blocked",
+        publishedAt: "2026-07-01T10:00:00.000Z",
+        sourceKind: "technical",
+        errorMessage: "Source request failed with HTTP 403.",
+        attemptCount: 2,
+        lastAttemptedAt: expect.any(String),
+        ingestedAt: expect.any(String),
+      }),
+    ]);
+    expect(failed[0]).not.toHaveProperty("content");
+  });
+
+  it("updates a failed document in place for excerpt recovery while preserving its original URL", () => {
+    const document = repository.persistSourceDocument({
+      title: "Blocked article",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/article?utm_source=email",
+      content:
+        "URL import queued for secure retrieval: https://example.com/article",
+    });
+    repository.markSourceDocumentError(
+      document.id,
+      "Source request failed with HTTP 403.",
+    );
+
+    const recovered = repository.updateSourceDocumentForRecovery(
+      document.id,
+      {
+        title: "Corrected article title",
+        content:
+          "The publisher reported a material increase in AI infrastructure spending during the quarter.",
+        sourceUrl: "https://example.com/article",
+        sourceKind: "technical",
+      },
+    );
+
+    expect(recovered).toMatchObject({
+      id: document.id,
+      title: "Corrected article title",
+      sourceUrl: "https://example.com/article",
+      status: "error",
+      sourceKind: "technical",
+      attemptCount: 1,
+    });
+    expect(recovered.content).toContain(
+      "material increase in AI infrastructure spending",
+    );
+  });
+
+  it("rejects recovery URL changes and content-hash collisions instead of merging documents", () => {
+    const failed = repository.persistSourceDocument({
+      title: "Failed article",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/article",
+      content:
+        "URL import queued for secure retrieval: https://example.com/article",
+    });
+    repository.markSourceDocumentError(
+      failed.id,
+      "Source request failed with HTTP 403.",
+    );
+    const duplicateContent =
+      "This article excerpt already belongs to another stored document and must not be merged.";
+    const existing = repository.persistSourceDocument({
+      title: "Existing excerpt",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/article",
+      content: duplicateContent,
+    });
+
+    expect(() =>
+      repository.updateSourceDocumentForRecovery(failed.id, {
+        sourceUrl: "https://different.example.com/article",
+      }),
+    ).toThrow("must match the original source URL");
+    expect(() =>
+      repository.updateSourceDocumentForRecovery(failed.id, {
+        content: duplicateContent,
+      }),
+    ).toThrow(`duplicates source document ${existing.id}`);
+    expect(
+      repository.getSourceDocumentForRecovery(failed.id),
+    ).toMatchObject({
+      id: failed.id,
+      status: "error",
+      sourceUrl: "https://example.com/article",
     });
   });
 

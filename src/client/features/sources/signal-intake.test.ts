@@ -69,4 +69,17 @@ describe("buildSignalImportInput", () => {
       }),
     ).not.toHaveProperty("sourceProfileId");
   });
+
+  it("normalizes an optional publication date for the API", () => {
+    expect(
+      buildSignalImportInput({
+        ...baseInput,
+        mode: "url",
+        publishedAt: "2026-07-01",
+        sourceProfileId: "",
+      }),
+    ).toMatchObject({
+      publishedAt: "2026-07-01T00:00:00.000Z",
+    });
+  });
 });

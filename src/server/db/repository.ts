@@ -8,6 +8,7 @@ import type {
   CompanyInput,
   DailyBrief,
   DashboardPayload,
+  FailedSourceDocument,
   ImpactReview,
   IntelligenceUpdate,
   ResearchSource,
@@ -34,6 +35,10 @@ import {
 } from "../seeds/index.js";
 import { migrateDatabase } from "./schema.js";
 import { canonicalizeUrl } from "../ingestion/normalize.js";
+import {
+  clusterStories,
+  type StoryCandidate,
+} from "../intelligence/story-clustering.js";
 
 const IMPACT_REVIEW_INVALIDATION_PREFIX = "Invalidated after impact ";
 const SIGNAL_REEVALUATION_INVALIDATION_PREFIX =
@@ -100,6 +105,32 @@ export interface SourceDocumentRecord {
   updateId: string | null;
   ingestedAt: string;
   duplicate: boolean;
+}
+
+export interface SourceDocumentRecoveryRecord {
+  id: string;
+  title: string;
+  publisher: string;
+  sourceUrl: string | null;
+  publishedAt: string;
+  content: string;
+  sourceKind: SourceKind;
+  researchSourceId: string | null;
+  status: SourceDocumentRecord["status"];
+  updateId: string | null;
+  ingestedAt: string;
+  errorMessage: string | null;
+  attemptCount: number;
+  lastAttemptedAt: string | null;
+}
+
+export interface SourceDocumentRecoveryUpdate {
+  title?: string;
+  publisher?: string;
+  sourceUrl?: string;
+  publishedAt?: string;
+  content?: string;
+  sourceKind?: SourceKind;
 }
 
 type SqlValue = null | number | string | undefined;
@@ -1746,6 +1777,41 @@ export class RelayRepository {
     const reviewStatement = this.database.prepare(
       "SELECT * FROM impact_reviews WHERE impact_id = ?",
     );
+    const storyClusterId = nullableText(updateRow, "story_cluster_id");
+    const lineageRows = storyClusterId
+      ? rows(
+          this.database
+            .prepare(`
+              SELECT id, publisher, story_match_score, story_match_reason
+              FROM intelligence_updates
+              WHERE story_cluster_id = ?
+              ORDER BY published_at ASC, id ASC
+            `)
+            .all(storyClusterId),
+        )
+      : [];
+    const sourceLineage =
+      storyClusterId && lineageRows.length > 1
+        ? {
+            evidenceChainId: storyClusterId,
+            reportCount: lineageRows.length,
+            publishers: [
+              ...new Set(
+                lineageRows.map((lineageRow) =>
+                  text(lineageRow, "publisher"),
+                ),
+              ),
+            ],
+            updateIds: lineageRows.map((lineageRow) =>
+              text(lineageRow, "id"),
+            ),
+            matchScore:
+              typeof updateRow.story_match_score === "number"
+                ? updateRow.story_match_score
+                : null,
+            matchReason: nullableText(updateRow, "story_match_reason"),
+          }
+        : null;
 
     return {
       id: text(updateRow, "id"),
@@ -1825,7 +1891,23 @@ export class RelayRepository {
         claimIds: parseJson<string[]>(impactRow.claim_ids_json, []),
       })),
       model: nullableText(updateRow, "model"),
+      ...(sourceLineage ? { sourceLineage } : {}),
     };
+  }
+
+  getEvidenceChainIdForUpdate(updateId: string): string | null {
+    const updateRow = row(
+      this.database
+        .prepare(`
+          SELECT story_cluster_id
+          FROM intelligence_updates
+          WHERE id = ?
+        `)
+        .get(updateId),
+    );
+    return updateRow
+      ? nullableText(updateRow, "story_cluster_id")
+      : null;
   }
 
   deleteUpdate(id: string): boolean {
@@ -1907,12 +1989,15 @@ export class RelayRepository {
 
   persistAnalyzedUpdate(update: IntelligenceUpdate): IntelligenceUpdate {
     assertSignalInvariants(update);
+    const storyLineage = this.resolveStoryLineage(update);
     const insertUpdate = this.database.prepare(`
       INSERT INTO intelligence_updates (
         id, title, publisher, source_url, published_at, ingested_at, materiality,
         materiality_reason, novelty, sentiment, what_happened, why_it_matters,
-        beneficiaries_json, threatened_json, watch_next_json, model
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        beneficiaries_json, threatened_json, watch_next_json, model,
+        story_cluster_id, story_match_score, story_match_reason,
+        story_entity_tickers_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         publisher = excluded.publisher,
@@ -1928,7 +2013,11 @@ export class RelayRepository {
         beneficiaries_json = excluded.beneficiaries_json,
         threatened_json = excluded.threatened_json,
         watch_next_json = excluded.watch_next_json,
-        model = excluded.model
+        model = excluded.model,
+        story_cluster_id = excluded.story_cluster_id,
+        story_match_score = excluded.story_match_score,
+        story_match_reason = excluded.story_match_reason,
+        story_entity_tickers_json = excluded.story_entity_tickers_json
     `);
     const insertLayer = this.database.prepare(
       "INSERT INTO update_layers (update_id, layer_id) VALUES (?, ?)",
@@ -1996,6 +2085,10 @@ export class RelayRepository {
         JSON.stringify(update.threatened),
         JSON.stringify(update.watchNext),
         update.model,
+        storyLineage.evidenceChainId,
+        storyLineage.matchScore,
+        storyLineage.matchReason,
+        JSON.stringify(storyLineage.entityTickers),
       );
       this.database
         .prepare("DELETE FROM update_layers WHERE update_id = ?")
@@ -2107,6 +2200,129 @@ export class RelayRepository {
       throw new Error(`Failed to reload update ${update.id}`);
     }
     return persisted;
+  }
+
+  private resolveStoryLineage(update: IntelligenceUpdate): {
+    evidenceChainId: string;
+    matchScore: number | null;
+    matchReason: string | null;
+    entityTickers: string[];
+  } {
+    const existingRow = row(
+      this.database
+        .prepare(`
+          SELECT story_cluster_id, story_match_score, story_match_reason,
+                 story_entity_tickers_json
+          FROM intelligence_updates
+          WHERE id = ?
+        `)
+        .get(update.id),
+    );
+    if (existingRow) {
+      return {
+        evidenceChainId:
+          nullableText(existingRow, "story_cluster_id") ??
+          `story-legacy-${update.id}`,
+        matchScore:
+          typeof existingRow.story_match_score === "number"
+            ? existingRow.story_match_score
+            : null,
+        matchReason: nullableText(existingRow, "story_match_reason"),
+        entityTickers: parseJson<string[]>(
+          existingRow.story_entity_tickers_json,
+          update.companyTickers,
+        ),
+      };
+    }
+
+    const entityTickers = [
+      ...new Set(
+        update.companyTickers
+          .map((ticker) => ticker.trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    ].sort();
+    const candidateRows = rows(
+      this.database
+        .prepare(`
+          SELECT id, title, published_at, story_cluster_id,
+                 story_entity_tickers_json
+          FROM intelligence_updates
+          WHERE id <> ?
+        `)
+        .all(update.id),
+    );
+    const candidates: StoryCandidate[] = candidateRows.map(
+      (candidateRow) => ({
+        id: text(candidateRow, "id"),
+        title: text(candidateRow, "title"),
+        publishedAt: text(candidateRow, "published_at"),
+        companyTickers: parseJson<string[]>(
+          candidateRow.story_entity_tickers_json,
+          [],
+        ),
+      }),
+    );
+    const currentCandidate: StoryCandidate = {
+      id: update.id,
+      title: update.title,
+      publishedAt: update.publishedAt,
+      companyTickers: entityTickers,
+    };
+    const cluster = clusterStories([...candidates, currentCandidate]).find(
+      (candidateCluster) =>
+        candidateCluster.members.some((member) => member.id === update.id),
+    );
+    if (!cluster) {
+      throw new Error(`Failed to assign story lineage for ${update.id}`);
+    }
+
+    const existingMembers = cluster.members
+      .filter((member) => member.id !== update.id)
+      .map((member) => ({
+        member,
+        row: candidateRows.find(
+          (candidateRow) => text(candidateRow, "id") === member.id,
+        ),
+      }))
+      .filter(
+        (
+          result,
+        ): result is {
+          member: (typeof cluster.members)[number];
+          row: SqlRow;
+        } => Boolean(result.row),
+      );
+    const persistedEvidenceChainId = existingMembers
+      .map(({ row: memberRow }) =>
+        nullableText(memberRow, "story_cluster_id"),
+      )
+      .find((value): value is string => Boolean(value));
+    const comparison =
+      cluster.members.find((member) => member.id === update.id)
+        ?.comparisonToAnchor ??
+      existingMembers
+        .map(({ member }) => member.comparisonToAnchor)
+        .filter(
+          (
+            result,
+          ): result is NonNullable<typeof result> => result !== null,
+        )
+        .sort((left, right) => right.score - left.score)[0] ??
+      null;
+
+    return {
+      evidenceChainId: persistedEvidenceChainId ?? cluster.key,
+      matchScore: persistedEvidenceChainId ? comparison?.score ?? null : null,
+      matchReason:
+        persistedEvidenceChainId && comparison
+          ? comparison.reasons
+              .filter((reason) => reason.passed)
+              .map((reason) => reason.detail)
+              .join(" ")
+          : null,
+      entityTickers,
+    };
   }
 
   getBrief(id: string): DailyBrief | null {
@@ -2260,14 +2476,7 @@ export class RelayRepository {
     const sourceUrl = input.sourceUrl
       ? canonicalizeUrl(input.sourceUrl)
       : null;
-    const contentHash = createHash("sha256")
-      .update(
-        JSON.stringify({
-          content: input.content.trim(),
-          sourceUrl,
-        }),
-      )
-      .digest("hex");
+    const contentHash = sourceDocumentContentHash(input.content, sourceUrl);
     const existing = row(
       this.database
         .prepare(`
@@ -2336,14 +2545,190 @@ export class RelayRepository {
       .run(updateId, documentId);
   }
 
-  markSourceDocumentError(documentId: string, message: string): void {
+  recordSourceDocumentRetryAttempt(documentId: string): void {
+    const attemptedAt = new Date().toISOString();
     this.database
       .prepare(`
         UPDATE source_documents
-        SET analysis_status = 'error', error_message = ?
+        SET attempt_count = attempt_count + 1,
+            last_attempted_at = ?
+        WHERE id = ?
+          AND analysis_status = 'error'
+          AND suppressed_at IS NULL
+      `)
+      .run(attemptedAt, documentId);
+  }
+
+  markSourceDocumentError(
+    documentId: string,
+    message: string,
+    options: { recordAttempt?: boolean } = {},
+  ): void {
+    const attemptedAt = new Date().toISOString();
+    const recordAttempt = options.recordAttempt !== false;
+    this.database
+      .prepare(`
+        UPDATE source_documents
+        SET analysis_status = 'error',
+            error_message = ?,
+            attempt_count = attempt_count + ?,
+            last_attempted_at = CASE
+              WHEN ? = 1 THEN ?
+              ELSE last_attempted_at
+            END
         WHERE id = ? AND suppressed_at IS NULL
       `)
-      .run(sanitizeStoredError(message), documentId);
+      .run(
+        sanitizeStoredError(message),
+        recordAttempt ? 1 : 0,
+        recordAttempt ? 1 : 0,
+        attemptedAt,
+        documentId,
+      );
+  }
+
+  listFailedSourceDocuments(): FailedSourceDocument[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT id, title, publisher, source_url, published_at, source_kind,
+                 error_message, attempt_count, last_attempted_at, ingested_at
+          FROM source_documents
+          WHERE analysis_status = 'error'
+            AND suppressed_at IS NULL
+          ORDER BY COALESCE(last_attempted_at, ingested_at) DESC, id
+        `)
+        .all(),
+    ).map((documentRow) => ({
+      id: text(documentRow, "id"),
+      title: text(documentRow, "title"),
+      publisher: text(documentRow, "publisher"),
+      sourceUrl: nullableText(documentRow, "source_url"),
+      publishedAt: text(documentRow, "published_at"),
+      sourceKind: text(documentRow, "source_kind") as SourceKind,
+      errorMessage: text(documentRow, "error_message"),
+      attemptCount: numeric(documentRow, "attempt_count"),
+      lastAttemptedAt: nullableText(documentRow, "last_attempted_at"),
+      ingestedAt: text(documentRow, "ingested_at"),
+    }));
+  }
+
+  getSourceDocumentForRecovery(
+    documentId: string,
+  ): SourceDocumentRecoveryRecord | null {
+    const documentRow = row(
+      this.database
+        .prepare(`
+          SELECT id, title, publisher, source_url, published_at, content,
+                 source_kind, research_source_id, analysis_status, update_id,
+                 ingested_at, error_message, attempt_count, last_attempted_at,
+                 suppressed_at
+          FROM source_documents
+          WHERE id = ?
+        `)
+        .get(documentId),
+    );
+    if (!documentRow) {
+      return null;
+    }
+    return {
+      id: text(documentRow, "id"),
+      title: text(documentRow, "title"),
+      publisher: text(documentRow, "publisher"),
+      sourceUrl: nullableText(documentRow, "source_url"),
+      publishedAt: text(documentRow, "published_at"),
+      content: text(documentRow, "content"),
+      sourceKind: text(documentRow, "source_kind") as SourceKind,
+      researchSourceId: nullableText(documentRow, "research_source_id"),
+      status: documentRow.suppressed_at
+        ? "suppressed"
+        : (text(
+            documentRow,
+            "analysis_status",
+          ) as SourceDocumentRecoveryRecord["status"]),
+      updateId: nullableText(documentRow, "update_id"),
+      ingestedAt: text(documentRow, "ingested_at"),
+      errorMessage: nullableText(documentRow, "error_message"),
+      attemptCount: numeric(documentRow, "attempt_count"),
+      lastAttemptedAt: nullableText(documentRow, "last_attempted_at"),
+    };
+  }
+
+  updateSourceDocumentForRecovery(
+    documentId: string,
+    input: SourceDocumentRecoveryUpdate,
+  ): SourceDocumentRecoveryRecord {
+    const document = this.getSourceDocumentForRecovery(documentId);
+    if (!document) {
+      throw new RangeError(`Source document not found: ${documentId}`);
+    }
+    if (document.status !== "error") {
+      throw new TypeError(
+        `Only failed source documents can be recovered: ${documentId}`,
+      );
+    }
+
+    const suppliedUrl = input.sourceUrl
+      ? canonicalizeUrl(input.sourceUrl)
+      : null;
+    if (
+      document.sourceUrl &&
+      suppliedUrl &&
+      document.sourceUrl !== suppliedUrl
+    ) {
+      throw new TypeError(
+        "The recovery URL must match the original source URL.",
+      );
+    }
+    const sourceUrl = document.sourceUrl ?? suppliedUrl;
+    const content = input.content ?? document.content;
+    const contentHash = sourceDocumentContentHash(content, sourceUrl);
+    const collision = row(
+      this.database
+        .prepare(`
+          SELECT id
+          FROM source_documents
+          WHERE content_hash = ? AND id <> ?
+          LIMIT 1
+        `)
+        .get(contentHash, documentId),
+    );
+    if (collision) {
+      throw new RangeError(
+        `Recovery content duplicates source document ${text(collision, "id")}.`,
+      );
+    }
+
+    this.database
+      .prepare(`
+        UPDATE source_documents
+        SET title = ?,
+            publisher = ?,
+            source_url = ?,
+            published_at = ?,
+            content = ?,
+            content_hash = ?,
+            source_kind = ?
+        WHERE id = ?
+          AND analysis_status = 'error'
+          AND suppressed_at IS NULL
+      `)
+      .run(
+        input.title ?? document.title,
+        input.publisher ?? document.publisher,
+        sourceUrl,
+        input.publishedAt ?? document.publishedAt,
+        content,
+        contentHash,
+        input.sourceKind ?? document.sourceKind,
+        documentId,
+      );
+
+    const updated = this.getSourceDocumentForRecovery(documentId);
+    if (!updated) {
+      throw new Error(`Failed to reload source document ${documentId}.`);
+    }
+    return updated;
   }
 
   getResearchSourceIdForUpdate(updateId: string): string | null {
@@ -2610,6 +2995,20 @@ function sanitizeStoredError(message: string): string {
     )
     .replace(/[\r\n\t]+/g, " ")
     .slice(0, 1_000);
+}
+
+function sourceDocumentContentHash(
+  content: string,
+  sourceUrl: string | null,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        content: content.trim(),
+        sourceUrl,
+      }),
+    )
+    .digest("hex");
 }
 
 function mapImpactReview(reviewRow: SqlRow): ImpactReview {

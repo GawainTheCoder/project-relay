@@ -313,6 +313,47 @@ describe("buildThesisEvaluationBatch", () => {
     );
   });
 
+  it("does not count syndicated publishers as independent corroboration", () => {
+    const input = makeInput();
+    input.signals[0]!.sourceProvenance.evidenceChainId =
+      "story-network-demand";
+    input.signals[1]!.sourceProvenance.evidenceChainId =
+      "story-network-demand";
+    input.signals[1]!.macroThesisImpacts[0] = {
+      thesisId: "thesis_networking",
+      relevance: "secondary",
+      stance: "supports",
+      rationale:
+        "Syndicated optical coverage repeats the same evidence chain.",
+      claimIds: ["claim_optics_supply"],
+    };
+
+    expect(() =>
+      build(
+        makeEvaluation({
+          outcome: "revised",
+          proposedBelief:
+            "Data movement is now the binding constraint for large AI clusters.",
+          proposedConfidenceScore: 76,
+          confidenceDelta: 6,
+          supportingEvidence: [
+            {
+              signalId: "signal_arista",
+              claimIds: ["claim_arista_demand"],
+              reason: "The first publisher reports the event.",
+            },
+            {
+              signalId: "signal_lightcounting",
+              claimIds: ["claim_optics_supply"],
+              reason: "A second publisher repeats the same story chain.",
+            },
+          ],
+        }),
+        input,
+      ),
+    ).toThrow("requires at least two independent evidence chains");
+  });
+
   it("changes the deterministic evaluation ID when proposal reasoning changes", () => {
     const baseline = build(makeEvaluation()).evaluations[0];
     const revisedRationale = build(
@@ -336,7 +377,7 @@ describe("buildThesisEvaluationBatch", () => {
           confidenceDelta: 5,
         }),
       ),
-    ).toThrow("requires at least two independent sources");
+    ).toThrow("requires at least two independent evidence chains");
   });
 
   it("rejects unknown signals and claims outside their referenced signal", () => {

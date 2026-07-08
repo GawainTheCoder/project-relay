@@ -502,6 +502,42 @@ const migrations = [
     ALTER TABLE thesis_evaluations
       ADD COLUMN review_recommendation_reason TEXT;
   `,
+  `
+    ALTER TABLE source_documents
+      ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0
+      CHECK (attempt_count >= 0);
+
+    ALTER TABLE source_documents
+      ADD COLUMN last_attempted_at TEXT;
+
+    UPDATE source_documents
+    SET attempt_count = 1,
+        last_attempted_at = COALESCE(last_attempted_at, ingested_at)
+    WHERE analysis_status = 'error';
+
+    CREATE INDEX IF NOT EXISTS source_documents_failed_idx
+      ON source_documents(analysis_status, suppressed_at, last_attempted_at);
+  `,
+  `
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_cluster_id TEXT;
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_match_score INTEGER;
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_match_reason TEXT;
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_entity_tickers_json TEXT NOT NULL DEFAULT '[]';
+
+    UPDATE intelligence_updates
+    SET story_cluster_id = 'story-legacy-' || id
+    WHERE story_cluster_id IS NULL;
+
+    CREATE INDEX IF NOT EXISTS intelligence_updates_story_cluster_idx
+      ON intelligence_updates(story_cluster_id, id);
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {
