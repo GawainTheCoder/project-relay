@@ -1,10 +1,8 @@
 import {
-  BookOpen,
   BrainCircuit,
   ChevronLeft,
   ChevronRight,
   Database,
-  Layers3,
   Menu,
   Rss,
   Search,
@@ -21,8 +19,6 @@ const primaryNavigation = [
   { label: "Today", href: "/", icon: Sun, end: true },
   { label: "Theses", href: "/theses", icon: BrainCircuit, end: false },
   { label: "Signals", href: "/signals", icon: Database, end: false },
-  { label: "Briefs", href: "/briefs", icon: BookOpen, end: false },
-  { label: "Stack", href: "/stack", icon: Layers3, end: false },
   { label: "Sources", href: "/sources", icon: Rss, end: false },
 ] as const;
 

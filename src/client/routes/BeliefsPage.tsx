@@ -1,26 +1,297 @@
 import {
+  ArrowRight,
   BrainCircuit,
   Building2,
+  Layers3,
   Network,
   Plus,
   Search,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
+import type {
+  DashboardPayload,
+  LayerId,
+  ThesisSourceCoverage,
+} from "../../shared/contracts";
 import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { Button } from "../components/ui/Button";
 import { useDashboard } from "../context/useDashboard";
-import { AddCompanyDialog } from "../features/companies/AddCompanyDialog";
-import { BeliefCard } from "../features/beliefs/BeliefCard";
 import { useBeliefs } from "../features/beliefs/useBeliefs";
-import type { BeliefKind } from "../lib/api";
+import { AddCompanyDialog } from "../features/companies/AddCompanyDialog";
+import { SourceCoverageBadge } from "../features/sources/SourceCoverageAudit";
+import { StackContextSection } from "../features/stack/StackContextSection";
+import type { BeliefSummary } from "../lib/api";
+import { formatDate, getLayerName } from "../lib/format";
 import { companyThesisPath } from "../lib/thesisRoutes";
 
-const beliefTabs: { icon: typeof Building2; id: BeliefKind; label: string }[] = [
-  { icon: Building2, id: "company", label: "Company" },
-  { icon: Network, id: "macro", label: "Macro" },
-];
+type ThesisStatusFilter = "all" | "pending" | "awaiting";
+
+interface MacroThesisGroup {
+  companies: BeliefSummary[];
+  macro: BeliefSummary;
+}
+
+function normalizeSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function matchesStatus(
+  belief: BeliefSummary,
+  status: ThesisStatusFilter,
+): boolean {
+  if (status === "pending") {
+    return belief.pendingEvaluationCount > 0;
+  }
+  if (status === "awaiting") {
+    return belief.awaitingEvaluationCount > 0;
+  }
+  return true;
+}
+
+function matchesQuery(belief: BeliefSummary, query: string): boolean {
+  if (!query) {
+    return true;
+  }
+  return [
+    belief.title,
+    belief.statement,
+    belief.companyTicker,
+    ...belief.layerIds,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+    .includes(query);
+}
+
+function getMacroCompanyTickers(
+  macro: BeliefSummary,
+  data: DashboardPayload,
+): Set<string> {
+  return new Set(
+    data.layers
+      .filter((layer) => macro.layerIds.includes(layer.id))
+      .flatMap((layer) => layer.companyTickers),
+  );
+}
+
+function isRelatedCompanyThesis(
+  company: BeliefSummary,
+  macro: BeliefSummary,
+  data: DashboardPayload,
+): boolean {
+  const macroCompanyTickers = getMacroCompanyTickers(macro, data);
+  const sharesLayer = company.layerIds.some((layerId) =>
+    macro.layerIds.includes(layerId),
+  );
+  return Boolean(
+    sharesLayer ||
+      (company.companyTicker &&
+        macroCompanyTickers.has(company.companyTicker)),
+  );
+}
+
+function filterBelief(
+  belief: BeliefSummary,
+  query: string,
+  status: ThesisStatusFilter,
+): boolean {
+  return matchesStatus(belief, status) && matchesQuery(belief, query);
+}
+
+function buildMacroThesisGroups(
+  beliefs: BeliefSummary[],
+  data: DashboardPayload,
+  query: string,
+  status: ThesisStatusFilter,
+): {
+  groups: MacroThesisGroup[];
+  orphanCompanies: BeliefSummary[];
+} {
+  const normalizedQuery = normalizeSearch(query);
+  const macroTheses = beliefs.filter((belief) => belief.kind === "macro");
+  const companyTheses = beliefs.filter((belief) => belief.kind === "company");
+  const relatedCompanyIds = new Set<string>();
+  const groups = macroTheses.flatMap((macro) => {
+    const relatedCompanies = companyTheses.filter((company) =>
+      isRelatedCompanyThesis(company, macro, data),
+    );
+    relatedCompanies.forEach((company) => relatedCompanyIds.add(company.id));
+    const visibleCompanies = relatedCompanies.filter((company) =>
+      filterBelief(company, normalizedQuery, status),
+    );
+    const macroMatches = filterBelief(macro, normalizedQuery, status);
+    const queryMatchesMacro = matchesQuery(macro, normalizedQuery);
+    const companies = queryMatchesMacro
+      ? relatedCompanies.filter((company) => matchesStatus(company, status))
+      : visibleCompanies;
+    if (!macroMatches && companies.length === 0) {
+      return [];
+    }
+    return [{ macro, companies }];
+  });
+  const orphanCompanies = companyTheses.filter(
+    (company) =>
+      !relatedCompanyIds.has(company.id) &&
+      filterBelief(company, normalizedQuery, status),
+  );
+
+  return { groups, orphanCompanies };
+}
+
+function totalPending(group: MacroThesisGroup): number {
+  return (
+    group.macro.pendingEvaluationCount +
+    group.companies.reduce(
+      (total, company) => total + company.pendingEvaluationCount,
+      0,
+    )
+  );
+}
+
+function totalAwaiting(group: MacroThesisGroup): number {
+  return (
+    group.macro.awaitingEvaluationCount +
+    group.companies.reduce(
+      (total, company) => total + company.awaitingEvaluationCount,
+      0,
+    )
+  );
+}
+
+function ThesisMeta({ belief }: { belief: BeliefSummary }) {
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle">
+      {belief.pendingEvaluationCount ? (
+        <span className="text-relay-warning">
+          {belief.pendingEvaluationCount} pending review
+        </span>
+      ) : null}
+      {belief.awaitingEvaluationCount ? (
+        <span className="text-relay-accent">
+          {belief.awaitingEvaluationCount} awaiting evaluation
+        </span>
+      ) : null}
+      <time dateTime={belief.updatedAt}>
+        Updated{" "}
+        {formatDate(belief.updatedAt, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        })}
+      </time>
+    </div>
+  );
+}
+
+function CompanyThesisRow({ belief }: { belief: BeliefSummary }) {
+  return (
+    <Link
+      className="group grid gap-3 border-t border-relay-border px-4 py-4 transition-colors hover:bg-relay-surface sm:grid-cols-[minmax(0,1fr)_auto]"
+      to={`/theses/${encodeURIComponent(belief.id)}`}
+    >
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
+          <Building2 aria-hidden="true" className="size-3 text-relay-accent" />
+          <span>{belief.companyTicker ?? "Company"}</span>
+          {belief.layerIds.slice(0, 2).map((layerId) => (
+            <span key={layerId}>{getLayerName(layerId as LayerId)}</span>
+          ))}
+        </div>
+        <h3 className="mt-2 text-sm font-semibold tracking-tight group-hover:text-relay-accent">
+          {belief.title}
+        </h3>
+        <p className="mt-1 line-clamp-2 text-xs leading-5 text-relay-muted">
+          {belief.statement}
+        </p>
+        <ThesisMeta belief={belief} />
+      </div>
+      <ArrowRight
+        aria-hidden="true"
+        className="mt-1 size-4 text-relay-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-relay-accent"
+      />
+    </Link>
+  );
+}
+
+function MacroThesisSection({
+  group,
+  sourceCoverage,
+}: {
+  group: MacroThesisGroup;
+  sourceCoverage: ThesisSourceCoverage | undefined;
+}) {
+  return (
+    <section className="border-t border-relay-border">
+      <Link
+        className="group grid gap-5 px-2 py-6 transition-colors hover:bg-relay-surface focus-visible:bg-relay-surface sm:grid-cols-[minmax(0,1fr)_180px] sm:px-4"
+        to={`/theses/${encodeURIComponent(group.macro.id)}`}
+      >
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Network
+              aria-hidden="true"
+              className="size-3.5 text-relay-accent"
+            />
+            <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-muted">
+              Macro thesis
+            </span>
+            {group.macro.layerIds.slice(0, 3).map((layerId) => (
+              <span
+                className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle"
+                key={layerId}
+              >
+                {getLayerName(layerId as LayerId)}
+              </span>
+            ))}
+            {sourceCoverage ? (
+              <SourceCoverageBadge status={sourceCoverage.status} />
+            ) : null}
+          </div>
+          <h2 className="mt-3 text-lg font-semibold tracking-tight group-hover:text-relay-accent">
+            {group.macro.title}
+          </h2>
+          <p className="mt-2 line-clamp-2 max-w-3xl text-sm leading-6 text-relay-muted">
+            {group.macro.statement}
+          </p>
+          <ThesisMeta belief={group.macro} />
+        </div>
+        <div className="flex items-start justify-between gap-4 sm:border-l sm:border-relay-border sm:pl-6">
+          <div className="font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
+            <div>{group.companies.length} companies</div>
+            {totalPending(group) ? (
+              <div className="mt-2 text-relay-warning">
+                {totalPending(group)} pending
+              </div>
+            ) : null}
+            {totalAwaiting(group) ? (
+              <div className="mt-2 text-relay-accent">
+                {totalAwaiting(group)} awaiting
+              </div>
+            ) : null}
+          </div>
+          <ArrowRight
+            aria-hidden="true"
+            className="size-4 shrink-0 text-relay-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-relay-accent"
+          />
+        </div>
+      </Link>
+      {group.companies.length ? (
+        <div className="ml-4 border-l border-relay-border sm:ml-8">
+          {group.companies.map((company) => (
+            <CompanyThesisRow belief={company} key={company.id} />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function normalizeStatus(value: string | null): ThesisStatusFilter {
+  return value === "pending" || value === "awaiting" ? value : "all";
+}
 
 export function BeliefsPage() {
   const { data, error, isLoading, reload } = useDashboard();
@@ -29,27 +300,9 @@ export function BeliefsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const requestedKind = searchParams.get("type");
-  const kind: BeliefKind = requestedKind === "macro" ? "macro" : "company";
+  const status = normalizeStatus(searchParams.get("status"));
+  const showStackContext = searchParams.get("context") === "stack";
 
-  const visibleBeliefs = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return beliefs.filter(
-      (belief) =>
-        belief.kind === kind &&
-        (!normalizedQuery ||
-          [
-            belief.title,
-            belief.statement,
-            belief.companyTicker,
-            ...belief.layerIds,
-          ]
-            .filter(Boolean)
-            .join(" ")
-            .toLowerCase()
-            .includes(normalizedQuery)),
-    );
-  }, [beliefs, kind, query]);
   const coverageByThesisId = useMemo(
     () =>
       new Map(
@@ -59,6 +312,21 @@ export function BeliefsPage() {
         ]),
       ),
     [data?.sourceCoverage],
+  );
+  const grouped = useMemo(
+    () =>
+      data
+        ? buildMacroThesisGroups(beliefs, data, query, status)
+        : { groups: [], orphanCompanies: [] },
+    [beliefs, data, query, status],
+  );
+  const pendingTotal = beliefs.reduce(
+    (total, belief) => total + belief.pendingEvaluationCount,
+    0,
+  );
+  const awaitingTotal = beliefs.reduce(
+    (total, belief) => total + belief.awaitingEvaluationCount,
+    0,
   );
 
   if (isLoading) {
@@ -73,6 +341,21 @@ export function BeliefsPage() {
     );
   }
 
+  const setStatus = (nextStatus: ThesisStatusFilter) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextStatus === "all") {
+      next.delete("status");
+    } else {
+      next.set("status", nextStatus);
+    }
+    setSearchParams(next);
+  };
+  const openStackContext = () => {
+    const next = new URLSearchParams(searchParams);
+    next.set("context", "stack");
+    setSearchParams(next);
+  };
+
   return (
     <div className="relay-enter min-h-screen">
       <header className="border-b border-relay-border px-5 py-5 sm:px-8 lg:px-10">
@@ -86,11 +369,19 @@ export function BeliefsPage() {
               Theses
             </h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-relay-muted">
-              Current theses, confidence, contradictory evidence, and the
-              conditions that would change your mind.
+              Macro structure first, with company views nested where evidence
+              meets the stack.
             </p>
           </div>
-          {kind === "company" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              className="h-10"
+              onClick={openStackContext}
+              variant="secondary"
+            >
+              <Layers3 aria-hidden="true" className="size-3.5" />
+              Stack context
+            </Button>
             <Button
               className="h-10"
               onClick={() => setIsAddDialogOpen(true)}
@@ -99,49 +390,33 @@ export function BeliefsPage() {
               <Plus aria-hidden="true" className="size-3.5" />
               Add company thesis
             </Button>
-          ) : null}
+          </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-[1280px] px-5 py-7 sm:px-8 lg:px-10">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-relay-border pb-4">
-          <div
-            aria-label="Thesis type"
-            className="flex items-center rounded-md border border-relay-border bg-relay-deep p-1"
-            role="tablist"
-          >
-            {beliefTabs.map((tab) => {
-              const Icon = tab.icon;
-              const isActive = kind === tab.id;
-              return (
-                <button
-                  aria-selected={isActive}
-                  className={`inline-flex h-8 items-center gap-2 rounded px-3 text-xs transition-colors ${
-                    isActive
-                      ? "bg-relay-surface-2 text-relay-text"
-                      : "text-relay-muted hover:text-relay-text"
-                  }`}
-                  key={tab.id}
-                  onClick={() =>
-                    setSearchParams(
-                      tab.id === "macro" ? { type: "macro" } : {},
-                    )
-                  }
-                  role="tab"
-                  type="button"
-                >
-                  <Icon
-                    aria-hidden="true"
-                    className={`size-3.5 ${
-                      isActive ? "text-relay-accent" : ""
-                    }`}
-                  />
-                  {tab.label}
-                </button>
-              );
-            })}
+        <div className="grid gap-3 border-b border-relay-border pb-4 lg:grid-cols-[1fr_auto] lg:items-center">
+          <div className="flex flex-wrap items-center gap-2">
+            {(["all", "pending", "awaiting"] as const).map((item) => (
+              <button
+                className={`h-8 border px-3 font-mono text-[10px] uppercase tracking-[0.08em] transition-colors ${
+                  status === item
+                    ? "border-relay-accent bg-relay-accent/10 text-relay-accent"
+                    : "border-relay-border text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
+                }`}
+                key={item}
+                onClick={() => setStatus(item)}
+                type="button"
+              >
+                {item === "all"
+                  ? "All"
+                  : item === "pending"
+                    ? `${pendingTotal} pending`
+                    : `${awaitingTotal} awaiting`}
+              </button>
+            ))}
           </div>
-          <label className="flex h-10 w-full items-center gap-2 rounded-md border border-relay-border bg-relay-surface px-3 sm:w-72">
+          <label className="flex h-10 w-full items-center gap-2 border border-relay-border bg-relay-surface px-3 lg:w-80">
             <Search
               aria-hidden="true"
               className="size-3.5 text-relay-subtle"
@@ -150,54 +425,72 @@ export function BeliefsPage() {
             <input
               className="min-w-0 flex-1 bg-transparent text-sm placeholder:text-relay-subtle"
               onChange={(event) => setQuery(event.target.value)}
-              placeholder={`Filter ${kind} theses`}
+              placeholder="Filter theses"
               value={query}
             />
           </label>
         </div>
 
+        {showStackContext ? (
+          <div className="py-7">
+            <StackContextSection data={data} />
+          </div>
+        ) : null}
+
         <div className="flex items-center justify-between py-4">
           <p className="font-mono text-[10px] uppercase tracking-[0.1em] text-relay-muted">
-            {kind} theses
+            Macro spine
           </p>
           <span className="font-mono text-[10px] text-relay-subtle">
-            {visibleBeliefs.length} tracked
+            {grouped.groups.length} macro ·{" "}
+            {grouped.groups.reduce(
+              (total, group) => total + group.companies.length,
+              0,
+            ) + grouped.orphanCompanies.length}{" "}
+            company
           </span>
         </div>
 
-        {visibleBeliefs.length ? (
-          <div className="border-t border-relay-border">
-            {visibleBeliefs.map((belief) => (
-              <BeliefCard
-                belief={belief}
-                key={belief.id}
-                sourceCoverage={coverageByThesisId.get(belief.id)}
+        {grouped.groups.length || grouped.orphanCompanies.length ? (
+          <div className="border-b border-relay-border">
+            {grouped.groups.map((group) => (
+              <MacroThesisSection
+                group={group}
+                key={group.macro.id}
+                sourceCoverage={coverageByThesisId.get(group.macro.id)}
               />
             ))}
+            {grouped.orphanCompanies.length ? (
+              <section className="border-t border-relay-border">
+                <div className="px-2 py-5 sm:px-4">
+                  <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.1em] text-relay-muted">
+                    <Building2
+                      aria-hidden="true"
+                      className="size-3.5 text-relay-accent"
+                    />
+                    Company theses
+                  </div>
+                </div>
+                <div className="ml-4 border-l border-relay-border sm:ml-8">
+                  {grouped.orphanCompanies.map((company) => (
+                    <CompanyThesisRow belief={company} key={company.id} />
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
         ) : (
           <section className="grid min-h-64 place-items-center border-y border-relay-border px-5 text-center">
             <div className="max-w-md">
-              {kind === "macro" ? (
-                <Network
-                  aria-hidden="true"
-                  className="mx-auto size-5 text-relay-subtle"
-                />
-              ) : (
-                <Building2
-                  aria-hidden="true"
-                  className="mx-auto size-5 text-relay-subtle"
-                />
-              )}
+              <Network
+                aria-hidden="true"
+                className="mx-auto size-5 text-relay-subtle"
+              />
               <h2 className="mt-4 text-sm font-semibold">
-                {query
-                  ? "No theses match this filter"
-                  : `No ${kind} theses yet`}
+                No theses match this view
               </h2>
               <p className="mt-2 text-sm leading-6 text-relay-muted">
-                {kind === "macro"
-                  ? "Macro theses appear here when Relay begins tracking stack-wide bottlenecks and structural shifts."
-                  : "Add a company thesis to define what evidence should strengthen or weaken your view."}
+                Clear the filter or add a company thesis to expand the model.
               </p>
             </div>
           </section>

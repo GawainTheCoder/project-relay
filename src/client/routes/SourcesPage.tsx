@@ -584,7 +584,7 @@ export function SourcesPage() {
             <div className="flex items-center gap-4">
               <Link
                 className="inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
-                to="/briefs"
+                to="/?archive=briefs"
               >
                 <History aria-hidden="true" className="size-3.5" />
                 Prior briefs

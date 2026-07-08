@@ -6,8 +6,13 @@ import {
   ChevronRight,
   Quote,
 } from "lucide-react";
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { EvidencePanel } from "../components/EvidencePanel";
 import {
@@ -15,21 +20,257 @@ import {
   PageError,
   PageLoading,
 } from "../components/ui/AsyncState";
+import type { DailyBrief, IntelligenceUpdate } from "../../shared/contracts";
 import { SentimentBadge } from "../components/ui/StatusBadge";
 import { useDashboard } from "../context/useDashboard";
+import { useBeliefs } from "../features/beliefs/useBeliefs";
+import { listBriefs } from "../lib/api";
 import { getSecondarySignalUpdate } from "../lib/briefs";
-import { formatDate, getLayerName } from "../lib/format";
+import {
+  formatDate,
+  formatRelativeTime,
+  getLayerName,
+} from "../lib/format";
 import {
   isThesisChangingImpact,
   isThesisChangingSignal,
 } from "../lib/signals";
 import { companyThesisPath } from "../lib/thesisRoutes";
 
+function CommandMetric({
+  label,
+  meta,
+  to,
+  value,
+}: {
+  label: string;
+  meta: string;
+  to: string;
+  value: string;
+}) {
+  return (
+    <Link
+      className="group border border-relay-border bg-relay-surface px-4 py-3 transition-colors hover:border-relay-border-strong hover:bg-relay-surface-2"
+      to={to}
+    >
+      <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-muted">
+        {label}
+      </span>
+      <span className="mt-2 block truncate text-sm font-semibold tracking-tight group-hover:text-relay-accent">
+        {value}
+      </span>
+      <span className="mt-1 block text-xs text-relay-subtle">{meta}</span>
+    </Link>
+  );
+}
+
+function CommandCenterStrip({
+  awaitingEvaluationTotal,
+  biggestThesisChange,
+  pendingReviewTotal,
+}: {
+  awaitingEvaluationTotal: number;
+  biggestThesisChange: IntelligenceUpdate | null;
+  pendingReviewTotal: number;
+}) {
+  return (
+    <section className="grid gap-3 border-b border-relay-border py-5 sm:grid-cols-3">
+      <CommandMetric
+        label="Biggest thesis change"
+        meta={
+          biggestThesisChange
+            ? biggestThesisChange.publisher
+            : "No signal yet"
+        }
+        to={
+          biggestThesisChange
+            ? `/signals?update=${encodeURIComponent(biggestThesisChange.id)}`
+            : "/signals"
+        }
+        value={biggestThesisChange?.title ?? "No thesis-changing signal"}
+      />
+      <CommandMetric
+        label="Pending reviews"
+        meta="Thesis proposals"
+        to="/theses?status=pending"
+        value={String(pendingReviewTotal)}
+      />
+      <CommandMetric
+        label="Awaiting evaluation"
+        meta="Routed evidence"
+        to="/theses?status=awaiting"
+        value={String(awaitingEvaluationTotal)}
+      />
+    </section>
+  );
+}
+
+function BriefArchiveSection({
+  briefs,
+  error,
+  onRetry,
+  selectedBriefId,
+}: {
+  briefs: DailyBrief[] | null;
+  error: string | null;
+  onRetry: () => void;
+  selectedBriefId: string | null;
+}) {
+  const selectedBrief =
+    briefs?.find((brief) => brief.id === selectedBriefId) ?? null;
+
+  return (
+    <section className="mt-12" id="brief-archive">
+      <div className="flex flex-wrap items-end justify-between gap-3 border-b border-relay-border pb-3">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+            Brief archive
+          </p>
+          <h2 className="mt-2 text-lg font-semibold tracking-tight">
+            Prior daily readouts
+          </h2>
+        </div>
+        <span className="font-mono text-[10px] text-relay-subtle">
+          {briefs?.length ?? 0} stored
+        </span>
+      </div>
+      {error ? (
+        <div className="border-b border-relay-border py-6">
+          <p className="text-sm text-relay-negative" role="alert">
+            {error}
+          </p>
+          <button
+            className="mt-3 text-sm text-relay-accent hover:text-white"
+            onClick={onRetry}
+            type="button"
+          >
+            Retry archive
+          </button>
+        </div>
+      ) : !briefs ? (
+        <p className="border-b border-relay-border py-6 text-sm text-relay-muted">
+          Loading prior briefs.
+        </p>
+      ) : briefs.length ? (
+        <>
+          {selectedBrief ? (
+            <article className="border-b border-relay-border py-6">
+              <div className="flex flex-wrap items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
+                <CalendarDays aria-hidden="true" className="size-3.5" />
+                {formatDate(selectedBrief.date, {
+                  month: "short",
+                  day: "numeric",
+                  year: "numeric",
+                })}
+                <span>{selectedBrief.updateIds.length} signals</span>
+                <span>{selectedBrief.citationClaimIds.length} citations</span>
+              </div>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight">
+                {selectedBrief.title}
+              </h3>
+              <p className="mt-3 max-w-3xl text-sm leading-7 text-relay-muted">
+                {selectedBrief.signal}
+              </p>
+            </article>
+          ) : null}
+          <ol className="divide-y divide-relay-border border-b border-relay-border">
+            {briefs.map((brief) => (
+              <li key={brief.id}>
+                <Link
+                  className="group grid gap-4 py-5 sm:grid-cols-[150px_minmax(0,1fr)_auto] sm:items-start"
+                  to={`/?archive=briefs&brief=${encodeURIComponent(brief.id)}`}
+                >
+                  <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
+                    <CalendarDays aria-hidden="true" className="size-3.5" />
+                    {formatDate(brief.date, {
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-base font-semibold tracking-tight group-hover:text-relay-accent">
+                      {brief.title}
+                    </h3>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-relay-muted">
+                      {brief.signal}
+                    </p>
+                    <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
+                      <span>
+                        {brief.updateIds.length} signal
+                        {brief.updateIds.length === 1 ? "" : "s"}
+                      </span>
+                      <span>{brief.citationClaimIds.length} citations</span>
+                      <span>Generated {formatRelativeTime(brief.generatedAt)}</span>
+                    </div>
+                  </div>
+                  <ArrowRight
+                    aria-hidden="true"
+                    className="size-4 text-relay-subtle transition-transform group-hover:translate-x-0.5 group-hover:text-relay-accent"
+                  />
+                </Link>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : (
+        <EmptyState
+          body="Daily readouts will appear here after Relay generates them."
+          title="No prior briefs yet"
+        />
+      )}
+    </section>
+  );
+}
+
 export function TodayPage() {
   const { data, error, isLoading, regenerateBrief, reload } = useDashboard();
+  const beliefs = useBeliefs(data);
+  const [searchParams] = useSearchParams();
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [isGeneratingBrief, setIsGeneratingBrief] = useState(false);
   const [briefError, setBriefError] = useState<string | null>(null);
+  const [briefArchive, setBriefArchive] = useState<DailyBrief[] | null>(
+    null,
+  );
+  const [briefArchiveError, setBriefArchiveError] = useState<string | null>(
+    null,
+  );
+  const showBriefArchive = searchParams.get("archive") === "briefs";
+  const selectedBriefId = searchParams.get("brief");
+
+  const loadBriefArchive = useCallback(async (signal?: AbortSignal) => {
+    setBriefArchiveError(null);
+    try {
+      setBriefArchive(await listBriefs(50, signal));
+    } catch (caughtError) {
+      if (
+        caughtError instanceof DOMException &&
+        caughtError.name === "AbortError"
+      ) {
+        return;
+      }
+      setBriefArchiveError(
+        caughtError instanceof Error
+          ? caughtError.message
+          : "Relay could not load prior briefs.",
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showBriefArchive) {
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void loadBriefArchive(controller.signal);
+    }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [loadBriefArchive, showBriefArchive]);
 
   const briefClaims = useMemo(() => {
     if (!data?.brief) {
@@ -60,6 +301,30 @@ export function TodayPage() {
       )
       .slice(0, 6);
   }, [data]);
+  const biggestThesisChange = useMemo(() => {
+    if (!data) {
+      return null;
+    }
+    const briefUpdate = data.brief?.updateIds
+      .map((updateId) =>
+        data.updates.find((update) => update.id === updateId),
+      )
+      .find((update) => update && isThesisChangingSignal(update));
+    return (
+      briefUpdate ??
+      data.updates.find(isThesisChangingSignal) ??
+      data.updates[0] ??
+      null
+    );
+  }, [data]);
+  const pendingReviewTotal = beliefs.reduce(
+    (total, belief) => total + belief.pendingEvaluationCount,
+    0,
+  );
+  const awaitingEvaluationTotal = beliefs.reduce(
+    (total, belief) => total + belief.awaitingEvaluationCount,
+    0,
+  );
 
   if (isLoading) {
     return <PageLoading label="Updating today’s mental model" />;
@@ -104,7 +369,12 @@ export function TodayPage() {
             </h1>
           </div>
         </header>
-        <main className="mx-auto max-w-[1100px] px-5 py-16 sm:px-8 lg:px-10 lg:py-24">
+        <main className="mx-auto max-w-[1100px] px-5 py-7 sm:px-8 lg:px-10">
+          <CommandCenterStrip
+            awaitingEvaluationTotal={awaitingEvaluationTotal}
+            biggestThesisChange={biggestThesisChange}
+            pendingReviewTotal={pendingReviewTotal}
+          />
           <section className="max-w-2xl border-l border-relay-border-strong pl-6">
             <BookOpen
               aria-hidden="true"
@@ -150,9 +420,9 @@ export function TodayPage() {
               )}
               <Link
                 className="inline-flex h-10 items-center rounded-md border border-relay-border px-4 text-sm text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
-                to="/search"
+                to="/?archive=briefs"
               >
-                Search evidence
+                Brief archive
               </Link>
             </div>
             {briefError ? (
@@ -161,6 +431,14 @@ export function TodayPage() {
               </p>
             ) : null}
           </section>
+          {showBriefArchive ? (
+            <BriefArchiveSection
+              briefs={briefArchive}
+              error={briefArchiveError}
+              onRetry={() => void loadBriefArchive()}
+              selectedBriefId={selectedBriefId}
+            />
+          ) : null}
         </main>
       </div>
     );
@@ -198,6 +476,11 @@ export function TodayPage() {
 
       <div className="mx-auto grid max-w-[1440px] xl:grid-cols-[minmax(0,1fr)_350px]">
         <main className="min-w-0 px-5 py-7 sm:px-8 lg:px-10 lg:py-10">
+          <CommandCenterStrip
+            awaitingEvaluationTotal={awaitingEvaluationTotal}
+            biggestThesisChange={biggestThesisChange}
+            pendingReviewTotal={pendingReviewTotal}
+          />
           <article className="max-w-4xl">
             <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
               <span className="size-1.5 rounded-full bg-relay-accent" />
@@ -317,6 +600,14 @@ export function TodayPage() {
               )}
             </section>
           </article>
+          {showBriefArchive ? (
+            <BriefArchiveSection
+              briefs={briefArchive}
+              error={briefArchiveError}
+              onRetry={() => void loadBriefArchive()}
+              selectedBriefId={selectedBriefId}
+            />
+          ) : null}
         </main>
 
         <aside className="border-t border-relay-border bg-relay-deep px-5 py-7 sm:px-8 xl:border-l xl:border-t-0 xl:px-6 xl:py-10">
