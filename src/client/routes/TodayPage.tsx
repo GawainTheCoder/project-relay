@@ -20,7 +20,11 @@ import {
   PageError,
   PageLoading,
 } from "../components/ui/AsyncState";
-import type { DailyBrief, IntelligenceUpdate } from "../../shared/contracts";
+import type {
+  DailyBrief,
+  EvidenceClaim,
+  IntelligenceUpdate,
+} from "../../shared/contracts";
 import { SentimentBadge } from "../components/ui/StatusBadge";
 import { useDashboard } from "../context/useDashboard";
 import { useBeliefs } from "../features/beliefs/useBeliefs";
@@ -105,14 +109,16 @@ function CommandCenterStrip({
   );
 }
 
-function BriefArchiveSection({
+export function BriefArchiveSection({
   briefs,
   error,
+  evidenceItems,
   onRetry,
   selectedBriefId,
 }: {
   briefs: DailyBrief[] | null;
   error: string | null;
+  evidenceItems: Array<{ claim: EvidenceClaim; update: IntelligenceUpdate }>;
   onRetry: () => void;
   selectedBriefId: string | null;
 }) {
@@ -168,9 +174,44 @@ function BriefArchiveSection({
               <h3 className="mt-3 text-xl font-semibold tracking-tight">
                 {selectedBrief.title}
               </h3>
-              <p className="mt-3 max-w-3xl text-sm leading-7 text-relay-muted">
-                {selectedBrief.signal}
-              </p>
+              {evidenceItems.length ? (
+                <div className="mt-4">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+                    Cited evidence
+                  </p>
+                  <ol className="mt-3 divide-y divide-relay-border border-y border-relay-border">
+                  {evidenceItems.map(({ claim, update }, index) => (
+                    <li className="py-4" key={claim.id}>
+                      <blockquote className="text-sm leading-7 text-relay-text">
+                        “{claim.quote}”
+                      </blockquote>
+                      <Link
+                        className="mt-2 inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
+                        to={`/signals?update=${encodeURIComponent(update.id)}`}
+                      >
+                        [{index + 1}] {update.publisher} · {claim.locator}
+                        <ArrowRight aria-hidden="true" className="size-3" />
+                      </Link>
+                    </li>
+                  ))}
+                  </ol>
+                </div>
+              ) : (
+                <p className="mt-4 border-y border-relay-border py-4 text-sm text-relay-muted">
+                  This brief contains no stored evidence citations.
+                </p>
+              )}
+              <details className="mt-5 border-l border-relay-border pl-3">
+                <summary className="cursor-pointer text-sm font-semibold text-relay-muted hover:text-relay-text">
+                  Generated readout
+                </summary>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-relay-muted">
+                  {selectedBrief.signal}
+                </p>
+                <p className="mt-3 max-w-3xl text-sm leading-7 text-relay-text/90">
+                  {selectedBrief.summary}
+                </p>
+              </details>
             </article>
           ) : null}
           <ol className="divide-y divide-relay-border border-b border-relay-border">
@@ -223,6 +264,43 @@ function BriefArchiveSection({
   );
 }
 
+function BriefEvidenceLead({
+  items,
+}: {
+  items: Array<{ claim: EvidenceClaim; update: IntelligenceUpdate }>;
+}) {
+  if (!items.length) {
+    return null;
+  }
+
+  return (
+    <section className="mb-8 border-b border-relay-border pb-6">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-sm font-semibold">Cited evidence</h2>
+        <span className="font-mono text-[10px] text-relay-subtle">
+          {items.length} quotes
+        </span>
+      </div>
+      <ol className="mt-3 divide-y divide-relay-border border-y border-relay-border">
+        {items.slice(0, 3).map(({ claim, update }, index) => (
+          <li className="py-4" key={claim.id}>
+            <blockquote className="text-sm leading-7 text-relay-text">
+              “{claim.quote}”
+            </blockquote>
+            <Link
+              className="mt-2 inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
+              to={`/signals?update=${encodeURIComponent(update.id)}`}
+            >
+              [{index + 1}] {update.publisher} · {claim.locator}
+              <ArrowRight aria-hidden="true" className="size-3" />
+            </Link>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
 export function TodayPage() {
   const { data, error, isLoading, regenerateBrief, reload } = useDashboard();
   const beliefs = useBeliefs(data);
@@ -238,6 +316,25 @@ export function TodayPage() {
   );
   const showBriefArchive = searchParams.get("archive") === "briefs";
   const selectedBriefId = searchParams.get("brief");
+  const selectedArchiveEvidenceItems = useMemo(() => {
+    if (!data || !briefArchive || !selectedBriefId) {
+      return [];
+    }
+    const selectedBrief = briefArchive.find(
+      (brief) => brief.id === selectedBriefId,
+    );
+    if (!selectedBrief) {
+      return [];
+    }
+    const claims = data.updates.flatMap((update) =>
+      update.claims.map((claim) => ({ claim, update })),
+    );
+    return selectedBrief.citationClaimIds
+      .map((claimId) =>
+        claims.find(({ claim }) => claim.id === claimId),
+      )
+      .filter((item) => item !== undefined);
+  }, [briefArchive, data, selectedBriefId]);
 
   const loadBriefArchive = useCallback(async (signal?: AbortSignal) => {
     setBriefArchiveError(null);
@@ -272,15 +369,23 @@ export function TodayPage() {
     };
   }, [loadBriefArchive, showBriefArchive]);
 
-  const briefClaims = useMemo(() => {
+  const briefEvidenceItems = useMemo(() => {
     if (!data?.brief) {
       return [];
     }
-    const claims = data.updates.flatMap((update) => update.claims);
+    const claims = data.updates.flatMap((update) =>
+      update.claims.map((claim) => ({ claim, update })),
+    );
     return data.brief.citationClaimIds
-      .map((claimId) => claims.find((claim) => claim.id === claimId))
-      .filter((claim) => claim !== undefined);
+      .map((claimId) =>
+        claims.find(({ claim }) => claim.id === claimId),
+      )
+      .filter((item) => item !== undefined);
   }, [data]);
+  const briefClaims = useMemo(
+    () => briefEvidenceItems.map(({ claim }) => claim),
+    [briefEvidenceItems],
+  );
 
   const affectedImpacts = useMemo(() => {
     if (!data?.brief) {
@@ -435,6 +540,7 @@ export function TodayPage() {
             <BriefArchiveSection
               briefs={briefArchive}
               error={briefArchiveError}
+              evidenceItems={selectedArchiveEvidenceItems}
               onRetry={() => void loadBriefArchive()}
               selectedBriefId={selectedBriefId}
             />
@@ -481,6 +587,7 @@ export function TodayPage() {
             biggestThesisChange={biggestThesisChange}
             pendingReviewTotal={pendingReviewTotal}
           />
+          <BriefEvidenceLead items={briefEvidenceItems} />
           <article className="max-w-4xl">
             <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
               <span className="size-1.5 rounded-full bg-relay-accent" />
@@ -604,6 +711,7 @@ export function TodayPage() {
             <BriefArchiveSection
               briefs={briefArchive}
               error={briefArchiveError}
+              evidenceItems={selectedArchiveEvidenceItems}
               onRetry={() => void loadBriefArchive()}
               selectedBriefId={selectedBriefId}
             />

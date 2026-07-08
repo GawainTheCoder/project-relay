@@ -33,6 +33,9 @@ export function ThesisDecisionPanel({
 }: ThesisDecisionPanelProps) {
   const [workingImpactId, setWorkingImpactId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const claimsById = new Map(
+    update.claims.map((claim) => [claim.id, claim]),
+  );
 
   const submitFeedback = async (
     impactId: string,
@@ -82,13 +85,6 @@ export function ThesisDecisionPanel({
       <section className="border-b border-relay-border p-5">
         {update.thesisImpacts.length ? (
           <div className="space-y-3">
-            <p className="text-[11px] leading-5 text-relay-muted">
-              This reviews the proposed thesis impact, not the source.
-              <span className="text-relay-text"> Material</span> keeps the
-              impact eligible for thesis updates and briefs.
-              <span className="text-relay-text"> Not material</span> excludes
-              this impact; the signal remains in the ledger.
-            </p>
             {update.thesisImpacts.map((impact) => {
               const isWorking = workingImpactId === impact.id;
               const feedback =
@@ -111,20 +107,20 @@ export function ThesisDecisionPanel({
                     </Link>
                     <SentimentBadge sentiment={impact.direction} />
                   </div>
-                  <p className="mt-3 text-xs leading-5 text-relay-muted">
-                    {impact.summary}
-                  </p>
-                  <div className="mt-3 border-l border-relay-accent/60 pl-3">
-                    <p className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
-                      Thesis delta
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-relay-text">
-                      {impact.thesisDelta}
-                    </p>
-                  </div>
                   <p className="mt-3 font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle">
                     {impact.confidence} confidence · {impact.horizon}
                   </p>
+                  <details className="mt-3 border-l border-relay-border pl-3">
+                    <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle hover:text-relay-text">
+                      Model note
+                    </summary>
+                    <p className="mt-2 line-clamp-3 text-xs leading-5 text-relay-muted">
+                      {impact.summary}
+                    </p>
+                    <p className="mt-2 text-xs leading-5 text-relay-text">
+                      {impact.thesisDelta}
+                    </p>
+                  </details>
 
                   <div className="mt-4 flex items-center gap-2">
                     <button
@@ -181,41 +177,63 @@ export function ThesisDecisionPanel({
         {update.macroThesisImpacts.length ? (
           <div className="mt-5 border-t border-relay-border pt-5">
             <h3 className="text-sm font-semibold">Macro thesis routing</h3>
-            <p className="mt-2 text-[11px] leading-5 text-relay-muted">
-              These are evidence-routing decisions, not accepted thesis
-              changes. Evaluate theses creates reviewable proposals; only
-              accepting a proposal updates a thesis.
-            </p>
             <div className="mt-3 space-y-3">
-              {update.macroThesisImpacts.map((impact) => (
-                <article
-                  className="rounded-md border border-relay-border bg-relay-surface p-3"
-                  key={impact.id}
-                >
-                  <Link
-                    className="text-xs font-semibold leading-5 text-relay-text hover:text-relay-accent"
-                    to={`/theses/${impact.thesisId}`}
+              {update.macroThesisImpacts.map((impact) => {
+                const citedClaims = impact.claimIds
+                  .map((claimId) => claimsById.get(claimId))
+                  .filter((claim) => claim !== undefined);
+                return (
+                  <article
+                    className="rounded-md border border-relay-border bg-relay-surface p-3"
+                    key={impact.id}
                   >
-                    {macroThesisTitles[impact.thesisId] ??
-                      impact.thesisId}
-                  </Link>
-                  <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-[0.07em]">
-                    <span
-                      className={`rounded border px-1.5 py-0.5 ${macroRelevanceClassName(
-                        impact.relevance,
-                      )}`}
+                    <Link
+                      className="text-xs font-semibold leading-5 text-relay-text hover:text-relay-accent"
+                      to={`/theses/${impact.thesisId}`}
                     >
-                      {impact.relevance}
-                    </span>
-                    <span className="text-relay-subtle">
-                      {impact.stance}
-                    </span>
-                  </div>
-                  <p className="mt-2 text-xs leading-5 text-relay-muted">
-                    {impact.rationale}
-                  </p>
-                </article>
-              ))}
+                      {macroThesisTitles[impact.thesisId] ??
+                        impact.thesisId}
+                    </Link>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-[0.07em]">
+                      <span
+                        className={`rounded border px-1.5 py-0.5 ${macroRelevanceClassName(
+                          impact.relevance,
+                        )}`}
+                      >
+                        {impact.relevance}
+                      </span>
+                      <span className="text-relay-subtle">
+                        {impact.stance}
+                      </span>
+                    </div>
+                    {citedClaims.length ? (
+                      <ol className="mt-3 space-y-2">
+                        {citedClaims.map((claim) => (
+                          <li
+                            className="border-l border-relay-accent/50 pl-2 text-xs leading-5 text-relay-text"
+                            key={claim.id}
+                          >
+                            <span className="font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
+                              {claim.locator}
+                            </span>
+                            <span className="mt-1 line-clamp-2 block">
+                              “{claim.quote}”
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : null}
+                    <details className="mt-3 border-l border-relay-border pl-3">
+                      <summary className="cursor-pointer font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle hover:text-relay-text">
+                        Model rationale
+                      </summary>
+                      <p className="mt-2 line-clamp-4 text-xs leading-5 text-relay-muted">
+                        {impact.rationale}
+                      </p>
+                    </details>
+                  </article>
+                );
+              })}
             </div>
           </div>
         ) : null}

@@ -191,7 +191,22 @@ describe("analyzeDocument", () => {
           relay_update_id: "update_1",
           relay_watchlist_count: "2",
         }),
+        instructions: expect.stringContaining("Lead with source facts"),
         input: expect.stringContaining('"watchlistCompanies"'),
+      }),
+    );
+    expect(client.responses.parse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: expect.stringContaining(
+          "Keep generated prose terse",
+        ),
+      }),
+    );
+    expect(client.responses.parse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        instructions: expect.stringContaining(
+          "Do not introduce numbers, dates, names",
+        ),
       }),
     );
   });

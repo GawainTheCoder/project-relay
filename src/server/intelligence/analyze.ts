@@ -102,9 +102,18 @@ signals.
 Rules:
 - groundedSummary states what the source actually reports or argues.
 - inference contains why it may matter, beneficiaries, threats, and what to watch.
+  Keep generated prose terse: one sentence for groundedSummary, inference,
+  materialityReason, thesisImpact.summary, thesisImpact.thesisDelta, and
+  macroThesisDisposition.rationale; use short phrases for beneficiaries,
+  threatened entities, and watchNext.
+- Lead with source facts. Claims should capture the concrete numbers, dates,
+  named entities, product names, capacity figures, customer references, and
+  exact wording that make the source decision-relevant.
 - Every claim quote must be copied verbatim from exactly one supplied paragraph.
 - Every claim locator must be the matching paragraph label, such as P3.
 - Do not use a headline as evidence unless the same words appear in a paragraph.
+- Do not introduce numbers, dates, names, causal claims, or market facts in
+  generated fields unless they are present in the extracted claim quotes.
 - A thesis impact is a proposed interpretation, never an automatic thesis edit.
 - Compare the source independently with the supplied company theses, macro
   theses, and recent signals. Do not require a company impact before routing
@@ -442,12 +451,14 @@ The previous structured result failed Relay's strict evidence validation:
 ${validationFeedback}
 
 Return a complete corrected analysis. Copy every claim quote verbatim from one
-source paragraph, keep its exact paragraph locator, and make every relevant
-macro-thesis disposition cite only zero-based indexes into the claims array in
-this response. Index 0 means the first claim, index 1 means the second claim,
-and so on. Every primary, secondary, or context route needs at least one valid
-index; only not-relevant routes use an empty array. Do not weaken, omit,
-paraphrase, or fabricate evidence to satisfy validation.`;
+source paragraph, keep its exact paragraph locator, preserve exact numbers,
+dates, entities, and product names from the source paragraphs, and make every
+relevant macro-thesis disposition cite only zero-based indexes into the claims
+array in this response. Index 0 means the first claim, index 1 means the second
+claim, and so on. Every primary, secondary, or context route needs at least one
+valid index; only not-relevant routes use an empty array. Do not replace missing
+evidence with rationale, and do not weaken, omit, paraphrase, or fabricate
+evidence to satisfy validation.`;
 }
 
 interface BuiltEvidenceClaims {

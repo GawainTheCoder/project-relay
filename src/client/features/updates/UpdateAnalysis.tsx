@@ -41,6 +41,48 @@ function AnalysisSection({
   );
 }
 
+function SourceEvidenceSection({
+  claims,
+  onCitationSelect,
+}: {
+  claims: IntelligenceUpdate["claims"];
+  onCitationSelect: (claimId: string) => void;
+}) {
+  return (
+    <AnalysisSection title="Source evidence">
+      {claims.length ? (
+        <ol className="space-y-3">
+          {claims.map((claim, index) => (
+            <li key={claim.id}>
+              <button
+                className="group flex w-full items-start gap-3 border border-relay-border bg-relay-surface px-3 py-3 text-left transition-colors hover:border-relay-accent/60"
+                onClick={() => onCitationSelect(claim.id)}
+                type="button"
+              >
+                <span className="shrink-0 font-mono text-[10px] text-relay-accent">
+                  [{index + 1}]
+                </span>
+                <span>
+                  <span className="block text-sm leading-6 text-relay-text">
+                    “{claim.quote}”
+                  </span>
+                  <span className="mt-1 block font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle">
+                    {claim.locator}
+                  </span>
+                </span>
+              </button>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="text-relay-muted">
+          No exact source quotes are attached.
+        </p>
+      )}
+    </AnalysisSection>
+  );
+}
+
 export function UpdateAnalysis({
   onCitationSelect,
   onDeleteRequest,
@@ -139,9 +181,6 @@ export function UpdateAnalysis({
             Affected: {update.companyTickers.join(", ")}
           </p>
         ) : null}
-        <p className="mt-4 max-w-3xl border-l border-relay-border-strong pl-3 text-xs leading-5 text-relay-muted">
-          {update.materialityReason}
-        </p>
         <div className="mt-4 flex max-w-3xl flex-wrap items-center gap-x-3 gap-y-2">
           <button
             className="inline-flex items-center gap-2 rounded-md border border-relay-border-strong px-3 py-2 text-xs font-medium text-relay-muted transition-colors hover:border-relay-accent/60 hover:text-relay-text disabled:cursor-not-allowed disabled:opacity-60"
@@ -181,92 +220,80 @@ export function UpdateAnalysis({
       </header>
 
       <div className="mx-auto max-w-3xl px-5 sm:px-7 lg:px-8">
-        <AnalysisSection title="What happened">
-          <p>{update.whatHappened}</p>
-        </AnalysisSection>
+        <SourceEvidenceSection
+          claims={update.claims}
+          onCitationSelect={onCitationSelect}
+        />
 
-        <AnalysisSection title="Why it matters">
-          <p>{update.whyItMatters}</p>
-        </AnalysisSection>
+        <details className="border-b border-relay-border py-6">
+          <summary className="cursor-pointer text-lg font-semibold tracking-tight text-relay-muted marker:text-relay-subtle hover:text-relay-text">
+            Model readout
+          </summary>
+          <div className="mt-3 border-l border-relay-border pl-4">
+            <AnalysisSection title="What happened">
+              <p>{update.whatHappened}</p>
+            </AnalysisSection>
 
-        <AnalysisSection title="Who benefits">
-          {update.beneficiaries.length ? (
-            <ul className="space-y-2">
-              {update.beneficiaries.map((beneficiary) => (
-                <li className="flex gap-3" key={beneficiary}>
-                  <span className="mt-[11px] size-1 shrink-0 rounded-full bg-relay-positive" />
-                  <span>{beneficiary}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-relay-muted">No clear beneficiary identified.</p>
-          )}
-        </AnalysisSection>
+            <AnalysisSection title="Why it matters">
+              <p>{update.whyItMatters}</p>
+            </AnalysisSection>
 
-        <AnalysisSection title="Who is threatened">
-          {update.threatened.length ? (
-            <ul className="space-y-2">
-              {update.threatened.map((threat) => (
-                <li className="flex gap-3" key={threat}>
-                  <span className="mt-[11px] size-1 shrink-0 rounded-full bg-relay-negative" />
-                  <span>{threat}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-relay-muted">No direct threat identified.</p>
-          )}
-        </AnalysisSection>
+            <AnalysisSection title="Routing note">
+              <p>{update.materialityReason}</p>
+            </AnalysisSection>
 
-        <AnalysisSection title="What to watch next">
-          {update.watchNext.length ? (
-            <ul className="space-y-2">
-              {update.watchNext.map((item) => (
-                <li className="flex gap-3" key={item}>
-                  <span className="mt-[11px] size-1 shrink-0 rounded-full bg-relay-accent" />
-                  <span>{item}</span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="text-relay-muted">
-              No follow-up metric has been assigned.
-            </p>
-          )}
-        </AnalysisSection>
+            <AnalysisSection title="Who benefits">
+              {update.beneficiaries.length ? (
+                <ul className="space-y-2">
+                  {update.beneficiaries.map((beneficiary) => (
+                    <li className="flex gap-3" key={beneficiary}>
+                      <span className="mt-[11px] size-1 shrink-0 rounded-full bg-relay-positive" />
+                      <span>{beneficiary}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-relay-muted">
+                  No clear beneficiary identified.
+                </p>
+              )}
+            </AnalysisSection>
 
-        <AnalysisSection title="Source evidence">
-          {update.claims.length ? (
-            <ol className="space-y-3">
-              {update.claims.map((claim, index) => (
-                <li key={claim.id}>
-                  <button
-                    className="group flex w-full items-start gap-3 rounded-md border border-relay-border bg-relay-surface px-3 py-3 text-left transition-colors hover:border-relay-accent/60"
-                    onClick={() => onCitationSelect(claim.id)}
-                    type="button"
-                  >
-                    <span className="shrink-0 font-mono text-[10px] text-relay-accent">
-                      [{index + 1}]
-                    </span>
-                    <span>
-                      <span className="block text-sm leading-6 text-relay-text">
-                        “{claim.quote}”
-                      </span>
-                      <span className="mt-1 block font-mono text-[9px] uppercase tracking-[0.06em] text-relay-subtle">
-                        {claim.locator}
-                      </span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <p className="text-relay-muted">
-              No exact source quotes are attached.
-            </p>
-          )}
-        </AnalysisSection>
+            <AnalysisSection title="Who is threatened">
+              {update.threatened.length ? (
+                <ul className="space-y-2">
+                  {update.threatened.map((threat) => (
+                    <li className="flex gap-3" key={threat}>
+                      <span className="mt-[11px] size-1 shrink-0 rounded-full bg-relay-negative" />
+                      <span>{threat}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-relay-muted">
+                  No direct threat identified.
+                </p>
+              )}
+            </AnalysisSection>
+
+            <AnalysisSection title="What to watch next">
+              {update.watchNext.length ? (
+                <ul className="space-y-2">
+                  {update.watchNext.map((item) => (
+                    <li className="flex gap-3" key={item}>
+                      <span className="mt-[11px] size-1 shrink-0 rounded-full bg-relay-accent" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-relay-muted">
+                  No follow-up metric has been assigned.
+                </p>
+              )}
+            </AnalysisSection>
+          </div>
+        </details>
       </div>
 
       <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-relay-border px-5 py-3 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle sm:px-7 lg:px-8">

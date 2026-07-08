@@ -63,4 +63,36 @@ describe("ThesisDecisionPanel", () => {
     expect(markup).toContain('href="/theses/company-nvda"');
     expect(markup).not.toContain('href="/theses/NVDA"');
   });
+
+  it("shows macro route citations before model rationale", () => {
+    const markup = renderToStaticMarkup(
+      <MemoryRouter>
+        <ThesisDecisionPanel
+          macroThesisTitles={{ "macro-1": "Custom silicon pressure" }}
+          onReview={async () => undefined}
+          selectedClaimId={null}
+          update={{
+            ...update,
+            macroThesisImpacts: [
+              {
+                id: "macro-impact-1",
+                thesisId: "macro-1",
+                relevance: "primary",
+                stance: "supports",
+                rationale:
+                  "The model thinks this directly supports the custom silicon thesis.",
+                claimIds: ["claim-1"],
+              },
+            ],
+          }}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(markup).toContain("Platform attach rates increased during the quarter.");
+    expect(markup).toContain("Model rationale");
+    expect(markup.indexOf("Platform attach rates")).toBeLessThan(
+      markup.indexOf("Model rationale"),
+    );
+  });
 });

@@ -92,7 +92,7 @@ export function BriefsPage() {
               <li key={brief.id}>
                 <Link
                   className="group grid gap-4 py-6 sm:grid-cols-[150px_minmax(0,1fr)_auto] sm:items-start"
-                  to={`/briefs/${encodeURIComponent(brief.id)}`}
+                  to={`/?archive=briefs&brief=${encodeURIComponent(brief.id)}`}
                 >
                   <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
                     <CalendarDays aria-hidden="true" className="size-3.5" />
@@ -106,17 +106,18 @@ export function BriefsPage() {
                     <h2 className="text-base font-semibold tracking-tight group-hover:text-relay-accent">
                       {brief.title}
                     </h2>
-                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-relay-muted">
-                      {brief.signal}
-                    </p>
                     <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[9px] uppercase tracking-[0.08em] text-relay-subtle">
                       <span>
                         {brief.updateIds.length} signal
                         {brief.updateIds.length === 1 ? "" : "s"}
                       </span>
+                      <span>{brief.citationClaimIds.length} citations</span>
                       <span>Generated {formatRelativeTime(brief.generatedAt)}</span>
                       <span>{brief.model ?? "Local conclusion"}</span>
                     </div>
+                    <p className="mt-2 line-clamp-2 text-sm leading-6 text-relay-muted">
+                      {brief.signal}
+                    </p>
                   </div>
                   <ArrowRight
                     aria-hidden="true"

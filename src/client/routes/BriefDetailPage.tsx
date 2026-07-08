@@ -1,6 +1,5 @@
 import {
   ArrowRight,
-  BookOpen,
   CalendarDays,
   ChevronLeft,
   Quote,
@@ -114,7 +113,7 @@ export function BriefDetailPage() {
           </div>
           <Link
             className="inline-flex items-center gap-1.5 text-sm text-relay-muted hover:text-relay-accent"
-            to="/briefs"
+            to="/?archive=briefs"
           >
             <ChevronLeft aria-hidden="true" className="size-4" />
             All briefs
@@ -126,28 +125,49 @@ export function BriefDetailPage() {
         <article className="max-w-4xl">
           <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-accent">
             <span className="size-1.5 rounded-full bg-relay-accent" />
-            Daily conclusion
+            Cited evidence
           </div>
-          <h1 className="mt-4 max-w-3xl text-3xl font-semibold leading-[1.15] tracking-[-0.025em] sm:text-4xl">
-            {brief.title}
-          </h1>
-          <p className="mt-5 max-w-3xl text-base leading-8 text-relay-muted sm:text-lg">
-            {brief.signal}
-          </p>
+          {claims.length ? (
+            <ol className="mt-4 divide-y divide-relay-border border-y border-relay-border">
+              {claims.map(({ claim, update }, index) => (
+                <li className="py-5" key={claim.id}>
+                  <blockquote className="text-sm leading-7 text-relay-text">
+                    “{claim.quote}”
+                  </blockquote>
+                  <Link
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
+                    to={`/signals?update=${encodeURIComponent(update.id)}`}
+                  >
+                    [{index + 1}] {update.publisher} · {claim.locator}
+                    <ArrowRight aria-hidden="true" className="size-3" />
+                  </Link>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="mt-4 border-y border-relay-border py-7 text-sm text-relay-muted">
+              This brief contains no stored evidence citations.
+            </p>
+          )}
 
-          <section className="mt-8 border-y border-relay-border py-7">
-            <div className="flex items-start gap-4">
-              <BookOpen
-                aria-hidden="true"
-                className="mt-1 size-5 shrink-0 text-relay-subtle"
-              />
-              <div>
-                <h2 className="text-sm font-semibold">Analyst synthesis</h2>
-                <p className="mt-3 max-w-3xl text-[15px] leading-7 text-relay-text/90">
-                  {brief.summary}
-                </p>
-              </div>
-            </div>
+          <section className="mt-8">
+            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+              Generated readout
+            </p>
+            <h1 className="mt-4 max-w-3xl text-3xl font-semibold leading-[1.15] tracking-[-0.025em] sm:text-4xl">
+              {brief.title}
+            </h1>
+            <p className="mt-5 max-w-3xl text-base leading-8 text-relay-muted sm:text-lg">
+              {brief.signal}
+            </p>
+            <details className="mt-6 border-y border-relay-border py-5">
+              <summary className="cursor-pointer text-sm font-semibold text-relay-muted hover:text-relay-text">
+                Analyst synthesis
+              </summary>
+              <p className="mt-3 max-w-3xl text-[15px] leading-7 text-relay-text/90">
+                {brief.summary}
+              </p>
+            </details>
           </section>
 
           {primaryUpdate ? (
@@ -221,41 +241,10 @@ export function BriefDetailPage() {
             </section>
           ) : null}
 
-          <section className="mt-11">
-            <div className="flex items-center justify-between border-b border-relay-border pb-3">
-              <div>
-                <h2 className="text-lg font-semibold tracking-tight">
-                  Supporting evidence
-                </h2>
-                <p className="mt-1 text-sm text-relay-muted">
-                  Evidence cited when this brief was generated.
-                </p>
-              </div>
-              <Quote aria-hidden="true" className="size-4 text-relay-subtle" />
-            </div>
-            {claims.length ? (
-              <ol className="divide-y divide-relay-border">
-                {claims.map(({ claim, update }, index) => (
-                  <li className="py-5" key={claim.id}>
-                    <blockquote className="text-sm leading-7 text-relay-text">
-                      “{claim.quote}”
-                    </blockquote>
-                    <Link
-                      className="mt-2 inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
-                      to={`/signals?update=${encodeURIComponent(update.id)}`}
-                    >
-                      [{index + 1}] {update.publisher} · {update.title}
-                      <ArrowRight aria-hidden="true" className="size-3" />
-                    </Link>
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="border-b border-relay-border py-7 text-sm text-relay-muted">
-                This brief contains no stored evidence citations.
-              </p>
-            )}
-          </section>
+          <footer className="mt-11 flex items-center gap-2 border-t border-relay-border pt-4 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
+            <Quote aria-hidden="true" className="size-3.5" />
+            {claims.length} cited quote{claims.length === 1 ? "" : "s"}
+          </footer>
         </article>
       </main>
     </div>

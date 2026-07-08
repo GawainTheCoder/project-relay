@@ -56,4 +56,37 @@ describe("UpdateAnalysis source lineage", () => {
     expect(markup).toContain("Reuters, Bloomberg");
     expect(markup).toContain("counts them once");
   });
+
+  it("renders source quotes before generated model prose", () => {
+    const markup = renderToStaticMarkup(
+      <UpdateAnalysis
+        onCitationSelect={() => undefined}
+        onDeleteRequest={() => undefined}
+        onOpenInspector={() => undefined}
+        onReevaluationRequest={() => undefined}
+        reevaluationMessage={null}
+        reevaluationState="idle"
+        update={{
+          ...update,
+          claims: [
+            {
+              id: "claim-capex",
+              quote: "Meta said capital expenditures would rise in 2026.",
+              sourceId: "source-1",
+              locator: "P4",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Source evidence");
+    expect(markup).toContain("Meta said capital expenditures would rise in 2026.");
+    expect(markup.indexOf("Source evidence")).toBeLessThan(
+      markup.indexOf("Model readout"),
+    );
+    expect(markup.indexOf("Meta said capital expenditures")).toBeLessThan(
+      markup.indexOf("Meta raised its AI infrastructure"),
+    );
+  });
 });
