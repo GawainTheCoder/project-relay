@@ -19,6 +19,7 @@ import {
   importSourceInputSchema,
   researchSourceInputSchema,
   resourceIdSchema,
+  reviewListQuerySchema,
   searchQuerySchema,
   sourceProfileInputSchema,
   thesisEvaluationReviewInputSchema,
@@ -226,6 +227,45 @@ export function createApp(options: CreateAppOptions = {}): Hono {
     });
   });
 
+  application.get("/api/portfolio", (context) => {
+    return context.json(getRepository().getPortfolio());
+  });
+
+  application.get("/api/reviews", (context) => {
+    const parsedQuery = reviewListQuerySchema.safeParse({
+      status: context.req.query("status") ?? undefined,
+      limit: context.req.query("limit") ?? undefined,
+    });
+    if (!parsedQuery.success) {
+      return jsonError(
+        context,
+        400,
+        "VALIDATION_ERROR",
+        "The review list query is invalid.",
+        validationDetails(parsedQuery.error),
+      );
+    }
+    const reviews = getRepository().listThesisReviews({
+      limit: parsedQuery.data.limit,
+      ...(parsedQuery.data.status !== "all"
+        ? { reviewStatus: parsedQuery.data.status }
+        : {}),
+    });
+    return context.json({
+      reviews,
+      actionable: reviews.filter(
+        (review) =>
+          review.evaluation.reviewStatus === "pending" ||
+          review.evaluation.reviewStatus === "deferred",
+      ),
+      history: reviews.filter(
+        (review) =>
+          review.evaluation.reviewStatus === "accepted" ||
+          review.evaluation.reviewStatus === "rejected",
+      ),
+    });
+  });
+
   application.get("/api/theses", (context) => {
     const parsedQuery = thesisListQuerySchema.safeParse({
       kind: context.req.query("kind") ?? undefined,
@@ -343,6 +383,15 @@ export function createApp(options: CreateAppOptions = {}): Hono {
               decision: parsedBody.data.decision,
               ...(parsedBody.data.note
                 ? { note: parsedBody.data.note }
+                : {}),
+              ...(parsedBody.data.nextReviewOn
+                ? { nextReviewOn: parsedBody.data.nextReviewOn }
+                : {}),
+              ...(parsedBody.data.portfolioDecisions
+                ? {
+                    portfolioDecisions:
+                      parsedBody.data.portfolioDecisions,
+                  }
                 : {}),
             },
           ),

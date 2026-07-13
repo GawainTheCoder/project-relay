@@ -4,6 +4,7 @@ import {
   impactReviewDecisions,
   impactReviewReasonTags,
   layerIds,
+  portfolioDecisionActions,
   thesisEvaluationReviewStatuses,
   thesisKinds,
   thesisStatuses,
@@ -171,6 +172,41 @@ export const thesisEvaluationReviewInputSchema = z
       ) as ["accepted", "rejected", "deferred"],
     ),
     note: z.string().trim().max(2_000).optional(),
+    nextReviewOn: z.iso.date().optional(),
+    portfolioDecisions: z
+      .array(
+        z
+          .object({
+            portfolioItemId: resourceIdSchema,
+            action: z.enum(portfolioDecisionActions),
+            rationale: z.string().trim().min(1).max(2_000),
+          })
+          .strict(),
+      )
+      .max(20)
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.decision === "accepted" ||
+      (value.portfolioDecisions?.length ?? 0) === 0,
+    {
+      message:
+        "Portfolio decisions can be recorded only for an accepted thesis review.",
+      path: ["portfolioDecisions"],
+    },
+  );
+
+export const reviewListQuerySchema = z
+  .object({
+    status: z
+      .union([
+        z.enum(thesisEvaluationReviewStatuses),
+        z.literal("all"),
+      ])
+      .default("all"),
+    limit: z.coerce.number().int().min(1).max(100).default(100),
   })
   .strict();
 

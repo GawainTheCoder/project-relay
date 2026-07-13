@@ -52,9 +52,9 @@ describe("RelayRepository", () => {
     const companyTheses = repository.listTheses({ kind: "company" });
     const macroTheses = repository.listTheses({ kind: "macro" });
 
-    expect(theses).toHaveLength(19);
+    expect(theses).toHaveLength(20);
     expect(companyTheses).toHaveLength(13);
-    expect(macroTheses).toHaveLength(6);
+    expect(macroTheses).toHaveLength(7);
     expect(repository.getThesis("company-nvda")).toMatchObject({
       kind: "company",
       companyTickers: ["NVDA"],
@@ -70,6 +70,55 @@ describe("RelayRepository", () => {
         version: 1,
         confidenceScore: 70,
       },
+    });
+  });
+
+  it("seeds an illustrative portfolio and reveals overlapping macro exposure", () => {
+    const portfolio = repository.getPortfolio();
+
+    expect(portfolio).toMatchObject({
+      allocationBasis: "illustrative-seed",
+      holdings: [
+        expect.objectContaining({ name: "SpaceX", allocationPercent: 35 }),
+        expect.objectContaining({ symbol: "VOO", allocationPercent: 30 }),
+        expect.objectContaining({ symbol: "SMH", allocationPercent: 20 }),
+        expect.objectContaining({ symbol: "TSM", allocationPercent: 15 }),
+      ],
+    });
+    expect(portfolio.watchlist.map((item) => item.symbol)).toEqual([
+      "AMD",
+      "AVGO",
+      "ETN",
+      "GEV",
+      "MU",
+      "NVDA",
+      "000660.KS",
+      "VRT",
+    ]);
+    expect(portfolio.overlaps).toContainEqual(
+      expect.objectContaining({
+        leftPortfolioItemId: "portfolio-smh",
+        rightPortfolioItemId: "portfolio-tsm",
+        sharedTheses: expect.arrayContaining([
+          expect.objectContaining({ thesisId: "macro-memory-bottleneck" }),
+          expect.objectContaining({ thesisId: "macro-networking-bottleneck" }),
+          expect.objectContaining({ thesisId: "macro-custom-silicon" }),
+        ]),
+      }),
+    );
+    expect(repository.getThesis("macro-memory-bottleneck")).toMatchObject({
+      momentum: "unchanged",
+      nextReviewOn: null,
+      bottlenecks: expect.arrayContaining([
+        expect.objectContaining({ key: "hbm-supply" }),
+      ]),
+      captureMechanisms: expect.arrayContaining([
+        expect.objectContaining({ companyTicker: "MU" }),
+      ]),
+      portfolioExposures: expect.arrayContaining([
+        expect.objectContaining({ portfolioItemId: "portfolio-smh" }),
+        expect.objectContaining({ portfolioItemId: "portfolio-tsm" }),
+      ]),
     });
   });
 
@@ -431,6 +480,98 @@ describe("RelayRepository", () => {
         linkedByEvaluationId: pending.id,
       }),
     ]);
+  });
+
+  it("records thesis-linked portfolio decisions and preserves versioned structure", () => {
+    const thesis = repository.getThesis("macro-memory-bottleneck");
+    if (!thesis) {
+      throw new Error("Seed macro thesis missing");
+    }
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-memory-portfolio-decision",
+        thesisId: thesis.id,
+        proposedConfidenceScore: thesis.currentVersion.confidenceScore + 2,
+        signalIds: ["mu-hbm4-ramp"],
+        evidence: [
+          {
+            claimId: "claim-mu-hbm",
+            stance: "supports",
+            rationale: "The cited HBM production milestone supports the constraint.",
+          },
+        ],
+      }),
+    );
+
+    expect(() =>
+      repository.reviewThesisEvaluation(evaluation.id, {
+        decision: "accepted",
+        portfolioDecisions: [
+          {
+            portfolioItemId: "portfolio-spacex",
+            action: "hold",
+            rationale: "This unrelated holding must be rejected.",
+          },
+        ],
+      }),
+    ).toThrow(
+      "Portfolio item portfolio-spacex is not exposed to thesis macro-memory-bottleneck.",
+    );
+
+    const accepted = repository.reviewThesisEvaluation(evaluation.id, {
+      decision: "accepted",
+      nextReviewOn: "2026-08-15",
+      portfolioDecisions: [
+        {
+          portfolioItemId: "portfolio-smh",
+          action: "hold",
+          rationale: "The diversified basket still captures HBM scarcity.",
+        },
+        {
+          portfolioItemId: "portfolio-tsm",
+          action: "add",
+          rationale: "Advanced packaging remains on the memory critical path.",
+        },
+      ],
+    });
+    const updatedThesis = repository.getThesis(thesis.id);
+
+    expect(accepted).toMatchObject({
+      reviewStatus: "accepted",
+      nextReviewOn: "2026-08-15",
+      portfolioDecisions: [
+        expect.objectContaining({
+          portfolioItemId: "portfolio-smh",
+          action: "hold",
+        }),
+        expect.objectContaining({
+          portfolioItemId: "portfolio-tsm",
+          action: "add",
+        }),
+      ],
+    });
+    expect(updatedThesis).toMatchObject({
+      momentum: "strengthening",
+      nextReviewOn: "2026-08-15",
+      bottlenecks: thesis.bottlenecks,
+      captureMechanisms: thesis.captureMechanisms,
+    });
+    expect(
+      repository.getPortfolio().holdings.find(
+        (item) => item.id === "portfolio-tsm",
+      )?.latestDecision,
+    ).toMatchObject({ action: "add", evaluationId: evaluation.id });
+    expect(repository.listThesisReviews()).toContainEqual(
+      expect.objectContaining({
+        thesisTitle: thesis.title,
+        momentum: "strengthening",
+        whatChanged: evaluation.summary,
+        affectedPortfolioItems: expect.arrayContaining([
+          expect.objectContaining({ id: "portfolio-smh" }),
+          expect.objectContaining({ id: "portfolio-tsm" }),
+        ]),
+      }),
+    );
   });
 
   it("preserves accepted unchanged evaluations without creating a thesis version", () => {
@@ -914,8 +1055,65 @@ describe("RelayRepository", () => {
       expect(dashboard.updates).toEqual([]);
       expect(dashboard.brief).toBeNull();
       expect(dashboard.demoData).toBe(false);
+      expect(cleanRepository.listThesisReviews()).toEqual([]);
     } finally {
       cleanRepository.close();
+    }
+  });
+
+  it("seeds an actionable review and accepted decision history in demo mode", () => {
+    const demoRepository = createRelayRepository(":memory:", {
+      demoData: true,
+    });
+    try {
+      const reviews = demoRepository.listThesisReviews();
+      const pending = reviews.find(
+        (review) => review.evaluation.id === "demo-review-custom-silicon",
+      );
+      const accepted = reviews.filter(
+        (review) => review.evaluation.reviewStatus === "accepted",
+      );
+
+      expect(reviews).toHaveLength(3);
+      expect(pending).toMatchObject({
+        momentum: "strengthening",
+        evaluation: {
+          reviewStatus: "pending",
+          evidence: [
+            expect.objectContaining({ claimId: "claim-avgo-ai" }),
+          ],
+          portfolioDecisions: [],
+        },
+        affectedPortfolioItems: expect.arrayContaining([
+          expect.objectContaining({ id: "portfolio-smh" }),
+          expect.objectContaining({ id: "portfolio-tsm" }),
+        ]),
+      });
+      expect(accepted).toHaveLength(2);
+      expect(accepted).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            evaluation: expect.objectContaining({
+              id: "demo-review-memory-bottleneck",
+              nextReviewOn: "2026-08-15",
+              portfolioDecisions: expect.arrayContaining([
+                expect.objectContaining({ action: "add" }),
+              ]),
+            }),
+          }),
+          expect.objectContaining({
+            evaluation: expect.objectContaining({
+              id: "demo-review-power-cooling",
+              nextReviewOn: "2026-08-20",
+              portfolioDecisions: expect.arrayContaining([
+                expect.objectContaining({ action: "buy" }),
+              ]),
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      demoRepository.close();
     }
   });
 
@@ -1058,6 +1256,16 @@ describe("RelayRepository", () => {
       ]);
       expect(dashboard.demoData).toBe(false);
       expect(dashboard.brief).toBeNull();
+      expect(fileRepository.listThesisReviews()).toEqual([]);
+      expect(
+        fileRepository.getPortfolio().items.every(
+          (item) => item.latestDecision === null,
+        ),
+      ).toBe(true);
+      expect(
+        fileRepository.getThesis("macro-memory-bottleneck")?.currentVersion
+          .confidenceScore,
+      ).toBe(75);
       expect(
         fileRepository.database
           .prepare(
