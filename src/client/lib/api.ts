@@ -3,16 +3,24 @@ import type {
   CompanyInput,
   DashboardPayload,
   DailyBrief,
+  FailedSourceDocument as SharedFailedSourceDocument,
+  FailedSourceDocumentRecoveryInput,
   ImpactReview,
   ImpactReviewInput,
   ImportSourceInput,
   IntelligenceUpdate,
+  PortfolioReadModel,
   ResearchSource,
   ResearchSourceInput,
+  ReviewsReadModel,
   SearchResult,
   SourceProfileInput,
   SourceRefreshResult,
   Thesis,
+  ThesisBottleneck,
+  ThesisMomentum,
+  CompanyCaptureMechanism,
+  PortfolioThesisExposure,
   ThesisEvaluation,
   ThesisEvaluationRequeueResult,
   ThesisEvaluationReviewInput,
@@ -53,6 +61,17 @@ export interface BeliefEvaluation {
   createdAt: string;
 }
 
+export interface BeliefRoutedSignal {
+  updateId: string;
+  title: string;
+  publisher: string;
+  publishedAt: string;
+  relevance: Thesis["routedSignals"][number]["relevance"];
+  materiality: Thesis["routedSignals"][number]["materiality"];
+  rationale: string;
+  evaluationState: Thesis["routedSignals"][number]["evaluationState"];
+}
+
 export interface BeliefVersion {
   id: string;
   version: number;
@@ -69,11 +88,18 @@ export interface BeliefSummary {
   statement: string;
   confidence: number;
   companyTicker: string | null;
+  companyTickers: string[];
   layerIds: string[];
   updatedAt: string;
   supportingEvidenceCount: number;
   opposingEvidenceCount: number;
   pendingEvaluationCount: number;
+  awaitingEvaluationCount: number;
+  momentum: ThesisMomentum;
+  nextReviewOn: string | null;
+  bottlenecks: ThesisBottleneck[];
+  captureMechanisms: CompanyCaptureMechanism[];
+  portfolioExposures: PortfolioThesisExposure[];
 }
 
 export interface BeliefDetail extends BeliefSummary {
@@ -85,6 +111,7 @@ export interface BeliefDetail extends BeliefSummary {
   supportingEvidence: BeliefEvidence[];
   opposingEvidence: BeliefEvidence[];
   contextualEvidence: BeliefEvidence[];
+  routedSignals: BeliefRoutedSignal[];
   pendingEvaluations: BeliefEvaluation[];
   versions: BeliefVersion[];
 }
@@ -153,12 +180,33 @@ export function getDashboard(signal?: AbortSignal) {
   });
 }
 
+export function getPortfolio(signal?: AbortSignal): Promise<PortfolioReadModel> {
+  return requestJson<PortfolioReadModel>("/api/portfolio", {
+    ...(signal ? { signal } : {}),
+  });
+}
+
+export function getReviews(signal?: AbortSignal): Promise<ReviewsReadModel> {
+  return requestJson<ReviewsReadModel>("/api/reviews?status=all&limit=100", {
+    ...(signal ? { signal } : {}),
+  });
+}
+
 export interface ImportSourceResult {
   documentId: string;
   duplicate: boolean;
   status: string;
   update?: IntelligenceUpdate;
 }
+
+export type FailedSourceDocument = SharedFailedSourceDocument;
+
+export interface FailedSourceDocumentsResult {
+  documents: FailedSourceDocument[];
+}
+
+export type RetryFailedSourceDocumentInput =
+  FailedSourceDocumentRecoveryInput;
 
 export function importSource(
   input: ImportSourceInput,
@@ -167,6 +215,30 @@ export function importSource(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function getFailedSourceDocuments(
+  signal?: AbortSignal,
+): Promise<FailedSourceDocumentsResult> {
+  return requestJson<FailedSourceDocumentsResult>(
+    "/api/source-documents/failed",
+    {
+      ...(signal ? { signal } : {}),
+    },
+  );
+}
+
+export function retryFailedSourceDocument(
+  documentId: string,
+  input: RetryFailedSourceDocumentInput = {},
+): Promise<ImportSourceResult> {
+  return requestJson<ImportSourceResult>(
+    `/api/source-documents/${encodeURIComponent(documentId)}/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+  );
 }
 
 export interface SearchResponse {
@@ -355,6 +427,7 @@ export function getBelief(
 }
 
 function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
+  const routedSignals = thesis.routedSignals ?? [];
   return {
     id: thesis.id,
     kind: thesis.kind,
@@ -365,6 +438,7 @@ function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
       thesis.kind === "company"
         ? (thesis.companyTickers[0] ?? null)
         : null,
+    companyTickers: thesis.companyTickers,
     layerIds: thesis.layerIds,
     updatedAt: thesis.updatedAt,
     supportingEvidenceCount: thesis.evidence.filter(
@@ -376,10 +450,21 @@ function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
     pendingEvaluationCount: thesis.evaluations.filter(
       (evaluation) => evaluation.reviewStatus === "pending",
     ).length,
+    awaitingEvaluationCount:
+      thesis.awaitingEvaluationCount ??
+      routedSignals.filter(
+        (signal) => signal.evaluationState === "awaiting-evaluation",
+      ).length,
+    momentum: thesis.momentum,
+    nextReviewOn: thesis.nextReviewOn,
+    bottlenecks: thesis.bottlenecks,
+    captureMechanisms: thesis.captureMechanisms,
+    portfolioExposures: thesis.portfolioExposures,
   };
 }
 
 function thesisToBeliefDetail(thesis: Thesis): BeliefDetail {
+  const routedSignals = thesis.routedSignals ?? [];
   const currentEvaluation = thesis.currentVersion.createdByEvaluationId
     ? thesis.evaluations.find(
         (evaluation) =>
@@ -408,6 +493,16 @@ function thesisToBeliefDetail(thesis: Thesis): BeliefDetail {
     supportingEvidence: evidence.filter((item) => item.stance === "supports"),
     opposingEvidence: evidence.filter((item) => item.stance === "opposes"),
     contextualEvidence: evidence.filter((item) => item.stance === "context"),
+    routedSignals: routedSignals.map((signal) => ({
+      updateId: signal.updateId,
+      title: signal.title,
+      publisher: signal.publisher,
+      publishedAt: signal.publishedAt,
+      relevance: signal.relevance,
+      materiality: signal.materiality,
+      rationale: signal.rationale,
+      evaluationState: signal.evaluationState,
+    })),
     pendingEvaluations: thesis.evaluations
       .filter(
         (evaluation) =>

@@ -502,6 +502,133 @@ const migrations = [
     ALTER TABLE thesis_evaluations
       ADD COLUMN review_recommendation_reason TEXT;
   `,
+  `
+    ALTER TABLE source_documents
+      ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0
+      CHECK (attempt_count >= 0);
+
+    ALTER TABLE source_documents
+      ADD COLUMN last_attempted_at TEXT;
+
+    UPDATE source_documents
+    SET attempt_count = 1,
+        last_attempted_at = COALESCE(last_attempted_at, ingested_at)
+    WHERE analysis_status = 'error';
+
+    CREATE INDEX IF NOT EXISTS source_documents_failed_idx
+      ON source_documents(analysis_status, suppressed_at, last_attempted_at);
+  `,
+  `
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_cluster_id TEXT;
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_match_score INTEGER;
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_match_reason TEXT;
+
+    ALTER TABLE intelligence_updates
+      ADD COLUMN story_entity_tickers_json TEXT NOT NULL DEFAULT '[]';
+
+    UPDATE intelligence_updates
+    SET story_cluster_id = 'story-legacy-' || id
+    WHERE story_cluster_id IS NULL;
+
+    CREATE INDEX IF NOT EXISTS intelligence_updates_story_cluster_idx
+      ON intelligence_updates(story_cluster_id, id);
+  `,
+  `
+    ALTER TABLE thesis_evaluations
+      ADD COLUMN next_review_on TEXT;
+
+    CREATE TABLE IF NOT EXISTS portfolio_items (
+      id TEXT PRIMARY KEY,
+      symbol TEXT,
+      name TEXT NOT NULL,
+      asset_type TEXT NOT NULL CHECK (
+        asset_type IN ('equity', 'etf', 'private-company')
+      ),
+      company_ticker TEXT REFERENCES companies(ticker) ON DELETE SET NULL,
+      status TEXT NOT NULL CHECK (
+        status IN ('holding', 'watchlist', 'archived')
+      ),
+      allocation_bps INTEGER CHECK (
+        allocation_bps IS NULL OR
+        (allocation_bps >= 0 AND allocation_bps <= 10000)
+      ),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS portfolio_items_symbol_idx
+      ON portfolio_items(symbol)
+      WHERE symbol IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS portfolio_items_status_idx
+      ON portfolio_items(status, name);
+
+    CREATE TABLE IF NOT EXISTS portfolio_thesis_exposures (
+      portfolio_item_id TEXT NOT NULL
+        REFERENCES portfolio_items(id) ON DELETE CASCADE,
+      thesis_id TEXT NOT NULL
+        REFERENCES theses(id) ON DELETE CASCADE,
+      exposure_type TEXT NOT NULL CHECK (
+        exposure_type IN ('direct', 'diversified', 'indirect')
+      ),
+      capture_mechanism TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (portfolio_item_id, thesis_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS portfolio_thesis_exposures_thesis_idx
+      ON portfolio_thesis_exposures(thesis_id, portfolio_item_id);
+
+    CREATE TABLE IF NOT EXISTS thesis_version_bottlenecks (
+      thesis_version_id TEXT NOT NULL
+        REFERENCES thesis_versions(id) ON DELETE CASCADE,
+      bottleneck_key TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      PRIMARY KEY (thesis_version_id, bottleneck_key)
+    );
+
+    CREATE TABLE IF NOT EXISTS thesis_version_company_captures (
+      thesis_version_id TEXT NOT NULL,
+      capture_key TEXT NOT NULL,
+      bottleneck_key TEXT NOT NULL,
+      company_ticker TEXT NOT NULL REFERENCES companies(ticker),
+      role TEXT NOT NULL CHECK (
+        role IN ('beneficiary', 'dependent', 'hedge')
+      ),
+      mechanism TEXT NOT NULL,
+      sort_order INTEGER NOT NULL,
+      PRIMARY KEY (thesis_version_id, capture_key),
+      FOREIGN KEY (thesis_version_id, bottleneck_key)
+        REFERENCES thesis_version_bottlenecks (
+          thesis_version_id, bottleneck_key
+        ) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS thesis_version_company_captures_company_idx
+      ON thesis_version_company_captures(company_ticker, thesis_version_id);
+
+    CREATE TABLE IF NOT EXISTS portfolio_decisions (
+      evaluation_id TEXT NOT NULL
+        REFERENCES thesis_evaluations(id) ON DELETE CASCADE,
+      portfolio_item_id TEXT NOT NULL REFERENCES portfolio_items(id),
+      action TEXT NOT NULL CHECK (
+        action IN ('buy', 'hold', 'add', 'reduce', 'sell')
+      ),
+      rationale TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (evaluation_id, portfolio_item_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS portfolio_decisions_item_idx
+      ON portfolio_decisions(portfolio_item_id, created_at DESC);
+  `,
 ] as const;
 
 export function migrateDatabase(database: DatabaseSync): void {

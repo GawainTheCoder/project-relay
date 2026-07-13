@@ -105,12 +105,12 @@ export function BeliefConditions({
               aria-hidden="true"
               className="size-3.5 text-relay-negative"
             />
-            <span className="text-xs font-medium">Weakens this thesis</span>
+            <span className="text-xs font-medium">Invalidation conditions</span>
           </div>
           <ConditionList
-            empty="No weakening conditions recorded."
+            empty="No invalidation conditions recorded."
             items={weakening}
-            label="Future disconfirmation"
+            label="Would weaken or break the thesis"
             tone="negative"
           />
         </div>

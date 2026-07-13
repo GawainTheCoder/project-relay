@@ -70,6 +70,7 @@ const thesisEvidenceSignalInputSchema = z
     sourceProvenance: z
       .object({
         id: nonEmptyIdSchema,
+        evidenceChainId: nonEmptyIdSchema.optional(),
         publisher: z.string().trim().min(1).max(300),
         authorityTier: z.enum([
           "first-party",
@@ -195,8 +196,11 @@ Rules:
   opposingEvidence. Put context routes only in contextEvidence.
 - Route relevance identifies how directly evidence bears on a thesis. It does
   not predetermine direction, outcome, or confidence movement.
-- Evaluate source independence using sourceProvenance.id. Repeated reporting
-  from one provenance is one source, not corroboration.
+- Evaluate source independence using sourceProvenance.evidenceChainId.
+  Multiple publishers reporting the same underlying story chain are one
+  corroboration chain. Publisher provenance remains visible for audit but
+  cannot make syndicated coverage independent. Legacy signals without an
+  evidenceChainId fall back to sourceProvenance.id.
 - "unchanged" means proposedBelief is null and confidence, unknowns, and
   conditions all carry forward exactly.
 - "reinforced" means the belief and its surrounding fields carry forward and
@@ -209,8 +213,7 @@ Rules:
   remains pending review, and confidence decreases by no more than
   ${MAX_THESIS_CONFIDENCE_DELTA} points; proposedBelief remains null.
 - "revised" means proposedBelief is non-null and changes the belief text.
-  Require at least two
-  independent source provenances and cite the evidence chain.
+  Require at least two independent evidence chains and cite both.
 - Every evaluation must reference a supplied thesis and exactly match its
   supplied current version ID.
 - Do not force every signal into an evaluation. Omit irrelevant signals.
@@ -557,7 +560,7 @@ function validateEvidenceReferences(
 
   const citedSignalIds = new Set<string>();
   const citedClaimIds = new Set<string>();
-  const sourceProvenanceIds = new Set<string>();
+  const evidenceChainIds = new Set<string>();
 
   for (const reference of references) {
     const signal = signalsById.get(reference.signalId);
@@ -581,13 +584,16 @@ function validateEvidenceReferences(
       citedClaimIds.add(claimId);
     }
     citedSignalIds.add(signal.id);
-    sourceProvenanceIds.add(signal.sourceProvenance.id);
+    evidenceChainIds.add(
+      signal.sourceProvenance.evidenceChainId ??
+        signal.sourceProvenance.id,
+    );
   }
 
   return {
     signalIds: [...citedSignalIds],
     claimIds: [...citedClaimIds],
-    independentSourceCount: sourceProvenanceIds.size,
+    independentSourceCount: evidenceChainIds.size,
   };
 }
 
@@ -637,7 +643,7 @@ function validateExistingThesisEvaluation(
     }
     if (independentSourceCount < 2) {
       throw new EvidenceValidationError(
-        "A revised thesis requires at least two independent sources.",
+        "A revised thesis requires at least two independent evidence chains.",
       );
     }
     return;

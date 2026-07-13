@@ -2,9 +2,14 @@ import type {
   Company,
   DailyBrief,
   IntelligenceUpdate,
+  PortfolioDecisionInput,
+  PortfolioItemInput,
+  PortfolioThesisExposureInput,
   ResearchSource,
   StackLayer,
   ThesisInput,
+  ThesisEvaluationOutcome,
+  ThesisStructureInput,
 } from "../../shared/contracts.js";
 import { SOURCE_CATALOG_ROWS } from "../ingestion/source-registry.js";
 
@@ -418,6 +423,424 @@ export const seedTheses: ThesisInput[] = [
     ],
     companyTickers: ["NVDA", "AMD"],
     layerIds: ["serving", "accelerators", "cloud"],
+  },
+  {
+    id: "macro-space-infrastructure",
+    kind: "macro",
+    title: "Reusable launch and satellite scale compound space economics",
+    belief:
+      "Higher reusable-launch cadence and scaled satellite manufacturing can lower unit costs enough to expand the addressable market for space infrastructure and connectivity.",
+    confidenceScore: 65,
+    unknowns: [
+      "How quickly do launch and satellite cost declines translate into durable free cash flow?",
+      "How much regulatory and spectrum risk constrains network expansion?",
+    ],
+    strengtheningConditions: [
+      "Reusable launch cadence rises without a material reliability tradeoff",
+      "Satellite manufacturing and deployment costs continue declining",
+      "Connectivity revenue broadens across consumer, enterprise, and government buyers",
+    ],
+    weakeningConditions: [
+      "Launch reliability or cadence deteriorates for a sustained period",
+      "Network economics weaken as replacement and capacity costs rise",
+      "Regulatory, spectrum, or competitive constraints materially limit expansion",
+    ],
+    companyTickers: [],
+    layerIds: ["materials-builders"],
+  },
+];
+
+export const seedPortfolioItems: PortfolioItemInput[] = [
+  {
+    id: "portfolio-spacex",
+    name: "SpaceX",
+    assetType: "private-company",
+    status: "holding",
+    allocationBps: 3_500,
+  },
+  {
+    id: "portfolio-voo",
+    symbol: "VOO",
+    name: "Vanguard S&P 500 ETF",
+    assetType: "etf",
+    status: "holding",
+    allocationBps: 3_000,
+  },
+  {
+    id: "portfolio-smh",
+    symbol: "SMH",
+    name: "VanEck Semiconductor ETF",
+    assetType: "etf",
+    status: "holding",
+    allocationBps: 2_000,
+  },
+  {
+    id: "portfolio-tsm",
+    symbol: "TSM",
+    name: "Taiwan Semiconductor Manufacturing",
+    assetType: "equity",
+    companyTicker: "TSM",
+    status: "holding",
+    allocationBps: 1_500,
+  },
+  {
+    id: "portfolio-avgo",
+    symbol: "AVGO",
+    name: "Broadcom",
+    assetType: "equity",
+    companyTicker: "AVGO",
+    status: "watchlist",
+  },
+  {
+    id: "portfolio-nvda",
+    symbol: "NVDA",
+    name: "NVIDIA",
+    assetType: "equity",
+    companyTicker: "NVDA",
+    status: "watchlist",
+  },
+  {
+    id: "portfolio-amd",
+    symbol: "AMD",
+    name: "Advanced Micro Devices",
+    assetType: "equity",
+    companyTicker: "AMD",
+    status: "watchlist",
+  },
+  {
+    id: "portfolio-mu",
+    symbol: "MU",
+    name: "Micron Technology",
+    assetType: "equity",
+    companyTicker: "MU",
+    status: "watchlist",
+  },
+  {
+    id: "portfolio-sk-hynix",
+    symbol: "000660.KS",
+    name: "SK hynix",
+    assetType: "equity",
+    status: "watchlist",
+  },
+  {
+    id: "portfolio-vrt",
+    symbol: "VRT",
+    name: "Vertiv",
+    assetType: "equity",
+    companyTicker: "VRT",
+    status: "watchlist",
+  },
+  {
+    id: "portfolio-etn",
+    symbol: "ETN",
+    name: "Eaton",
+    assetType: "equity",
+    companyTicker: "ETN",
+    status: "watchlist",
+  },
+  {
+    id: "portfolio-gev",
+    symbol: "GEV",
+    name: "GE Vernova",
+    assetType: "equity",
+    companyTicker: "GEV",
+    status: "watchlist",
+  },
+];
+
+export const seedPortfolioThesisExposures: PortfolioThesisExposureInput[] = [
+  {
+    portfolioItemId: "portfolio-spacex",
+    thesisId: "macro-space-infrastructure",
+    exposureType: "direct",
+    captureMechanism:
+      "Reusable launch, satellite manufacturing, and connectivity scale are the core economic drivers.",
+  },
+  {
+    portfolioItemId: "portfolio-voo",
+    thesisId: "macro-custom-silicon",
+    exposureType: "indirect",
+    captureMechanism:
+      "Broad-market ownership includes hyperscalers and infrastructure beneficiaries while diluting any single AI assumption.",
+  },
+  {
+    portfolioItemId: "portfolio-smh",
+    thesisId: "macro-memory-bottleneck",
+    exposureType: "diversified",
+    captureMechanism:
+      "The semiconductor basket captures HBM suppliers, accelerator vendors, and foundry demand together.",
+  },
+  {
+    portfolioItemId: "portfolio-smh",
+    thesisId: "macro-networking-bottleneck",
+    exposureType: "diversified",
+    captureMechanism:
+      "The fund spreads networking upside across switch, interconnect, and silicon suppliers.",
+  },
+  {
+    portfolioItemId: "portfolio-smh",
+    thesisId: "macro-custom-silicon",
+    exposureType: "diversified",
+    captureMechanism:
+      "The fund participates across merchant accelerators, custom silicon, and their manufacturing chain.",
+  },
+  {
+    portfolioItemId: "portfolio-tsm",
+    thesisId: "macro-memory-bottleneck",
+    exposureType: "direct",
+    captureMechanism:
+      "Advanced logic and packaging demand rises as accelerator and HBM systems become more complex.",
+  },
+  {
+    portfolioItemId: "portfolio-tsm",
+    thesisId: "macro-networking-bottleneck",
+    exposureType: "indirect",
+    captureMechanism:
+      "Higher networking-silicon content pulls additional leading-edge foundry and packaging capacity.",
+  },
+  {
+    portfolioItemId: "portfolio-tsm",
+    thesisId: "macro-custom-silicon",
+    exposureType: "direct",
+    captureMechanism:
+      "Competing custom accelerators converge on TSMC's leading-edge fabrication and advanced packaging.",
+  },
+  {
+    portfolioItemId: "portfolio-avgo",
+    thesisId: "macro-custom-silicon",
+    exposureType: "direct",
+    captureMechanism: "Custom XPU design wins translate adoption into semiconductor revenue.",
+  },
+  {
+    portfolioItemId: "portfolio-avgo",
+    thesisId: "macro-networking-bottleneck",
+    exposureType: "direct",
+    captureMechanism: "Ethernet switching and interconnect silicon monetize cluster scale.",
+  },
+  {
+    portfolioItemId: "portfolio-nvda",
+    thesisId: "macro-memory-bottleneck",
+    exposureType: "direct",
+    captureMechanism: "System performance and deployment cadence depend on sufficient HBM bandwidth and supply.",
+  },
+  {
+    portfolioItemId: "portfolio-nvda",
+    thesisId: "macro-networking-bottleneck",
+    exposureType: "direct",
+    captureMechanism: "NVLink and networking attach capture more value as clusters scale.",
+  },
+  {
+    portfolioItemId: "portfolio-nvda",
+    thesisId: "macro-custom-silicon",
+    exposureType: "direct",
+    captureMechanism: "Merchant platform economics depend on retaining workloads against custom accelerators.",
+  },
+  {
+    portfolioItemId: "portfolio-amd",
+    thesisId: "macro-memory-bottleneck",
+    exposureType: "direct",
+    captureMechanism: "MI-series adoption depends on qualified HBM supply and competitive memory bandwidth.",
+  },
+  {
+    portfolioItemId: "portfolio-amd",
+    thesisId: "macro-networking-bottleneck",
+    exposureType: "indirect",
+    captureMechanism: "Larger AMD clusters require a credible open networking ecosystem.",
+  },
+  {
+    portfolioItemId: "portfolio-amd",
+    thesisId: "macro-custom-silicon",
+    exposureType: "direct",
+    captureMechanism: "AMD wins when buyers retain a merchant second source instead of moving fully custom.",
+  },
+  {
+    portfolioItemId: "portfolio-mu",
+    thesisId: "macro-memory-bottleneck",
+    exposureType: "direct",
+    captureMechanism: "HBM scarcity and qualification complexity support mix, pricing, and utilization.",
+  },
+  {
+    portfolioItemId: "portfolio-sk-hynix",
+    thesisId: "macro-memory-bottleneck",
+    exposureType: "direct",
+    captureMechanism: "HBM leadership directly captures accelerator memory-content growth.",
+  },
+  ...["vrt", "etn", "gev"].map(
+    (symbol, index): PortfolioThesisExposureInput => ({
+      portfolioItemId: `portfolio-${symbol}`,
+      thesisId: "macro-power-cooling",
+      exposureType: "direct",
+      captureMechanism:
+        symbol === "vrt"
+          ? "Critical power and thermal systems monetize higher rack density."
+          : symbol === "etn"
+            ? "Electrical distribution equipment captures data-center power buildout."
+            : "Generation and grid equipment capture incremental firm-power demand.",
+      sortOrder: index,
+    }),
+  ),
+];
+
+export const seedThesisStructures: ThesisStructureInput[] = [
+  {
+    thesisId: "macro-memory-bottleneck",
+    bottlenecks: [
+      { key: "hbm-supply", title: "HBM supply and qualification", description: "Qualified HBM capacity must scale with accelerator demand.", sortOrder: 0 },
+      { key: "memory-bandwidth", title: "Memory bandwidth", description: "Useful compute remains gated by how quickly models can access memory.", sortOrder: 1 },
+    ],
+    captureMechanisms: [
+      { key: "mu-hbm", bottleneckKey: "hbm-supply", companyTicker: "MU", role: "beneficiary", mechanism: "HBM mix and qualification scarcity support pricing and margins.", sortOrder: 0 },
+      { key: "nvda-hbm", bottleneckKey: "memory-bandwidth", companyTicker: "NVDA", role: "dependent", mechanism: "Platform performance depends on securing leading HBM bandwidth and volume.", sortOrder: 1 },
+      { key: "amd-hbm", bottleneckKey: "memory-bandwidth", companyTicker: "AMD", role: "dependent", mechanism: "Competitive accelerator systems require qualified high-bandwidth memory.", sortOrder: 2 },
+      { key: "tsm-packaging", bottleneckKey: "hbm-supply", companyTicker: "TSM", role: "beneficiary", mechanism: "Advanced packaging integrates logic and HBM into scarce systems.", sortOrder: 3 },
+    ],
+  },
+  {
+    thesisId: "macro-networking-bottleneck",
+    bottlenecks: [
+      { key: "fabric-bandwidth", title: "Fabric bandwidth and utilization", description: "Large clusters need reliable high-speed data movement to realize accelerator performance.", sortOrder: 0 },
+      { key: "network-scale", title: "Scale-out complexity", description: "Congestion, reliability, and topology become harder as clusters expand.", sortOrder: 1 },
+    ],
+    captureMechanisms: [
+      { key: "anet-ethernet", bottleneckKey: "network-scale", companyTicker: "ANET", role: "beneficiary", mechanism: "High-speed Ethernet switching captures broader AI back-end adoption.", sortOrder: 0 },
+      { key: "avgo-network", bottleneckKey: "fabric-bandwidth", companyTicker: "AVGO", role: "beneficiary", mechanism: "Switching and interconnect silicon monetize bandwidth growth.", sortOrder: 1 },
+      { key: "mrvl-network", bottleneckKey: "fabric-bandwidth", companyTicker: "MRVL", role: "beneficiary", mechanism: "DSP, interconnect, and custom silicon gain content as data movement rises.", sortOrder: 2 },
+      { key: "nvda-fabric", bottleneckKey: "network-scale", companyTicker: "NVDA", role: "beneficiary", mechanism: "NVLink and networking attach extend platform value beyond GPUs.", sortOrder: 3 },
+    ],
+  },
+  {
+    thesisId: "macro-optics-supply",
+    bottlenecks: [
+      { key: "laser-capacity", title: "Qualified laser capacity", description: "Advanced optical production must keep pace with higher-speed port demand.", sortOrder: 0 },
+      { key: "qualification", title: "Product qualification", description: "New optical generations require lengthy customer and reliability validation.", sortOrder: 1 },
+    ],
+    captureMechanisms: [
+      { key: "cohr-optics", bottleneckKey: "laser-capacity", companyTicker: "COHR", role: "beneficiary", mechanism: "Integrated transceiver and laser capacity captures constrained supply.", sortOrder: 0 },
+      { key: "lite-lasers", bottleneckKey: "laser-capacity", companyTicker: "LITE", role: "beneficiary", mechanism: "Advanced laser capacity gains utilization as link speeds rise.", sortOrder: 1 },
+      { key: "glw-fiber", bottleneckKey: "qualification", companyTicker: "GLW", role: "beneficiary", mechanism: "Campus-scale deployments increase fiber and connectivity content.", sortOrder: 2 },
+      { key: "mrvl-optics", bottleneckKey: "qualification", companyTicker: "MRVL", role: "beneficiary", mechanism: "Electro-optics silicon benefits when qualified high-speed links scale.", sortOrder: 3 },
+    ],
+  },
+  {
+    thesisId: "macro-power-cooling",
+    bottlenecks: [
+      { key: "grid-power", title: "Grid and electrical capacity", description: "Sites need interconnection, transformers, switchgear, and reliable generation before compute can energize.", sortOrder: 0 },
+      { key: "thermal-density", title: "Thermal density", description: "Higher rack power requires new liquid-cooling and heat-rejection systems.", sortOrder: 1 },
+    ],
+    captureMechanisms: [
+      { key: "vrt-thermal", bottleneckKey: "thermal-density", companyTicker: "VRT", role: "beneficiary", mechanism: "Critical power and liquid cooling monetize higher rack density.", sortOrder: 0 },
+      { key: "etn-electrical", bottleneckKey: "grid-power", companyTicker: "ETN", role: "beneficiary", mechanism: "Electrical distribution equipment sits on the data-center critical path.", sortOrder: 1 },
+      { key: "gev-grid", bottleneckKey: "grid-power", companyTicker: "GEV", role: "beneficiary", mechanism: "Generation and grid equipment capture incremental firm-power demand.", sortOrder: 2 },
+    ],
+  },
+  {
+    thesisId: "macro-custom-silicon",
+    bottlenecks: [
+      { key: "design-economics", title: "Design economics and scale", description: "Custom accelerators require enough stable workload volume to justify development cost.", sortOrder: 0 },
+      { key: "software-portability", title: "Software portability", description: "Workloads must move onto custom hardware without prohibitive engineering friction.", sortOrder: 1 },
+    ],
+    captureMechanisms: [
+      { key: "avgo-xpu", bottleneckKey: "design-economics", companyTicker: "AVGO", role: "beneficiary", mechanism: "Custom XPU programs convert hyperscaler scale into semiconductor revenue.", sortOrder: 0 },
+      { key: "mrvl-custom", bottleneckKey: "design-economics", companyTicker: "MRVL", role: "beneficiary", mechanism: "Design wins capture customers seeking an alternative custom-silicon partner.", sortOrder: 1 },
+      { key: "tsm-foundry", bottleneckKey: "design-economics", companyTicker: "TSM", role: "beneficiary", mechanism: "Competing architectures converge on leading-edge fabrication and packaging.", sortOrder: 2 },
+      { key: "nvda-custom", bottleneckKey: "software-portability", companyTicker: "NVDA", role: "dependent", mechanism: "Merchant platform economics depend on retaining workloads against custom designs.", sortOrder: 3 },
+      { key: "amd-custom", bottleneckKey: "software-portability", companyTicker: "AMD", role: "dependent", mechanism: "Second-source demand depends on buyers preferring merchant flexibility over fully custom hardware.", sortOrder: 4 },
+    ],
+  },
+  {
+    thesisId: "macro-inference-portability",
+    bottlenecks: [
+      { key: "runtime-maturity", title: "Runtime and compiler maturity", description: "Portable inference needs reliable tooling across multiple accelerator architectures.", sortOrder: 0 },
+      { key: "kernel-performance", title: "Kernel performance", description: "Open abstractions must approach vendor-specific latency and throughput.", sortOrder: 1 },
+    ],
+    captureMechanisms: [
+      { key: "nvda-software", bottleneckKey: "kernel-performance", companyTicker: "NVDA", role: "dependent", mechanism: "CUDA differentiation weakens if portable runtimes close production performance gaps.", sortOrder: 0 },
+      { key: "amd-portability", bottleneckKey: "runtime-maturity", companyTicker: "AMD", role: "beneficiary", mechanism: "Improved portability lowers adoption friction for a second accelerator platform.", sortOrder: 1 },
+    ],
+  },
+  {
+    thesisId: "macro-space-infrastructure",
+    bottlenecks: [
+      { key: "launch-cadence", title: "Reusable launch cadence", description: "High-frequency, reliable reuse is required to keep deployment costs falling.", sortOrder: 0 },
+      { key: "network-economics", title: "Satellite network economics", description: "Manufacturing, replacement, spectrum, and customer economics must scale together.", sortOrder: 1 },
+    ],
+    captureMechanisms: [],
+  },
+];
+
+export interface PortfolioReviewSeed {
+  id: string;
+  thesisId: string;
+  signalId: string;
+  claimId: string;
+  outcome: ThesisEvaluationOutcome;
+  confidenceDelta: number;
+  summary: string;
+  rationale: string;
+  reviewStatus: "pending" | "accepted";
+  nextReviewOn: string | null;
+  portfolioDecisions: PortfolioDecisionInput[];
+}
+
+export const seedPortfolioReviews: PortfolioReviewSeed[] = [
+  {
+    id: "demo-review-memory-bottleneck",
+    thesisId: "macro-memory-bottleneck",
+    signalId: "mu-hbm4-ramp",
+    claimId: "claim-mu-hbm",
+    outcome: "reinforced",
+    confidenceDelta: 2,
+    summary: "HBM4 production keeps memory on the critical AI-system path.",
+    rationale:
+      "The cited production milestone supports continued HBM demand and qualification complexity without changing the thesis text.",
+    reviewStatus: "accepted",
+    nextReviewOn: "2026-08-15",
+    portfolioDecisions: [
+      {
+        portfolioItemId: "portfolio-smh",
+        action: "hold",
+        rationale: "Diversified semiconductor exposure still captures the memory constraint.",
+      },
+      {
+        portfolioItemId: "portfolio-tsm",
+        action: "add",
+        rationale: "Advanced packaging remains a direct beneficiary of logic and HBM complexity.",
+      },
+    ],
+  },
+  {
+    id: "demo-review-custom-silicon",
+    thesisId: "macro-custom-silicon",
+    signalId: "avgo-fy25-q4",
+    claimId: "claim-avgo-ai",
+    outcome: "reinforced",
+    confidenceDelta: 3,
+    summary: "Broadcom's outlook strengthens the custom-silicon adoption thesis.",
+    rationale:
+      "The cited revenue outlook is direct supplier evidence that scaled custom programs are entering material production.",
+    reviewStatus: "pending",
+    nextReviewOn: null,
+    portfolioDecisions: [],
+  },
+  {
+    id: "demo-review-power-cooling",
+    thesisId: "macro-power-cooling",
+    signalId: "vrt-fy25-q4",
+    claimId: "claim-vrt-backlog",
+    outcome: "reinforced",
+    confidenceDelta: 2,
+    summary: "Vertiv's backlog extends the duration of the physical-infrastructure constraint.",
+    rationale:
+      "The exact backlog disclosure shows that power and cooling capacity is being reserved well ahead of deployment.",
+    reviewStatus: "accepted",
+    nextReviewOn: "2026-08-20",
+    portfolioDecisions: [
+      {
+        portfolioItemId: "portfolio-vrt",
+        action: "buy",
+        rationale: "The watchlist candidate directly captures the thermal and critical-power bottleneck.",
+      },
+    ],
   },
 ];
 

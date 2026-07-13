@@ -391,7 +391,7 @@ export class LocalSearchService {
         id: briefId,
         title: requiredText(briefRow, "title"),
         subtitle: `Daily brief · ${requiredText(briefRow, "date")}`,
-        href: `/?brief=${encodeURIComponent(briefId)}`,
+        href: `/today?archive=briefs&brief=${encodeURIComponent(briefId)}`,
         fields,
         query,
         tokens,

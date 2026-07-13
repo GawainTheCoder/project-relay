@@ -5,13 +5,10 @@ import {
   Clock3,
   ExternalLink,
   FilePlus2,
-  History,
   LoaderCircle,
   Plus,
-  Radar,
   RefreshCw,
   Rss,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -28,11 +25,15 @@ import {
   ImportSourceDialog,
   type ImportSourceFeedback,
 } from "../features/sources/ImportSourceDialog";
+import { FailedIngestionSection } from "../features/sources/FailedIngestionSection";
 import { SourceCoverageAudit } from "../features/sources/SourceCoverageAudit";
-import { refreshSource, removeResearchSource } from "../lib/api";
+import { useFailedSourceDocuments } from "../features/sources/useFailedSourceDocuments";
+import {
+  refreshSource,
+  removeResearchSource,
+  retryFailedSourceDocument,
+} from "../lib/api";
 import { formatRelativeTime, getLayerName } from "../lib/format";
-
-type Action = "refresh" | "evaluate" | "brief";
 
 interface ActionFeedback {
   message: string;
@@ -138,19 +139,18 @@ export function SourcesPage() {
   const {
     data,
     error,
-    evaluateAllBeliefs,
     isLoading,
-    regenerateBrief,
     reload,
     refreshAllSources,
   } = useDashboard();
+  const failedSourceDocuments = useFailedSourceDocuments();
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [signalSourceProfileId, setSignalSourceProfileId] = useState<
     string | null
   >(null);
   const [isAddFeedOpen, setIsAddFeedOpen] = useState(false);
   const [isAddWebsiteOpen, setIsAddWebsiteOpen] = useState(false);
-  const [activeAction, setActiveAction] = useState<Action | null>(null);
+  const [isRefreshingAll, setIsRefreshingAll] = useState(false);
   const [actionMessage, setActionMessage] = useState<ActionFeedback | null>(
     null,
   );
@@ -185,51 +185,29 @@ export function SourcesPage() {
     );
   }
 
-  const runAction = async (action: Action) => {
-    setActiveAction(action);
+  const refreshAll = async () => {
+    setIsRefreshingAll(true);
     setActionError(null);
     setActionMessage(null);
     setRefreshItems([]);
     try {
-      if (action === "refresh") {
-        const result = await refreshAllSources();
-        const items = refreshItemsFrom(result);
-        setRefreshItems(items);
-        setActionMessage({
-          message: `Refresh complete: ${result.imported} new, ${result.analyzed} analyzed${
-            result.errors.length
-              ? `, ${result.errors.length} source error${result.errors.length === 1 ? "" : "s"}`
-              : ""
-          }.`,
-        });
-      } else if (action === "evaluate") {
-        const result = await evaluateAllBeliefs();
-        setActionMessage({
-          message:
-            result.evaluations.length > 0
-              ? `${result.evaluations.length} thesis evaluation${
-                  result.evaluations.length === 1 ? "" : "s"
-                } ready for review.`
-              : "No new evidence required a thesis evaluation.",
-          href: "/theses",
-          linkLabel: "Review theses",
-        });
-      } else {
-        await regenerateBrief();
-        setActionMessage({
-          message: "Today’s brief was generated from thesis evaluations.",
-          href: "/",
-          linkLabel: "Open brief",
-        });
-      }
+      const result = await refreshAllSources();
+      setRefreshItems(refreshItemsFrom(result));
+      setActionMessage({
+        message: `Refresh complete: ${result.imported} new, ${result.analyzed} analyzed${
+          result.errors.length
+            ? `, ${result.errors.length} source error${result.errors.length === 1 ? "" : "s"}`
+            : ""
+        }.`,
+      });
     } catch (caughtError) {
       setActionError(
         caughtError instanceof Error
           ? caughtError.message
-          : "The action could not be completed.",
+          : "The feeds could not be refreshed.",
       );
     } finally {
-      setActiveAction(null);
+      setIsRefreshingAll(false);
     }
   };
 
@@ -310,92 +288,72 @@ export function SourcesPage() {
 
   return (
     <div className="relay-enter min-h-screen">
-      <header className="border-b border-relay-border px-5 py-5 sm:px-8 lg:px-10">
-        <div className="mx-auto flex max-w-[1280px] flex-wrap items-end justify-between gap-4">
-          <div>
-            <p className="font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
-              High-signal intake
-            </p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">
-              Trusted sources
-            </h1>
+      <header className="border-b border-relay-border px-5 py-6 sm:px-8 lg:px-10">
+        <div className="mx-auto max-w-[1280px]">
+          <div className="flex flex-wrap items-center justify-between gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-relay-muted">
+            <span>High-signal intake</span>
+            <span className="text-relay-subtle">
+              {enabledSources.length} automated feed
+              {enabledSources.length === 1 ? "" : "s"}
+              <span className="mx-2 text-relay-border-strong">·</span>
+              {healthySources}/{enabledSources.length} ready
+              <span className="mx-2 text-relay-border-strong">·</span>
+              {onDemandSources} website profile
+              {onDemandSources === 1 ? "" : "s"}
+            </span>
           </div>
-          <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-            <Button
-              className="flex-1 sm:flex-none"
-              disabled={activeAction !== null || refreshingSourceId !== null}
-              onClick={() => void runAction("refresh")}
-            >
-              {activeAction === "refresh" ? (
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-3.5 animate-spin"
-                />
-              ) : (
-                <RefreshCw aria-hidden="true" className="size-3.5" />
-              )}
-              Refresh all
-            </Button>
-            <Button
-              className="flex-1 sm:flex-none"
-              disabled={
-                activeAction !== null ||
-                refreshingSourceId !== null ||
-                data.updates.length === 0
-              }
-              onClick={() => void runAction("evaluate")}
-            >
-              {activeAction === "evaluate" ? (
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-3.5 animate-spin"
-                />
-              ) : (
-                <Radar aria-hidden="true" className="size-3.5" />
-              )}
-              Evaluate theses
-            </Button>
-            <Button
-              className="flex-1 sm:flex-none"
-              disabled={
-                activeAction !== null ||
-                refreshingSourceId !== null ||
-                data.updates.length === 0
-              }
-              onClick={() => void runAction("brief")}
-            >
-              {activeAction === "brief" ? (
-                <LoaderCircle
-                  aria-hidden="true"
-                  className="size-3.5 animate-spin"
-                />
-              ) : (
-                <Sparkles aria-hidden="true" className="size-3.5" />
-              )}
-              Generate brief
-            </Button>
-            <Button
-              className="flex-1 sm:flex-none"
-              onClick={() => setIsAddFeedOpen(true)}
-            >
-              <Rss aria-hidden="true" className="size-3.5" />
-              Add automated feed
-            </Button>
-            <Button
-              className="flex-1 sm:flex-none"
-              onClick={() => setIsAddWebsiteOpen(true)}
-            >
-              <Plus aria-hidden="true" className="size-3.5" />
-              Add trusted website
-            </Button>
-            <Button
-              className="w-full sm:w-auto"
-              onClick={() => openImport()}
-              variant="primary"
-            >
-              <FilePlus2 aria-hidden="true" className="size-3.5" />
-              Add signal
-            </Button>
+          <div className="mt-5 flex flex-wrap items-end justify-between gap-5">
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+                Trusted sources
+              </h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-relay-muted">
+                Everything Relay is allowed to learn from: automated feeds,
+                trusted publisher profiles, and manually added articles or
+                excerpts.
+              </p>
+            </div>
+            <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+              <Button
+                className="flex-1 sm:flex-none"
+                disabled={isRefreshingAll || refreshingSourceId !== null}
+                onClick={() => void refreshAll()}
+              >
+                {isRefreshingAll ? (
+                  <LoaderCircle
+                    aria-hidden="true"
+                    className="size-3.5 animate-spin"
+                  />
+                ) : (
+                  <RefreshCw aria-hidden="true" className="size-3.5" />
+                )}
+                Refresh all
+              </Button>
+              <Button
+                className="flex-1 sm:flex-none"
+                onClick={() => setIsAddFeedOpen(true)}
+                variant="quiet"
+              >
+                <Rss aria-hidden="true" className="size-3.5" />
+                Add automated feed
+              </Button>
+              <Button
+                className="flex-1 sm:flex-none"
+                onClick={() => setIsAddWebsiteOpen(true)}
+                variant="quiet"
+              >
+                <Plus aria-hidden="true" className="size-3.5" />
+                Add trusted website
+              </Button>
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => openImport()}
+                variant="primary"
+              >
+                <FilePlus2 aria-hidden="true" className="size-3.5" />
+                Add signal
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -428,8 +386,6 @@ export function SourcesPage() {
             {actionError}
           </div>
         ) : null}
-
-        <SourceCoverageAudit coverage={data.sourceCoverage} />
 
         {refreshItems.length ? (
           <section
@@ -522,40 +478,15 @@ export function SourcesPage() {
           </section>
         ) : null}
 
-        <section
-          aria-label="Source health summary"
-          className="mt-7 grid gap-px overflow-hidden rounded-md border border-relay-border bg-relay-border sm:grid-cols-3"
-        >
-          <div className="bg-relay-surface p-5">
-            <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-subtle">
-              Monitored
-            </p>
-            <p className="mt-2 text-2xl font-semibold">
-              {enabledSources.length}
-            </p>
-            <p className="mt-1 text-xs text-relay-muted">automated feeds</p>
-          </div>
-          <div className="bg-relay-surface p-5">
-            <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-subtle">
-              Ready
-            </p>
-            <p className="mt-2 text-2xl font-semibold text-relay-positive">
-              {healthySources}/{enabledSources.length}
-            </p>
-            <p className="mt-1 text-xs text-relay-muted">feeds available</p>
-          </div>
-          <div className="bg-relay-surface p-5">
-            <p className="font-mono text-[9px] uppercase tracking-[0.1em] text-relay-subtle">
-              On demand
-            </p>
-            <p className="mt-2 text-2xl font-semibold">{onDemandSources}</p>
-            <p className="mt-1 text-xs text-relay-muted">
-              trusted website profiles
-            </p>
-          </div>
-        </section>
+        <FailedIngestionSection
+          documents={failedSourceDocuments.documents}
+          error={failedSourceDocuments.error}
+          isLoading={failedSourceDocuments.isLoading}
+          onReload={failedSourceDocuments.reload}
+          onRetry={retryFailedSourceDocument}
+        />
 
-        <section className="mt-9">
+        <section className="mt-7">
           <div className="flex items-end justify-between border-b border-relay-border pb-3">
             <div>
               <h2 className="text-lg font-semibold tracking-tight">
@@ -566,16 +497,9 @@ export function SourcesPage() {
                 attribution and coverage context.
               </p>
             </div>
-            <div className="flex items-center gap-4">
-              <Link
-                className="inline-flex items-center gap-1.5 text-xs text-relay-muted hover:text-relay-accent"
-                to="/briefs"
-              >
-                <History aria-hidden="true" className="size-3.5" />
-                Prior briefs
-              </Link>
-              <Rss aria-hidden="true" className="size-4 text-relay-subtle" />
-            </div>
+            <span className="font-mono text-[10px] text-relay-subtle">
+              {data.sources.length} tracked
+            </span>
           </div>
 
           {data.sources.length ? (
@@ -673,7 +597,7 @@ export function SourcesPage() {
                       <Button
                         aria-label={`Refresh ${source.name}`}
                         disabled={
-                          activeAction !== null ||
+                          isRefreshingAll ||
                           refreshingSourceId !== null ||
                           removingSourceId !== null
                         }
@@ -754,6 +678,10 @@ export function SourcesPage() {
             </div>
           )}
         </section>
+
+        <div className="mt-10">
+          <SourceCoverageAudit coverage={data.sourceCoverage} />
+        </div>
 
         <section className="mt-10 border-l border-relay-border-strong pl-5">
           <h2 className="text-sm font-semibold">

@@ -615,11 +615,12 @@ describe("Relay service integration with mocked external boundaries", () => {
         signals: expect.arrayContaining([
           expect.objectContaining({
             id: "vrt-fy25-q4",
-            sourceProvenance: {
+            sourceProvenance: expect.objectContaining({
               id: "vertiv-ir",
               publisher: "Vertiv investor relations",
               authorityTier: "first-party",
-            },
+              evidenceChainId: expect.stringMatching(/^story-/),
+            }),
             claims: [
               expect.objectContaining({ id: "claim-vrt-backlog" }),
             ],

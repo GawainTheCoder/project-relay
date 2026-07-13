@@ -52,9 +52,9 @@ describe("RelayRepository", () => {
     const companyTheses = repository.listTheses({ kind: "company" });
     const macroTheses = repository.listTheses({ kind: "macro" });
 
-    expect(theses).toHaveLength(19);
+    expect(theses).toHaveLength(20);
     expect(companyTheses).toHaveLength(13);
-    expect(macroTheses).toHaveLength(6);
+    expect(macroTheses).toHaveLength(7);
     expect(repository.getThesis("company-nvda")).toMatchObject({
       kind: "company",
       companyTickers: ["NVDA"],
@@ -71,6 +71,256 @@ describe("RelayRepository", () => {
         confidenceScore: 70,
       },
     });
+  });
+
+  it("seeds an illustrative portfolio and reveals overlapping macro exposure", () => {
+    const portfolio = repository.getPortfolio();
+
+    expect(portfolio).toMatchObject({
+      allocationBasis: "illustrative-seed",
+      holdings: [
+        expect.objectContaining({ name: "SpaceX", allocationPercent: 35 }),
+        expect.objectContaining({ symbol: "VOO", allocationPercent: 30 }),
+        expect.objectContaining({ symbol: "SMH", allocationPercent: 20 }),
+        expect.objectContaining({ symbol: "TSM", allocationPercent: 15 }),
+      ],
+    });
+    expect(portfolio.watchlist.map((item) => item.symbol)).toEqual([
+      "AMD",
+      "AVGO",
+      "ETN",
+      "GEV",
+      "MU",
+      "NVDA",
+      "000660.KS",
+      "VRT",
+    ]);
+    expect(portfolio.overlaps).toContainEqual(
+      expect.objectContaining({
+        leftPortfolioItemId: "portfolio-smh",
+        rightPortfolioItemId: "portfolio-tsm",
+        sharedTheses: expect.arrayContaining([
+          expect.objectContaining({ thesisId: "macro-memory-bottleneck" }),
+          expect.objectContaining({ thesisId: "macro-networking-bottleneck" }),
+          expect.objectContaining({ thesisId: "macro-custom-silicon" }),
+        ]),
+      }),
+    );
+    expect(repository.getThesis("macro-memory-bottleneck")).toMatchObject({
+      momentum: "unchanged",
+      nextReviewOn: null,
+      bottlenecks: expect.arrayContaining([
+        expect.objectContaining({ key: "hbm-supply" }),
+      ]),
+      captureMechanisms: expect.arrayContaining([
+        expect.objectContaining({ companyTicker: "MU" }),
+      ]),
+      portfolioExposures: expect.arrayContaining([
+        expect.objectContaining({ portfolioItemId: "portfolio-smh" }),
+        expect.objectContaining({ portfolioItemId: "portfolio-tsm" }),
+      ]),
+    });
+  });
+
+  it("surfaces company routed signals and marks them evaluated after a thesis evaluation consumes them", () => {
+    const summary = repository.getThesis("company-nvda");
+    const detail = repository.getThesisDetail("company-nvda");
+
+    expect(summary?.routedSignals).toEqual([]);
+    expect(summary?.awaitingEvaluationCount).toBeGreaterThan(0);
+    expect(detail?.routedSignals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          updateId: "nvda-fy26-q4",
+          title: "NVIDIA data-center revenue reaches $62.3 billion",
+          publisher: "NVIDIA Investor Relations",
+          materiality: "high",
+          relevance: null,
+          rationale:
+            "Strengthens confidence in durable platform demand.",
+          evaluationState: "awaiting-evaluation",
+        }),
+      ]),
+    );
+
+    repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-company-route-consumed",
+        signalIds: ["nvda-fy26-q4"],
+        evidence: [
+          {
+            claimId: "claim-nvda-dc",
+            stance: "supports",
+            rationale:
+              "Reported data-center growth supports durable demand.",
+          },
+        ],
+      }),
+    );
+
+    const updatedDetail = repository.getThesisDetail("company-nvda");
+    expect(
+      updatedDetail?.routedSignals.find(
+        (signal) => signal.updateId === "nvda-fy26-q4",
+      ),
+    ).toMatchObject({
+      evaluationState: "evaluated",
+    });
+    expect(updatedDetail?.awaitingEvaluationCount).toBe(
+      (detail?.awaitingEvaluationCount ?? 0) - 1,
+    );
+  });
+
+  it("deduplicates company routed signals for multi-company theses", () => {
+    const seed = repository.getUpdate("nvda-fy26-q4");
+    if (!seed) {
+      throw new Error("Seed signal missing");
+    }
+    const update: IntelligenceUpdate = {
+      ...seed,
+      id: "multi-company-route-signal",
+      companyTickers: ["AMD", "NVDA"],
+      claims: seed.claims.map((claim) => ({
+        ...claim,
+        id: `multi-company-route-${claim.id}`,
+      })),
+      thesisImpacts: [
+        {
+          ...seed.thesisImpacts[0]!,
+          id: "multi-company-route-nvda",
+          thesisDelta: "Strengthens NVIDIA platform demand.",
+        },
+        {
+          ...seed.thesisImpacts[0]!,
+          id: "multi-company-route-amd",
+          companyTicker: "AMD",
+          summary: "The same signal informs AMD second-source demand.",
+          thesisDelta: "Keeps AMD competition in frame.",
+        },
+      ],
+    };
+    repository.persistAnalyzedUpdate(update);
+    const thesis = repository.createThesis({
+      id: "company-ai-accelerator-basket",
+      kind: "company",
+      title: "AI accelerator basket",
+      belief: "The accelerator leaders should be read together.",
+      confidenceScore: 62,
+      companyTickers: ["AMD", "NVDA"],
+      layerIds: ["accelerators"],
+      unknowns: [],
+      strengtheningConditions: [],
+      weakeningConditions: [],
+    });
+
+    const detail = repository.getThesisDetail(thesis.id);
+    const matchingSignals = detail?.routedSignals.filter(
+      (signal) => signal.updateId === update.id,
+    );
+
+    expect(repository.getThesis(thesis.id)?.awaitingEvaluationCount).toBe(
+      detail?.awaitingEvaluationCount,
+    );
+    expect(matchingSignals).toHaveLength(1);
+    expect(matchingSignals?.[0]).toMatchObject({
+      materiality: "high",
+      evaluationState: "awaiting-evaluation",
+    });
+    expect(matchingSignals?.[0]?.rationale).toContain(
+      "Strengthens NVIDIA platform demand.",
+    );
+    expect(matchingSignals?.[0]?.rationale).toContain(
+      "Keeps AMD competition in frame.",
+    );
+  });
+
+  it("surfaces macro routed signals and marks them evaluated after a thesis evaluation consumes them", () => {
+    const seed = repository.getUpdate("nvda-fy26-q4");
+    if (!seed) {
+      throw new Error("Seed signal missing");
+    }
+    repository.persistAnalyzedUpdate({
+      ...seed,
+      id: "macro-route-detail-signal",
+      title: "Custom silicon capacity signal",
+      publisher: "Primary custom silicon source",
+      sourceUrl: "https://example.com/custom-silicon",
+      publishedAt: "2026-07-01T08:00:00.000Z",
+      ingestedAt: "2026-07-01T08:05:00.000Z",
+      companyTickers: [],
+      claims: [
+        {
+          id: "claim-macro-route-detail",
+          quote: "Custom accelerators moved into broader production.",
+          sourceId: "manual-imports",
+          locator: "Excerpt",
+        },
+      ],
+      thesisImpacts: [],
+      macroThesisImpacts: [
+        {
+          id: "macro-route-detail-impact",
+          thesisId: "macro-custom-silicon",
+          relevance: "primary",
+          stance: "supports",
+          rationale:
+            "Broader production directly bears on custom silicon adoption.",
+          claimIds: ["claim-macro-route-detail"],
+        },
+      ],
+    });
+
+    const summary = repository.getThesis("macro-custom-silicon");
+    const detail = repository.getThesisDetail("macro-custom-silicon");
+
+    expect(summary?.routedSignals).toEqual([]);
+    expect(summary?.awaitingEvaluationCount).toBe(1);
+    expect(detail?.routedSignals).toEqual([
+      expect.objectContaining({
+        updateId: "macro-route-detail-signal",
+        publisher: "Primary custom silicon source",
+        relevance: "primary",
+        materiality: null,
+        rationale:
+          "Broader production directly bears on custom silicon adoption.",
+        evaluationState: "awaiting-evaluation",
+      }),
+    ]);
+
+    const macroThesis = repository.getThesis("macro-custom-silicon");
+    if (!macroThesis) {
+      throw new Error("Seed macro thesis missing");
+    }
+    repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-macro-route-consumed",
+        thesisId: "macro-custom-silicon",
+        signalIds: ["macro-route-detail-signal"],
+        evidence: [
+          {
+            claimId: "claim-macro-route-detail",
+            stance: "supports",
+            rationale:
+              "The routed claim supports custom accelerator adoption.",
+          },
+        ],
+        proposedConfidenceScore:
+          macroThesis.currentVersion.confidenceScore + 2,
+      }),
+    );
+
+    expect(
+      repository.getThesisDetail("macro-custom-silicon")?.routedSignals,
+    ).toEqual([
+      expect.objectContaining({
+        updateId: "macro-route-detail-signal",
+        evaluationState: "evaluated",
+      }),
+    ]);
+    expect(
+      repository.getThesis("macro-custom-silicon")
+        ?.awaitingEvaluationCount,
+    ).toBe(0);
   });
 
   it("additively backfills legacy company theses when the belief migration runs", () => {
@@ -230,6 +480,158 @@ describe("RelayRepository", () => {
         linkedByEvaluationId: pending.id,
       }),
     ]);
+  });
+
+  it("records thesis-linked portfolio decisions and preserves versioned structure", () => {
+    const thesis = repository.getThesis("macro-memory-bottleneck");
+    if (!thesis) {
+      throw new Error("Seed macro thesis missing");
+    }
+    const evaluation = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "evaluation-memory-portfolio-decision",
+        thesisId: thesis.id,
+        proposedConfidenceScore: thesis.currentVersion.confidenceScore + 2,
+        signalIds: ["mu-hbm4-ramp"],
+        evidence: [
+          {
+            claimId: "claim-mu-hbm",
+            stance: "supports",
+            rationale: "The cited HBM production milestone supports the constraint.",
+          },
+        ],
+      }),
+    );
+
+    expect(() =>
+      repository.reviewThesisEvaluation(evaluation.id, {
+        decision: "accepted",
+        portfolioDecisions: [
+          {
+            portfolioItemId: "portfolio-spacex",
+            action: "hold",
+            rationale: "This unrelated holding must be rejected.",
+          },
+        ],
+      }),
+    ).toThrow(
+      "Portfolio item portfolio-spacex is not exposed to thesis macro-memory-bottleneck.",
+    );
+
+    const accepted = repository.reviewThesisEvaluation(evaluation.id, {
+      decision: "accepted",
+      nextReviewOn: "2026-08-15",
+      portfolioDecisions: [
+        {
+          portfolioItemId: "portfolio-smh",
+          action: "hold",
+          rationale: "The diversified basket still captures HBM scarcity.",
+        },
+        {
+          portfolioItemId: "portfolio-tsm",
+          action: "add",
+          rationale: "Advanced packaging remains on the memory critical path.",
+        },
+      ],
+    });
+    const updatedThesis = repository.getThesis(thesis.id);
+
+    expect(accepted).toMatchObject({
+      reviewStatus: "accepted",
+      nextReviewOn: "2026-08-15",
+      portfolioDecisions: [
+        expect.objectContaining({
+          portfolioItemId: "portfolio-smh",
+          action: "hold",
+        }),
+        expect.objectContaining({
+          portfolioItemId: "portfolio-tsm",
+          action: "add",
+        }),
+      ],
+    });
+    expect(updatedThesis).toMatchObject({
+      momentum: "strengthening",
+      nextReviewOn: "2026-08-15",
+      bottlenecks: thesis.bottlenecks,
+      captureMechanisms: thesis.captureMechanisms,
+    });
+    expect(
+      repository.getPortfolio().holdings.find(
+        (item) => item.id === "portfolio-tsm",
+      )?.latestDecision,
+    ).toMatchObject({ action: "add", evaluationId: evaluation.id });
+    expect(repository.listThesisReviews()).toContainEqual(
+      expect.objectContaining({
+        thesisTitle: thesis.title,
+        momentum: "strengthening",
+        whatChanged: evaluation.summary,
+        affectedPortfolioItems: expect.arrayContaining([
+          expect.objectContaining({ id: "portfolio-smh" }),
+          expect.objectContaining({ id: "portfolio-tsm" }),
+        ]),
+      }),
+    );
+  });
+
+  it("derives momentum and review schedule from review chronology", () => {
+    const first = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "chronology-first-created",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    repository.reviewThesisEvaluation(first.id, {
+      decision: "accepted",
+      nextReviewOn: "2026-08-01",
+    });
+    const advanced = repository.getThesis("company-nvda");
+    if (!advanced) {
+      throw new Error("Expected advanced company thesis");
+    }
+    const second = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "chronology-last-reviewed",
+        outcome: "weakened",
+        proposedConfidenceScore:
+          advanced.currentVersion.confidenceScore - 1,
+        signalIds: ["nvda-fy26-q4"],
+        evidence: [
+          {
+            claimId: "claim-nvda-dc",
+            stance: "opposes",
+            rationale: "A later review interprets the evidence as weaker.",
+          },
+        ],
+      }),
+    );
+    repository.reviewThesisEvaluation(second.id, {
+      decision: "accepted",
+    });
+    repository.database
+      .prepare(`
+        UPDATE thesis_evaluations
+        SET created_at = ?, reviewed_at = ?
+        WHERE id = ?
+      `)
+      .run("2026-07-03T00:00:00.000Z", "2026-07-04T00:00:00.000Z", first.id);
+    repository.database
+      .prepare(`
+        UPDATE thesis_evaluations
+        SET created_at = ?, reviewed_at = ?
+        WHERE id = ?
+      `)
+      .run("2026-07-02T00:00:00.000Z", "2026-07-05T00:00:00.000Z", second.id);
+
+    expect(repository.getThesis("company-nvda")).toMatchObject({
+      momentum: "weakening",
+      nextReviewOn: null,
+    });
+    expect(
+      repository
+        .listThesisReviews({ reviewStatus: "accepted" })
+        .map((review) => review.evaluation.id),
+    ).toEqual([second.id, first.id]);
   });
 
   it("preserves accepted unchanged evaluations without creating a thesis version", () => {
@@ -522,6 +924,16 @@ describe("RelayRepository", () => {
         (update) => update.id,
       ),
     ).toEqual(["nvda-fy26-q4"]);
+    expect(
+      repository.getThesisDetail("company-nvda")?.routedSignals.find(
+        (signal) => signal.updateId === "nvda-fy26-q4",
+      ),
+    ).toMatchObject({
+      evaluationState: "awaiting-evaluation",
+    });
+    expect(
+      repository.getThesis("company-nvda")?.awaitingEvaluationCount,
+    ).toBeGreaterThan(0);
 
     expect(
       repository.queueThesisEvaluationUpdate("nvda-fy26-q4"),
@@ -703,8 +1115,65 @@ describe("RelayRepository", () => {
       expect(dashboard.updates).toEqual([]);
       expect(dashboard.brief).toBeNull();
       expect(dashboard.demoData).toBe(false);
+      expect(cleanRepository.listThesisReviews()).toEqual([]);
     } finally {
       cleanRepository.close();
+    }
+  });
+
+  it("seeds an actionable review and accepted decision history in demo mode", () => {
+    const demoRepository = createRelayRepository(":memory:", {
+      demoData: true,
+    });
+    try {
+      const reviews = demoRepository.listThesisReviews();
+      const pending = reviews.find(
+        (review) => review.evaluation.id === "demo-review-custom-silicon",
+      );
+      const accepted = reviews.filter(
+        (review) => review.evaluation.reviewStatus === "accepted",
+      );
+
+      expect(reviews).toHaveLength(3);
+      expect(pending).toMatchObject({
+        momentum: "strengthening",
+        evaluation: {
+          reviewStatus: "pending",
+          evidence: [
+            expect.objectContaining({ claimId: "claim-avgo-ai" }),
+          ],
+          portfolioDecisions: [],
+        },
+        affectedPortfolioItems: expect.arrayContaining([
+          expect.objectContaining({ id: "portfolio-smh" }),
+          expect.objectContaining({ id: "portfolio-tsm" }),
+        ]),
+      });
+      expect(accepted).toHaveLength(2);
+      expect(accepted).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            evaluation: expect.objectContaining({
+              id: "demo-review-memory-bottleneck",
+              nextReviewOn: "2026-08-15",
+              portfolioDecisions: expect.arrayContaining([
+                expect.objectContaining({ action: "add" }),
+              ]),
+            }),
+          }),
+          expect.objectContaining({
+            evaluation: expect.objectContaining({
+              id: "demo-review-power-cooling",
+              nextReviewOn: "2026-08-20",
+              portfolioDecisions: expect.arrayContaining([
+                expect.objectContaining({ action: "buy" }),
+              ]),
+            }),
+          }),
+        ]),
+      );
+    } finally {
+      demoRepository.close();
     }
   });
 
@@ -810,6 +1279,32 @@ describe("RelayRepository", () => {
     let fileRepository: RelayRepository | undefined;
     try {
       fileRepository = createRelayRepository(databasePath, { demoData: true });
+      const pendingDemoDependency = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-pending-demo-dependency",
+          proposedConfidenceScore: 86,
+        }),
+      );
+      const deferredDemoDependency = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-deferred-demo-dependency",
+          proposedConfidenceScore: 87,
+        }),
+      );
+      fileRepository.reviewThesisEvaluation(deferredDemoDependency.id, {
+        decision: "deferred",
+        note: "Wait for personal evidence before deciding.",
+      });
+      const rejectedDemoDependency = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-rejected-demo-dependency",
+          proposedConfidenceScore: 88,
+        }),
+      );
+      fileRepository.reviewThesisEvaluation(rejectedDemoDependency.id, {
+        decision: "rejected",
+        note: "Do not carry fixture-only evidence into the personal workspace.",
+      });
       fileRepository.persistAnalyzedUpdate(personalUpdate);
       const reviews = createImpactReviewRepository(fileRepository.database);
       reviews.reviewImpact({
@@ -848,12 +1343,77 @@ describe("RelayRepository", () => {
       expect(dashboard.demoData).toBe(false);
       expect(dashboard.brief).toBeNull();
       expect(
+        fileRepository.getThesisEvaluation(pendingDemoDependency.id),
+      ).toBeNull();
+      expect(
+        fileRepository.getThesisEvaluation(deferredDemoDependency.id),
+      ).toBeNull();
+      expect(
+        fileRepository.getThesisEvaluation(rejectedDemoDependency.id),
+      ).toBeNull();
+      expect(fileRepository.listThesisReviews()).toEqual([]);
+      expect(
+        fileRepository.getPortfolio().items.every(
+          (item) => item.latestDecision === null,
+        ),
+      ).toBe(true);
+      expect(
+        fileRepository.getThesis("macro-memory-bottleneck")?.currentVersion
+          .confidenceScore,
+      ).toBe(75);
+      expect(
         fileRepository.database
           .prepare(
             "SELECT impact_id FROM impact_reviews ORDER BY impact_id",
           )
           .all(),
       ).toEqual([{ impact_id: "personal-impact-nvda-dynamo" }]);
+    } finally {
+      fileRepository?.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("retains demo evidence required by an accepted user review", () => {
+    const directory = mkdtempSync(join(tmpdir(), "relay-accepted-demo-"));
+    const databasePath = join(directory, "relay.sqlite");
+    let fileRepository: RelayRepository | undefined;
+    try {
+      fileRepository = createRelayRepository(databasePath, { demoData: true });
+      const accepted = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-accepted-demo-dependency",
+          proposedConfidenceScore: 86,
+        }),
+      );
+      fileRepository.reviewThesisEvaluation(accepted.id, {
+        decision: "accepted",
+        note: "Keep this reviewed evidence as part of personal history.",
+      });
+      fileRepository.close();
+      fileRepository = undefined;
+
+      fileRepository = createRelayRepository(databasePath, { demoData: false });
+
+      expect(fileRepository.getUpdate("nvda-fy26-q4")).not.toBeNull();
+      expect(fileRepository.getUpdate("avgo-fy25-q4")).toBeNull();
+      expect(fileRepository.getThesisEvaluation(accepted.id)).toMatchObject({
+        reviewStatus: "accepted",
+        signalIds: ["nvda-fy26-q4"],
+        claimIds: ["claim-nvda-dc"],
+      });
+      expect(fileRepository.getThesis("company-nvda")).toMatchObject({
+        currentVersion: {
+          createdByEvaluationId: accepted.id,
+          confidenceScore: 86,
+        },
+        evidence: [
+          expect.objectContaining({
+            claimId: "claim-nvda-dc",
+            linkedByEvaluationId: accepted.id,
+          }),
+        ],
+      });
     } finally {
       fileRepository?.close();
       rmSync(directory, { force: true, recursive: true });
@@ -990,6 +1550,102 @@ describe("RelayRepository", () => {
         stance: "context",
       }),
     ]);
+  });
+
+  it("persists syndicated reports as one auditable evidence chain", () => {
+    const baseUpdate: IntelligenceUpdate = {
+      id: "meta-bloomberg",
+      title:
+        "Meta is building a cloud business to sell excess AI computing capacity",
+      publisher: "Bloomberg",
+      sourceUrl: "https://example.com/bloomberg/meta-cloud",
+      publishedAt: "2026-07-01T15:33:59.703Z",
+      ingestedAt: "2026-07-01T15:34:59.703Z",
+      layerIds: ["cloud"],
+      companyTickers: ["META"],
+      materiality: "high",
+      materialityReason:
+        "The report describes a new route to monetize AI infrastructure.",
+      novelty: "new",
+      sentiment: "bullish",
+      whatHappened: "Meta plans to sell excess AI compute capacity.",
+      whyItMatters: "The move could change cloud capacity economics.",
+      beneficiaries: ["AI cloud customers"],
+      threatened: [],
+      watchNext: ["Commercial availability"],
+      claims: [
+        {
+          id: "meta-bloomberg-claim",
+          quote: "Meta plans to sell excess AI computing capacity.",
+          sourceId: "manual-imports",
+          locator: "Excerpt",
+        },
+      ],
+      thesisImpacts: [],
+      macroThesisImpacts: [
+        {
+          id: "meta-bloomberg-macro-impact",
+          thesisId: "macro-custom-silicon",
+          relevance: "secondary",
+          stance: "supports",
+          rationale:
+            "Commercializing spare capacity bears on custom-silicon economics.",
+          claimIds: ["meta-bloomberg-claim"],
+        },
+      ],
+      model: "test-model",
+    };
+    const reutersUpdate: IntelligenceUpdate = {
+      ...baseUpdate,
+      id: "meta-reuters",
+      title:
+        "Meta plans cloud business to sell excess AI computing capacity, Bloomberg News reports",
+      publisher: "Reuters",
+      sourceUrl: "https://example.com/reuters/meta-cloud",
+      publishedAt: "2026-07-01T15:35:05.519Z",
+      ingestedAt: "2026-07-01T15:36:05.519Z",
+      claims: [
+        {
+          id: "meta-reuters-claim",
+          quote: "Meta plans a cloud business for excess AI capacity.",
+          sourceId: "manual-imports",
+          locator: "Excerpt",
+        },
+      ],
+      macroThesisImpacts: [
+        {
+          id: "meta-reuters-macro-impact",
+          thesisId: "macro-custom-silicon",
+          relevance: "secondary",
+          stance: "supports",
+          rationale:
+            "Commercializing spare capacity bears on custom-silicon economics.",
+          claimIds: ["meta-reuters-claim"],
+        },
+      ],
+    };
+
+    repository.persistAnalyzedUpdate(baseUpdate);
+    const persistedReuters =
+      repository.persistAnalyzedUpdate(reutersUpdate);
+    const persistedBloomberg = repository.getUpdate(baseUpdate.id);
+
+    expect(persistedReuters.sourceLineage).toMatchObject({
+      evidenceChainId: expect.stringMatching(/^story-[a-f0-9]{20}$/),
+      reportCount: 2,
+      publishers: ["Bloomberg", "Reuters"],
+      updateIds: ["meta-bloomberg", "meta-reuters"],
+      matchScore: expect.any(Number),
+    });
+    expect(persistedBloomberg?.sourceLineage).toMatchObject({
+      evidenceChainId:
+        persistedReuters.sourceLineage?.evidenceChainId,
+      reportCount: 2,
+    });
+    expect(
+      repository.getEvidenceChainIdForUpdate(baseUpdate.id),
+    ).toBe(repository.getEvidenceChainIdForUpdate(reutersUpdate.id));
+    expect(persistedReuters.companyTickers).toEqual([]);
   });
 
   it("deletes a signal and any generated brief or unaccepted evaluation that cites it", () => {
@@ -1155,6 +1811,121 @@ describe("RelayRepository", () => {
     expect(duplicate).toMatchObject({
       duplicate: true,
       id: first.id,
+    });
+  });
+
+  it("lists durable failed documents with retry metadata and no raw content", () => {
+    const first = repository.persistSourceDocument({
+      title: "Blocked article",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/blocked",
+      publishedAt: "2026-07-01T10:00:00.000Z",
+      content:
+        "URL import queued for secure retrieval: https://example.com/blocked",
+      sourceKind: "technical",
+    });
+    repository.markSourceDocumentError(
+      first.id,
+      "Source request failed with HTTP 403.",
+    );
+    repository.markSourceDocumentError(
+      first.id,
+      "Source request failed with HTTP 403.",
+    );
+
+    const failed = repository.listFailedSourceDocuments();
+
+    expect(failed).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        title: "Blocked article",
+        publisher: "Example Publisher",
+        sourceUrl: "https://example.com/blocked",
+        publishedAt: "2026-07-01T10:00:00.000Z",
+        sourceKind: "technical",
+        errorMessage: "Source request failed with HTTP 403.",
+        attemptCount: 2,
+        lastAttemptedAt: expect.any(String),
+        ingestedAt: expect.any(String),
+      }),
+    ]);
+    expect(failed[0]).not.toHaveProperty("content");
+  });
+
+  it("updates a failed document in place for excerpt recovery while preserving its original URL", () => {
+    const document = repository.persistSourceDocument({
+      title: "Blocked article",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/article?utm_source=email",
+      content:
+        "URL import queued for secure retrieval: https://example.com/article",
+    });
+    repository.markSourceDocumentError(
+      document.id,
+      "Source request failed with HTTP 403.",
+    );
+
+    const recovered = repository.updateSourceDocumentForRecovery(
+      document.id,
+      {
+        title: "Corrected article title",
+        content:
+          "The publisher reported a material increase in AI infrastructure spending during the quarter.",
+        sourceUrl: "https://example.com/article",
+        sourceKind: "technical",
+      },
+    );
+
+    expect(recovered).toMatchObject({
+      id: document.id,
+      title: "Corrected article title",
+      sourceUrl: "https://example.com/article",
+      status: "error",
+      sourceKind: "technical",
+      attemptCount: 1,
+    });
+    expect(recovered.content).toContain(
+      "material increase in AI infrastructure spending",
+    );
+  });
+
+  it("rejects recovery URL changes and content-hash collisions instead of merging documents", () => {
+    const failed = repository.persistSourceDocument({
+      title: "Failed article",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/article",
+      content:
+        "URL import queued for secure retrieval: https://example.com/article",
+    });
+    repository.markSourceDocumentError(
+      failed.id,
+      "Source request failed with HTTP 403.",
+    );
+    const duplicateContent =
+      "This article excerpt already belongs to another stored document and must not be merged.";
+    const existing = repository.persistSourceDocument({
+      title: "Existing excerpt",
+      publisher: "Example Publisher",
+      sourceUrl: "https://example.com/article",
+      content: duplicateContent,
+    });
+
+    expect(() =>
+      repository.updateSourceDocumentForRecovery(failed.id, {
+        sourceUrl: "https://different.example.com/article",
+      }),
+    ).toThrow("must match the original source URL");
+    expect(() =>
+      repository.updateSourceDocumentForRecovery(failed.id, {
+        content: duplicateContent,
+      }),
+    ).toThrow(`duplicates source document ${existing.id}`);
+    expect(
+      repository.getSourceDocumentForRecovery(failed.id),
+    ).toMatchObject({
+      id: failed.id,
+      status: "error",
+      sourceUrl: "https://example.com/article",
     });
   });
 

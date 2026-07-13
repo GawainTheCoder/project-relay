@@ -52,6 +52,45 @@ export const thesisEvaluationReviewStatuses = [
 export type ThesisEvaluationReviewStatus =
   (typeof thesisEvaluationReviewStatuses)[number];
 export type ThesisEvaluationReviewRecommendation = "accept" | "reject";
+export const thesisMomentums = [
+  "strengthening",
+  "unchanged",
+  "weakening",
+] as const;
+export type ThesisMomentum = (typeof thesisMomentums)[number];
+export const portfolioAssetTypes = [
+  "equity",
+  "etf",
+  "private-company",
+] as const;
+export type PortfolioAssetType = (typeof portfolioAssetTypes)[number];
+export const portfolioItemStatuses = [
+  "holding",
+  "watchlist",
+  "archived",
+] as const;
+export type PortfolioItemStatus = (typeof portfolioItemStatuses)[number];
+export const portfolioExposureTypes = [
+  "direct",
+  "diversified",
+  "indirect",
+] as const;
+export type PortfolioExposureType = (typeof portfolioExposureTypes)[number];
+export const portfolioDecisionActions = [
+  "buy",
+  "hold",
+  "add",
+  "reduce",
+  "sell",
+] as const;
+export type PortfolioDecisionAction =
+  (typeof portfolioDecisionActions)[number];
+export const companyCaptureRoles = [
+  "beneficiary",
+  "dependent",
+  "hedge",
+] as const;
+export type CompanyCaptureRole = (typeof companyCaptureRoles)[number];
 export type SignalNovelty =
   | "new"
   | "confirmation"
@@ -101,6 +140,97 @@ export interface ThesisVersion {
   createdByEvaluationId: string | null;
 }
 
+export interface ThesisBottleneck {
+  key: string;
+  title: string;
+  description: string;
+  sortOrder: number;
+}
+
+export interface CompanyCaptureMechanism {
+  key: string;
+  bottleneckKey: string;
+  companyTicker: string;
+  role: CompanyCaptureRole;
+  mechanism: string;
+  sortOrder: number;
+}
+
+export interface PortfolioThesisExposure {
+  portfolioItemId: string;
+  thesisId: string;
+  thesisTitle: string;
+  exposureType: PortfolioExposureType;
+  captureMechanism: string;
+  sortOrder: number;
+}
+
+export interface PortfolioDecisionInput {
+  portfolioItemId: string;
+  action: PortfolioDecisionAction;
+  rationale: string;
+}
+
+export interface PortfolioDecision extends PortfolioDecisionInput {
+  evaluationId: string;
+  createdAt: string;
+}
+
+export interface PortfolioItemInput {
+  id: string;
+  symbol?: string | null;
+  name: string;
+  assetType: PortfolioAssetType;
+  companyTicker?: string | null;
+  status: PortfolioItemStatus;
+  allocationBps?: number | null;
+}
+
+export interface PortfolioItem extends PortfolioItemInput {
+  symbol: string | null;
+  companyTicker: string | null;
+  allocationBps: number | null;
+  allocationPercent: number | null;
+  thesisExposures: PortfolioThesisExposure[];
+  latestDecision: PortfolioDecision | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PortfolioThesisExposureInput {
+  portfolioItemId: string;
+  thesisId: string;
+  exposureType: PortfolioExposureType;
+  captureMechanism: string;
+  sortOrder?: number;
+}
+
+export interface ThesisStructureInput {
+  thesisId: string;
+  bottlenecks: ThesisBottleneck[];
+  captureMechanisms: CompanyCaptureMechanism[];
+}
+
+export interface PortfolioOverlap {
+  leftPortfolioItemId: string;
+  leftPortfolioItemName: string;
+  rightPortfolioItemId: string;
+  rightPortfolioItemName: string;
+  sharedTheses: Array<{
+    thesisId: string;
+    thesisTitle: string;
+  }>;
+}
+
+export interface PortfolioReadModel {
+  allocationBasis: "illustrative-seed";
+  allocationNote: string;
+  items: PortfolioItem[];
+  holdings: PortfolioItem[];
+  watchlist: PortfolioItem[];
+  overlaps: PortfolioOverlap[];
+}
+
 export interface ThesisEvidence {
   thesisId: string;
   claimId: string;
@@ -112,6 +242,21 @@ export interface ThesisEvidence {
   claim: EvidenceClaim;
 }
 
+export type ThesisRoutedSignalEvaluationState =
+  | "awaiting-evaluation"
+  | "evaluated";
+
+export interface ThesisRoutedSignal {
+  updateId: string;
+  title: string;
+  publisher: string;
+  publishedAt: string;
+  relevance: MacroThesisRelevance | null;
+  materiality: Materiality | null;
+  rationale: string;
+  evaluationState: ThesisRoutedSignalEvaluationState;
+}
+
 export interface Thesis {
   id: string;
   kind: ThesisKind;
@@ -119,9 +264,16 @@ export interface Thesis {
   status: ThesisStatus;
   currentVersion: ThesisVersion;
   versions: ThesisVersion[];
+  momentum: ThesisMomentum;
+  nextReviewOn: string | null;
+  bottlenecks: ThesisBottleneck[];
+  captureMechanisms: CompanyCaptureMechanism[];
   companyTickers: string[];
   layerIds: LayerId[];
+  portfolioExposures: PortfolioThesisExposure[];
   evidence: ThesisEvidence[];
+  routedSignals: ThesisRoutedSignal[];
+  awaitingEvaluationCount: number;
   evaluations: ThesisEvaluation[];
   createdAt: string;
   updatedAt: string;
@@ -186,6 +338,8 @@ export interface ThesisEvaluation {
   reviewRecommendationReason: string | null;
   reviewStatus: ThesisEvaluationReviewStatus;
   reviewNote: string | null;
+  nextReviewOn: string | null;
+  portfolioDecisions: PortfolioDecision[];
   model: string | null;
   createdAt: string;
   reviewedAt: string | null;
@@ -194,6 +348,28 @@ export interface ThesisEvaluation {
 export interface ThesisEvaluationReviewInput {
   decision: Exclude<ThesisEvaluationReviewStatus, "pending">;
   note?: string | undefined;
+  nextReviewOn?: string | undefined;
+  portfolioDecisions?: PortfolioDecisionInput[] | undefined;
+}
+
+export interface ThesisReview {
+  evaluation: ThesisEvaluation;
+  thesisTitle: string;
+  thesisKind: ThesisKind;
+  momentum: ThesisMomentum;
+  whatChanged: string;
+  affectedPortfolioItems: Array<
+    Pick<
+      PortfolioItem,
+      "id" | "symbol" | "name" | "status" | "allocationPercent"
+    >
+  >;
+}
+
+export interface ReviewsReadModel {
+  reviews: ThesisReview[];
+  actionable: ThesisReview[];
+  history: ThesisReview[];
 }
 
 export interface ThesisEvaluationRequeueResult {
@@ -289,6 +465,14 @@ export interface IntelligenceUpdate {
   thesisImpacts: ThesisImpact[];
   macroThesisImpacts: MacroThesisImpact[];
   model: string | null;
+  sourceLineage?: {
+    evidenceChainId: string;
+    reportCount: number;
+    publishers: string[];
+    updateIds: string[];
+    matchScore: number | null;
+    matchReason: string | null;
+  };
 }
 
 export interface Company {
@@ -397,6 +581,28 @@ export interface ImportSourceInput {
   publisher: string;
   sourceUrl?: string;
   sourceProfileId?: string;
+  publishedAt?: string;
+  content?: string;
+  sourceKind?: SourceKind;
+}
+
+export interface FailedSourceDocument {
+  id: string;
+  title: string;
+  publisher: string;
+  sourceUrl: string | null;
+  publishedAt: string;
+  sourceKind: SourceKind;
+  errorMessage: string;
+  attemptCount: number;
+  lastAttemptedAt: string | null;
+  ingestedAt: string;
+}
+
+export interface FailedSourceDocumentRecoveryInput {
+  title?: string;
+  publisher?: string;
+  sourceUrl?: string;
   publishedAt?: string;
   content?: string;
   sourceKind?: SourceKind;

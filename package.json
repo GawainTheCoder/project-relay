@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A personal, evidence-backed AI infrastructure intelligence dashboard.",
+  "description": "A personal, evidence-backed investment thesis and portfolio decision tracker.",
   "engines": {
     "node": ">=22.0.0",
     "npm": ">=10.0.0"

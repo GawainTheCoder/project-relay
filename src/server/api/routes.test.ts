@@ -35,7 +35,7 @@ describe("Relay API", () => {
     };
     expect(dashboard.companies).toHaveLength(13);
     expect(dashboard.updates).toHaveLength(7);
-    expect(dashboard.sourceCoverage).toHaveLength(6);
+    expect(dashboard.sourceCoverage).toHaveLength(7);
     expect(dashboard.sourceCoverage.map((entry) => entry.thesisId)).toEqual([
       "macro-memory-bottleneck",
       "macro-networking-bottleneck",
@@ -43,6 +43,7 @@ describe("Relay API", () => {
       "macro-power-cooling",
       "macro-custom-silicon",
       "macro-inference-portability",
+      "macro-space-infrastructure",
     ]);
     expect(
       dashboard.sourceCoverage.every((entry) =>
@@ -88,6 +89,188 @@ describe("Relay API", () => {
       evidence: expect.any(Array),
       evaluations: expect.any(Array),
     });
+  });
+
+  it("returns portfolio exposure overlap and review work queues", async () => {
+    const demoRepository = createRelayRepository(":memory:", {
+      demoData: true,
+    });
+    try {
+      const app = createApp({ repository: demoRepository });
+      const portfolioResponse = await app.request("/api/portfolio");
+      expect(portfolioResponse.status).toBe(200);
+      await expect(portfolioResponse.json()).resolves.toMatchObject({
+        allocationBasis: "illustrative-seed",
+        holdings: [
+          expect.objectContaining({ name: "SpaceX", allocationPercent: 35 }),
+          expect.objectContaining({ symbol: "VOO", allocationPercent: 30 }),
+          expect.objectContaining({ symbol: "SMH", allocationPercent: 20 }),
+          expect.objectContaining({ symbol: "TSM", allocationPercent: 15 }),
+        ],
+        overlaps: expect.arrayContaining([
+          expect.objectContaining({
+            leftPortfolioItemId: "portfolio-smh",
+            rightPortfolioItemId: "portfolio-tsm",
+          }),
+        ]),
+      });
+
+      const reviewsResponse = await app.request("/api/reviews");
+      expect(reviewsResponse.status).toBe(200);
+      await expect(reviewsResponse.json()).resolves.toMatchObject({
+        actionable: [
+          expect.objectContaining({
+            thesisTitle: "Custom silicon adoption is accelerating",
+            momentum: "strengthening",
+            whatChanged: expect.any(String),
+            evaluation: expect.objectContaining({
+              id: "demo-review-custom-silicon",
+              reviewStatus: "pending",
+              evidence: [expect.objectContaining({ claimId: "claim-avgo-ai" })],
+              portfolioDecisions: [],
+            }),
+            affectedPortfolioItems: expect.arrayContaining([
+              expect.objectContaining({ id: "portfolio-smh" }),
+              expect.objectContaining({ id: "portfolio-tsm" }),
+            ]),
+          }),
+        ],
+        history: expect.arrayContaining([
+          expect.objectContaining({
+            evaluation: expect.objectContaining({
+              reviewStatus: "accepted",
+              nextReviewOn: expect.any(String),
+              portfolioDecisions: expect.any(Array),
+            }),
+          }),
+        ]),
+      });
+    } finally {
+      demoRepository.close();
+    }
+  });
+
+  it("accepts an actionable review with linked portfolio decisions", async () => {
+    const demoRepository = createRelayRepository(":memory:", {
+      demoData: true,
+    });
+    try {
+      const app = createApp({ repository: demoRepository });
+      const response = await app.request(
+        "/api/thesis-evaluations/demo-review-custom-silicon/review",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            decision: "accepted",
+            note: "The cited supplier outlook clears the review threshold.",
+            nextReviewOn: "2026-09-01",
+            portfolioDecisions: [
+              {
+                portfolioItemId: "portfolio-smh",
+                action: "hold",
+                rationale: "The basket captures both custom and merchant paths.",
+              },
+              {
+                portfolioItemId: "portfolio-tsm",
+                action: "add",
+                rationale: "Architectural competition still converges on TSMC.",
+              },
+            ],
+          }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        id: "demo-review-custom-silicon",
+        reviewStatus: "accepted",
+        nextReviewOn: "2026-09-01",
+        portfolioDecisions: [
+          expect.objectContaining({
+            portfolioItemId: "portfolio-smh",
+            action: "hold",
+          }),
+          expect.objectContaining({
+            portfolioItemId: "portfolio-tsm",
+            action: "add",
+          }),
+        ],
+      });
+      const acceptedResponse = await app.request(
+        "/api/reviews?status=accepted&limit=10",
+      );
+      const acceptedPayload = (await acceptedResponse.json()) as {
+        actionable: unknown[];
+        history: Array<{ evaluation: { id: string } }>;
+      };
+      expect(acceptedPayload.actionable).toEqual([]);
+      expect(
+        acceptedPayload.history.map((review) => review.evaluation.id),
+      ).toContain("demo-review-custom-silicon");
+    } finally {
+      demoRepository.close();
+    }
+  });
+
+  it("distinguishes missing and unrelated portfolio review decisions", async () => {
+    const demoRepository = createRelayRepository(":memory:", {
+      demoData: true,
+    });
+    try {
+      const app = createApp({ repository: demoRepository });
+      const missingResponse = await app.request(
+        "/api/thesis-evaluations/demo-review-custom-silicon/review",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            decision: "accepted",
+            portfolioDecisions: [
+              {
+                portfolioItemId: "portfolio-missing",
+                action: "buy",
+                rationale: "Exercise the missing-item error contract.",
+              },
+            ],
+          }),
+        },
+      );
+      expect(missingResponse.status).toBe(404);
+      await expect(missingResponse.json()).resolves.toMatchObject({
+        error: { code: "PORTFOLIO_ITEM_NOT_FOUND" },
+      });
+
+      const unrelatedResponse = await app.request(
+        "/api/thesis-evaluations/demo-review-custom-silicon/review",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            decision: "accepted",
+            portfolioDecisions: [
+              {
+                portfolioItemId: "portfolio-spacex",
+                action: "hold",
+                rationale: "SpaceX is unrelated to the custom-silicon thesis.",
+              },
+            ],
+          }),
+        },
+      );
+      expect(unrelatedResponse.status).toBe(409);
+      await expect(unrelatedResponse.json()).resolves.toMatchObject({
+        error: {
+          code: "THESIS_EVALUATION_CONFLICT",
+          message: expect.stringContaining("is not exposed to thesis"),
+        },
+      });
+      expect(
+        demoRepository.getThesisEvaluation("demo-review-custom-silicon"),
+      ).toMatchObject({ reviewStatus: "pending" });
+    } finally {
+      demoRepository.close();
+    }
   });
 
   it("reviews a thesis evaluation and advances the accepted belief", async () => {

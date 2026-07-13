@@ -4,24 +4,39 @@ import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import type {
+  CompanyCaptureMechanism,
   Company,
   CompanyInput,
   DailyBrief,
   DashboardPayload,
+  FailedSourceDocument,
   ImpactReview,
   IntelligenceUpdate,
+  PortfolioDecision,
+  PortfolioDecisionInput,
+  PortfolioItem,
+  PortfolioItemInput,
+  PortfolioOverlap,
+  PortfolioReadModel,
+  PortfolioThesisExposure,
+  PortfolioThesisExposureInput,
   ResearchSource,
   ResearchSourceInput,
   SourceProfileInput,
   SourceKind,
   StackLayer,
   Thesis,
+  ThesisBottleneck,
   ThesisEvaluation,
   ThesisEvaluationInput,
   ThesisEvaluationReviewInput,
   ThesisEvidence,
   ThesisInput,
+  ThesisMomentum,
+  ThesisRoutedSignal,
   ThesisStatus,
+  ThesisStructureInput,
+  ThesisReview,
   ThesisType,
   ThesisVersion,
 } from "../../shared/contracts.js";
@@ -32,8 +47,19 @@ import {
   demoUpdateIds,
   seedDatabase,
 } from "../seeds/index.js";
+import {
+  seedPortfolioItems,
+  seedPortfolioReviews,
+  seedPortfolioThesisExposures,
+  seedThesisStructures,
+  type PortfolioReviewSeed,
+} from "../seeds/catalog.js";
 import { migrateDatabase } from "./schema.js";
 import { canonicalizeUrl } from "../ingestion/normalize.js";
+import {
+  clusterStories,
+  type StoryCandidate,
+} from "../intelligence/story-clustering.js";
 
 const IMPACT_REVIEW_INVALIDATION_PREFIX = "Invalidated after impact ";
 const SIGNAL_REEVALUATION_INVALIDATION_PREFIX =
@@ -48,14 +74,28 @@ interface CatalogSeed {
   updates: IntelligenceUpdate[];
 }
 
+interface PortfolioCatalogSeed {
+  items: PortfolioItemInput[];
+  exposures: PortfolioThesisExposureInput[];
+  thesisStructures: ThesisStructureInput[];
+}
+
 export interface ThesisListFilters {
   kind?: ThesisType | undefined;
   status?: ThesisStatus | "all" | undefined;
 }
 
+interface ThesisReadOptions {
+  includeRoutedSignals?: boolean | undefined;
+}
+
 export interface ThesisEvaluationListFilters {
   thesisId?: string | undefined;
   reviewStatus?: ThesisEvaluation["reviewStatus"] | undefined;
+}
+
+export interface ThesisReviewListFilters extends ThesisEvaluationListFilters {
+  limit?: number | undefined;
 }
 
 export interface ThesisEvaluationRun {
@@ -100,6 +140,42 @@ export interface SourceDocumentRecord {
   updateId: string | null;
   ingestedAt: string;
   duplicate: boolean;
+}
+
+export interface SourceDocumentRecoveryRecord {
+  id: string;
+  title: string;
+  publisher: string;
+  sourceUrl: string | null;
+  publishedAt: string;
+  content: string;
+  sourceKind: SourceKind;
+  researchSourceId: string | null;
+  status: SourceDocumentRecord["status"];
+  updateId: string | null;
+  ingestedAt: string;
+  errorMessage: string | null;
+  attemptCount: number;
+  lastAttemptedAt: string | null;
+}
+
+export class PortfolioItemNotFoundError extends RangeError {
+  readonly portfolioItemId: string;
+
+  constructor(portfolioItemId: string) {
+    super(`Unknown active portfolio item: ${portfolioItemId}`);
+    this.name = "PortfolioItemNotFoundError";
+    this.portfolioItemId = portfolioItemId;
+  }
+}
+
+export interface SourceDocumentRecoveryUpdate {
+  title?: string;
+  publisher?: string;
+  sourceUrl?: string;
+  publishedAt?: string;
+  content?: string;
+  sourceKind?: SourceKind;
 }
 
 type SqlValue = null | number | string | undefined;
@@ -272,6 +348,239 @@ export class RelayRepository {
     }
   }
 
+  seedPortfolioCatalog(catalog: PortfolioCatalogSeed): void {
+    const holdingAllocationBps = catalog.items
+      .filter((item) => item.status === "holding")
+      .reduce((total, item) => total + (item.allocationBps ?? 0), 0);
+    if (holdingAllocationBps > 10_000) {
+      throw new RangeError("Portfolio holding allocations cannot exceed 100%.");
+    }
+
+    const structureVersions = catalog.thesisStructures.map((structure) => {
+      const thesis = this.getThesis(structure.thesisId);
+      if (!thesis) {
+        throw new RangeError(`Unknown thesis structure: ${structure.thesisId}`);
+      }
+      const associatedCompanies = new Set(thesis.companyTickers);
+      const invalidCapture = structure.captureMechanisms.find(
+        (capture) => !associatedCompanies.has(capture.companyTicker.toUpperCase()),
+      );
+      if (invalidCapture) {
+        throw new TypeError(
+          `Company ${invalidCapture.companyTicker} is not associated with thesis ${thesis.id}.`,
+        );
+      }
+      return { structure, versionId: thesis.currentVersion.id };
+    });
+    const createdAt = new Date().toISOString();
+    const insertItem = this.database.prepare(`
+      INSERT OR IGNORE INTO portfolio_items (
+        id, symbol, name, asset_type, company_ticker, status,
+        allocation_bps, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const insertExposure = this.database.prepare(`
+      INSERT OR IGNORE INTO portfolio_thesis_exposures (
+        portfolio_item_id, thesis_id, exposure_type, capture_mechanism,
+        sort_order
+      ) VALUES (?, ?, ?, ?, ?)
+    `);
+    const insertBottleneck = this.database.prepare(`
+      INSERT OR IGNORE INTO thesis_version_bottlenecks (
+        thesis_version_id, bottleneck_key, title, description, sort_order
+      ) VALUES (?, ?, ?, ?, ?)
+    `);
+    const insertCapture = this.database.prepare(`
+      INSERT OR IGNORE INTO thesis_version_company_captures (
+        thesis_version_id, capture_key, bottleneck_key, company_ticker,
+        role, mechanism, sort_order
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    this.withTransaction(() => {
+      catalog.items.forEach((item) => {
+        insertItem.run(
+          item.id.trim(),
+          item.symbol?.trim() || null,
+          item.name.trim(),
+          item.assetType,
+          item.companyTicker?.trim().toUpperCase() || null,
+          item.status,
+          item.allocationBps ?? null,
+          createdAt,
+          createdAt,
+        );
+      });
+      catalog.exposures.forEach((exposure, index) => {
+        const thesis = this.getThesis(exposure.thesisId);
+        if (!thesis || thesis.kind !== "macro" || thesis.status !== "active") {
+          throw new TypeError(
+            `Portfolio exposure requires an active macro thesis: ${exposure.thesisId}.`,
+          );
+        }
+        insertExposure.run(
+          exposure.portfolioItemId,
+          exposure.thesisId,
+          exposure.exposureType,
+          exposure.captureMechanism.trim(),
+          exposure.sortOrder ?? index,
+        );
+      });
+      structureVersions.forEach(({ structure, versionId }) => {
+        structure.bottlenecks.forEach((bottleneck) => {
+          insertBottleneck.run(
+            versionId,
+            bottleneck.key,
+            bottleneck.title.trim(),
+            bottleneck.description.trim(),
+            bottleneck.sortOrder,
+          );
+        });
+        structure.captureMechanisms.forEach((capture) => {
+          insertCapture.run(
+            versionId,
+            capture.key,
+            capture.bottleneckKey,
+            capture.companyTicker.toUpperCase(),
+            capture.role,
+            capture.mechanism.trim(),
+            capture.sortOrder,
+          );
+        });
+      });
+    });
+  }
+
+  seedPortfolioReviewHistory(seeds: readonly PortfolioReviewSeed[]): void {
+    seeds.forEach((seed) => {
+      if (this.getThesisEvaluation(seed.id)) {
+        return;
+      }
+      const thesis = this.getThesis(seed.thesisId);
+      const signal = this.getUpdate(seed.signalId);
+      if (!thesis || thesis.status !== "active") {
+        throw new RangeError(`Unknown active thesis: ${seed.thesisId}`);
+      }
+      if (
+        !signal ||
+        !signal.claims.some((claim) => claim.id === seed.claimId)
+      ) {
+        throw new RangeError(
+          `Unknown seed evidence ${seed.claimId} for signal ${seed.signalId}.`,
+        );
+      }
+      const evaluation = this.persistThesisEvaluation({
+        id: seed.id,
+        thesisId: thesis.id,
+        outcome: seed.outcome,
+        summary: seed.summary,
+        rationale: seed.rationale,
+        proposedBelief: thesis.currentVersion.belief,
+        proposedConfidenceScore:
+          thesis.currentVersion.confidenceScore + seed.confidenceDelta,
+        proposedUnknowns: thesis.currentVersion.unknowns,
+        proposedStrengtheningConditions:
+          thesis.currentVersion.strengtheningConditions,
+        proposedWeakeningConditions:
+          thesis.currentVersion.weakeningConditions,
+        signalIds: [seed.signalId],
+        evidence: [
+          {
+            claimId: seed.claimId,
+            stance: "supports",
+            rationale: seed.rationale,
+          },
+        ],
+        reviewRecommendation: "accept",
+        reviewRecommendationReason:
+          "Seed evidence directly supports the modeled bottleneck.",
+        model: null,
+      });
+      if (seed.reviewStatus === "accepted") {
+        this.reviewThesisEvaluation(evaluation.id, {
+          decision: "accepted",
+          note: "Illustrative starter review based on cited seed evidence.",
+          ...(seed.nextReviewOn
+            ? { nextReviewOn: seed.nextReviewOn }
+            : {}),
+          portfolioDecisions: seed.portfolioDecisions,
+        });
+      }
+    });
+  }
+
+  clearPortfolioReviewHistory(evaluationIds: readonly string[]): void {
+    const uniqueEvaluationIds = uniqueStrings(evaluationIds);
+    const findEvaluation = this.database.prepare(`
+      SELECT thesis_id, previous_version_id, accepted_version_id
+      FROM thesis_evaluations
+      WHERE id = ?
+    `);
+    const restoreCurrentVersion = this.database.prepare(`
+      UPDATE theses
+      SET current_version_id = ?,
+          updated_at = (
+            SELECT created_at FROM thesis_versions WHERE id = ?
+          )
+      WHERE id = ? AND current_version_id = ?
+    `);
+    const deleteLinkedEvidence = this.database.prepare(`
+      DELETE FROM thesis_evidence
+      WHERE linked_by_evaluation_id = ?
+    `);
+    const deleteEvaluation = this.database.prepare(
+      "DELETE FROM thesis_evaluations WHERE id = ?",
+    );
+    const deleteUnreferencedVersion = this.database.prepare(`
+      DELETE FROM thesis_versions
+      WHERE id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM theses WHERE current_version_id = ?
+        )
+        AND NOT EXISTS (
+          SELECT 1
+          FROM thesis_evaluations
+          WHERE previous_version_id = ? OR accepted_version_id = ?
+        )
+    `);
+
+    this.withTransaction(() => {
+      uniqueEvaluationIds.forEach((evaluationId) => {
+        const evaluationRow = row(findEvaluation.get(evaluationId));
+        if (!evaluationRow) {
+          return;
+        }
+        const thesisId = text(evaluationRow, "thesis_id");
+        const previousVersionId = text(
+          evaluationRow,
+          "previous_version_id",
+        );
+        const acceptedVersionId = nullableText(
+          evaluationRow,
+          "accepted_version_id",
+        );
+        if (acceptedVersionId) {
+          restoreCurrentVersion.run(
+            previousVersionId,
+            previousVersionId,
+            thesisId,
+            acceptedVersionId,
+          );
+        }
+        deleteLinkedEvidence.run(evaluationId);
+        deleteEvaluation.run(evaluationId);
+        if (acceptedVersionId && acceptedVersionId !== previousVersionId) {
+          deleteUnreferencedVersion.run(
+            acceptedVersionId,
+            acceptedVersionId,
+            acceptedVersionId,
+            acceptedVersionId,
+          );
+        }
+      });
+    });
+  }
+
   getDashboard(): Omit<DashboardPayload, "sourceCoverage"> {
     const briefRow = row(
       this.database
@@ -293,9 +602,131 @@ export class RelayRepository {
     };
   }
 
+  getPortfolio(): PortfolioReadModel {
+    const items = this.listPortfolioItems();
+    const holdings = items.filter((item) => item.status === "holding");
+    return {
+      allocationBasis: "illustrative-seed",
+      allocationNote:
+        "Starter allocations are illustrative examples (35% SpaceX, 30% VOO, 20% SMH, 15% TSM), not verified portfolio balances.",
+      items,
+      holdings,
+      watchlist: items.filter((item) => item.status === "watchlist"),
+      overlaps: this.buildPortfolioOverlaps(holdings),
+    };
+  }
+
+  listPortfolioItems(): PortfolioItem[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM portfolio_items
+          WHERE status <> 'archived'
+          ORDER BY
+            CASE status WHEN 'holding' THEN 0 ELSE 1 END,
+            allocation_bps DESC,
+            name,
+            id
+        `)
+        .all(),
+    ).map((itemRow) => this.mapPortfolioItem(itemRow));
+  }
+
+  listPortfolioExposuresForThesis(
+    thesisId: string,
+  ): PortfolioThesisExposure[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT exposure.*, thesis.title AS thesis_title
+          FROM portfolio_thesis_exposures AS exposure
+          INNER JOIN theses AS thesis ON thesis.id = exposure.thesis_id
+          WHERE exposure.thesis_id = ?
+          ORDER BY exposure.sort_order, exposure.portfolio_item_id
+        `)
+        .all(thesisId),
+    ).map((exposureRow) => this.mapPortfolioExposure(exposureRow));
+  }
+
+  listThesisReviews(
+    filters: ThesisReviewListFilters = {},
+  ): ThesisReview[] {
+    const portfolioItems = new Map(
+      this.listPortfolioItems().map((item) => [item.id, item]),
+    );
+    const evaluations = this.listThesisEvaluations(filters)
+      .toSorted((left, right) => {
+        const leftActivityAt =
+          left.reviewStatus === "accepted" ||
+            left.reviewStatus === "rejected"
+            ? (left.reviewedAt ?? left.createdAt)
+            : left.createdAt;
+        const rightActivityAt =
+          right.reviewStatus === "accepted" ||
+            right.reviewStatus === "rejected"
+            ? (right.reviewedAt ?? right.createdAt)
+            : right.createdAt;
+        return rightActivityAt.localeCompare(leftActivityAt) ||
+          right.createdAt.localeCompare(left.createdAt) ||
+          right.id.localeCompare(left.id);
+      })
+      .slice(0, filters.limit ?? 100);
+    return evaluations.flatMap((evaluation) => {
+      const thesis = this.getThesis(evaluation.thesisId);
+      return thesis
+        ? [{
+            evaluation,
+            thesisTitle: thesis.title,
+            thesisKind: thesis.kind,
+            momentum: evaluationMomentum(evaluation),
+            whatChanged: evaluation.summary,
+            affectedPortfolioItems: thesis.portfolioExposures.flatMap(
+              (exposure) => {
+                const item = portfolioItems.get(exposure.portfolioItemId);
+                return item
+                  ? [{
+                      id: item.id,
+                      symbol: item.symbol,
+                      name: item.name,
+                      status: item.status,
+                      allocationPercent: item.allocationPercent,
+                    }]
+                  : [];
+              },
+            ),
+          }]
+        : [];
+    });
+  }
+
   clearDemoIntelligence(updateIds: string[], briefId: string): void {
     this.withTransaction(() => {
       this.database.prepare("DELETE FROM daily_briefs WHERE id = ?").run(briefId);
+      const hasAcceptedEvaluation = this.database.prepare(`
+        SELECT 1
+        FROM thesis_evaluation_updates AS link
+        INNER JOIN thesis_evaluations AS evaluation
+          ON evaluation.id = link.evaluation_id
+        WHERE link.update_id = ?
+          AND evaluation.review_status = 'accepted'
+        LIMIT 1
+      `);
+      const deleteUnacceptedEvaluations = this.database.prepare(`
+        DELETE FROM thesis_evaluations
+        WHERE review_status IN ('pending', 'deferred', 'rejected')
+          AND id IN (
+            SELECT evaluation_id
+            FROM thesis_evaluation_updates
+            WHERE update_id = ?
+          )
+      `);
+      const deleteLinkedThesisEvidence = this.database.prepare(`
+        DELETE FROM thesis_evidence
+        WHERE claim_id IN (
+          SELECT id FROM evidence_claims WHERE update_id = ?
+        )
+      `);
       const deleteDerivedBrief = this.database.prepare(`
         DELETE FROM daily_briefs
         WHERE id IN (
@@ -309,6 +740,13 @@ export class RelayRepository {
         "DELETE FROM impact_reviews WHERE update_id = ?",
       );
       updateIds.forEach((updateId) => {
+        // Accepted reviews are durable user decisions. Retain their source
+        // signal so the accepted history and evidence provenance stay valid.
+        if (hasAcceptedEvaluation.get(updateId)) {
+          return;
+        }
+        deleteUnacceptedEvaluations.run(updateId);
+        deleteLinkedThesisEvidence.run(updateId);
         deleteDerivedBrief.run(updateId);
         deleteDemoReviews.run(updateId);
         deleteUpdate.run(updateId);
@@ -507,7 +945,10 @@ export class RelayRepository {
       .filter((thesis): thesis is Thesis => thesis !== null);
   }
 
-  getThesis(id: string): Thesis | null {
+  getThesis(
+    id: string,
+    options: ThesisReadOptions = {},
+  ): Thesis | null {
     const thesisRow = row(
       this.database.prepare("SELECT * FROM theses WHERE id = ?").get(id),
     );
@@ -546,28 +987,65 @@ export class RelayRepository {
         `)
         .all(id),
     );
+    const kind = text(thesisRow, "type") as Thesis["kind"];
+    const routedSignals = options.includeRoutedSignals
+      ? this.listThesisRoutedSignals(id, kind)
+      : [];
+    const evaluations = this.listThesisEvaluations({ thesisId: id });
+    const reviewedEvaluations = evaluations
+      .filter(
+        (
+          evaluation,
+        ): evaluation is ThesisEvaluation & { reviewedAt: string } =>
+          evaluation.reviewedAt !== null,
+      )
+      .toSorted(
+        (left, right) =>
+          right.reviewedAt.localeCompare(left.reviewedAt) ||
+          right.createdAt.localeCompare(left.createdAt) ||
+          right.id.localeCompare(left.id),
+      );
+    const latestAcceptedEvaluation = reviewedEvaluations.find(
+      (evaluation) => evaluation.reviewStatus === "accepted",
+    );
+    const latestReview = reviewedEvaluations[0];
     return {
       id,
-      kind: text(thesisRow, "type") as Thesis["kind"],
+      kind,
       title: text(thesisRow, "title"),
       status: text(thesisRow, "status") as Thesis["status"],
       currentVersion: this.mapThesisVersion(versionRow),
       versions: this.getThesisHistory(id),
+      momentum: latestAcceptedEvaluation
+        ? evaluationMomentum(latestAcceptedEvaluation)
+        : "unchanged",
+      nextReviewOn: latestReview?.nextReviewOn ?? null,
+      bottlenecks: this.listThesisBottlenecks(currentVersionId),
+      captureMechanisms:
+        this.listThesisCaptureMechanisms(currentVersionId),
       companyTickers: companyRows.map((companyRow) =>
         text(companyRow, "company_ticker"),
       ),
       layerIds: layerRows.map(
         (layerRow) => text(layerRow, "layer_id") as Thesis["layerIds"][number],
       ),
+      portfolioExposures: this.listPortfolioExposuresForThesis(id),
       evidence: this.listThesisEvidence(id),
-      evaluations: this.listThesisEvaluations({ thesisId: id }),
+      routedSignals,
+      awaitingEvaluationCount: options.includeRoutedSignals
+        ? routedSignals.filter(
+            (signal) =>
+              signal.evaluationState === "awaiting-evaluation",
+          ).length
+        : this.countAwaitingThesisRoutedSignals(id, kind),
+      evaluations,
       createdAt: text(thesisRow, "created_at"),
       updatedAt: text(thesisRow, "updated_at"),
     };
   }
 
   getThesisDetail(id: string): Thesis | null {
-    return this.getThesis(id);
+    return this.getThesis(id, { includeRoutedSignals: true });
   }
 
   getCompanyThesisByTicker(ticker: string): Thesis | null {
@@ -587,7 +1065,7 @@ export class RelayRepository {
         .get(ticker.toUpperCase()),
     );
     return thesisRow
-      ? this.getThesis(text(thesisRow, "id"))
+      ? this.getThesisDetail(text(thesisRow, "id"))
       : null;
   }
 
@@ -602,6 +1080,46 @@ export class RelayRepository {
         `)
         .all(thesisId),
     ).map((versionRow) => this.mapThesisVersion(versionRow));
+  }
+
+  listThesisBottlenecks(thesisVersionId: string): ThesisBottleneck[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM thesis_version_bottlenecks
+          WHERE thesis_version_id = ?
+          ORDER BY sort_order, bottleneck_key
+        `)
+        .all(thesisVersionId),
+    ).map((bottleneckRow) => ({
+      key: text(bottleneckRow, "bottleneck_key"),
+      title: text(bottleneckRow, "title"),
+      description: text(bottleneckRow, "description"),
+      sortOrder: numeric(bottleneckRow, "sort_order"),
+    }));
+  }
+
+  listThesisCaptureMechanisms(
+    thesisVersionId: string,
+  ): CompanyCaptureMechanism[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM thesis_version_company_captures
+          WHERE thesis_version_id = ?
+          ORDER BY sort_order, capture_key
+        `)
+        .all(thesisVersionId),
+    ).map((captureRow) => ({
+      key: text(captureRow, "capture_key"),
+      bottleneckKey: text(captureRow, "bottleneck_key"),
+      companyTicker: text(captureRow, "company_ticker"),
+      role: text(captureRow, "role") as CompanyCaptureMechanism["role"],
+      mechanism: text(captureRow, "mechanism"),
+      sortOrder: numeric(captureRow, "sort_order"),
+    }));
   }
 
   listThesisEvidence(thesisId: string): ThesisEvidence[] {
@@ -641,6 +1159,245 @@ export class RelayRepository {
         locator: text(evidenceRow, "locator"),
       },
     }));
+  }
+
+  private listThesisRoutedSignals(
+    thesisId: string,
+    kind: Thesis["kind"],
+  ): ThesisRoutedSignal[] {
+    if (kind === "macro") {
+      if (!this.hasTable("update_macro_thesis_impacts")) {
+        return [];
+      }
+      return rows(
+        this.database
+          .prepare(`
+            SELECT
+              update_record.id AS update_id,
+              update_record.title,
+              update_record.publisher,
+              update_record.published_at,
+              route.relevance,
+              NULL AS materiality,
+              route.rationale,
+              CASE
+                WHEN NOT EXISTS (
+                  SELECT 1
+                  FROM thesis_evaluation_requeue AS requeue
+                  WHERE requeue.update_id = route.update_id
+                )
+                AND EXISTS (
+                  SELECT 1
+                  FROM thesis_evaluations AS evaluation
+                  INNER JOIN thesis_evaluation_updates AS evaluation_link
+                    ON evaluation_link.evaluation_id = evaluation.id
+                  WHERE evaluation.thesis_id = route.thesis_id
+                    AND evaluation_link.update_id = route.update_id
+                    AND evaluation.review_status IN (
+                      'pending', 'accepted', 'rejected', 'deferred'
+                    )
+                ) THEN 'evaluated'
+                ELSE 'awaiting-evaluation'
+              END AS evaluation_state
+            FROM update_macro_thesis_impacts AS route
+            INNER JOIN intelligence_updates AS update_record
+              ON update_record.id = route.update_id
+            WHERE route.thesis_id = ?
+            ORDER BY
+              CASE evaluation_state
+                WHEN 'awaiting-evaluation' THEN 0
+                ELSE 1
+              END,
+              CASE route.relevance
+                WHEN 'primary' THEN 1
+                WHEN 'secondary' THEN 2
+                ELSE 3
+              END,
+              update_record.published_at DESC,
+              update_record.ingested_at DESC,
+              update_record.id
+          `)
+          .all(thesisId),
+      ).map((signalRow) => this.mapThesisRoutedSignal(signalRow));
+    }
+
+    if (
+      !this.hasTable("update_companies") ||
+      !this.hasTable("thesis_impacts")
+    ) {
+      return [];
+    }
+    return rows(
+      this.database
+        .prepare(`
+          WITH company_routes AS (
+            SELECT DISTINCT
+              update_record.id AS update_id,
+              update_record.title,
+              update_record.publisher,
+              update_record.published_at,
+              update_record.materiality,
+              COALESCE(NULLIF(impact.thesis_delta, ''), impact.summary)
+                AS rationale
+            FROM thesis_companies AS thesis_company
+            INNER JOIN update_companies AS update_company
+              ON update_company.company_ticker = thesis_company.company_ticker
+            INNER JOIN thesis_impacts AS impact
+              ON impact.update_id = update_company.update_id
+             AND impact.company_ticker = thesis_company.company_ticker
+            INNER JOIN intelligence_updates AS update_record
+              ON update_record.id = update_company.update_id
+            WHERE thesis_company.thesis_id = ?
+          ),
+          routed_updates AS (
+            SELECT
+              update_id,
+              title,
+              publisher,
+              published_at,
+              materiality,
+              GROUP_CONCAT(rationale, ' / ') AS rationale
+            FROM company_routes
+            GROUP BY
+              update_id,
+              title,
+              publisher,
+              published_at,
+              materiality
+          )
+          SELECT
+            route.update_id,
+            route.title,
+            route.publisher,
+            route.published_at,
+            NULL AS relevance,
+            route.materiality,
+            route.rationale,
+            CASE
+              WHEN NOT EXISTS (
+                SELECT 1
+                FROM thesis_evaluation_requeue AS requeue
+                WHERE requeue.update_id = route.update_id
+              )
+              AND EXISTS (
+                SELECT 1
+                FROM thesis_evaluations AS evaluation
+                INNER JOIN thesis_evaluation_updates AS evaluation_link
+                  ON evaluation_link.evaluation_id = evaluation.id
+                WHERE evaluation.thesis_id = thesis_company.thesis_id
+                  AND evaluation_link.update_id = route.update_id
+                  AND evaluation.review_status IN (
+                    'pending', 'accepted', 'rejected', 'deferred'
+                  )
+              ) THEN 'evaluated'
+              ELSE 'awaiting-evaluation'
+            END AS evaluation_state
+          FROM routed_updates AS route
+          CROSS JOIN (
+            SELECT ? AS thesis_id
+          ) AS thesis_company
+          WHERE thesis_company.thesis_id = ?
+          ORDER BY
+            CASE evaluation_state
+              WHEN 'awaiting-evaluation' THEN 0
+              ELSE 1
+            END,
+            CASE route.materiality
+              WHEN 'high' THEN 1
+              WHEN 'medium' THEN 2
+              WHEN 'low' THEN 3
+              ELSE 4
+            END,
+            route.published_at DESC,
+            route.update_id
+        `)
+        .all(thesisId, thesisId, thesisId),
+    ).map((signalRow) => this.mapThesisRoutedSignal(signalRow));
+  }
+
+  private countAwaitingThesisRoutedSignals(
+    thesisId: string,
+    kind: Thesis["kind"],
+  ): number {
+    if (
+      kind === "macro" &&
+      !this.hasTable("update_macro_thesis_impacts")
+    ) {
+      return 0;
+    }
+    if (
+      kind === "company" &&
+      (!this.hasTable("update_companies") ||
+        !this.hasTable("thesis_impacts"))
+    ) {
+      return 0;
+    }
+    const result =
+      kind === "macro"
+        ? row(
+            this.database
+              .prepare(`
+                SELECT COUNT(*) AS count
+                FROM update_macro_thesis_impacts AS route
+                WHERE route.thesis_id = ?
+                  AND (
+                    EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluation_requeue AS requeue
+                      WHERE requeue.update_id = route.update_id
+                    )
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluations AS evaluation
+                      INNER JOIN thesis_evaluation_updates AS evaluation_link
+                        ON evaluation_link.evaluation_id = evaluation.id
+                      WHERE evaluation.thesis_id = route.thesis_id
+                        AND evaluation_link.update_id = route.update_id
+                        AND evaluation.review_status IN (
+                          'pending', 'accepted', 'rejected', 'deferred'
+                        )
+                    )
+                  )
+              `)
+              .get(thesisId),
+          )
+        : row(
+            this.database
+              .prepare(`
+                SELECT COUNT(DISTINCT update_record.id) AS count
+                FROM thesis_companies AS thesis_company
+                INNER JOIN update_companies AS update_company
+                  ON update_company.company_ticker =
+                    thesis_company.company_ticker
+                INNER JOIN thesis_impacts AS impact
+                  ON impact.update_id = update_company.update_id
+                 AND impact.company_ticker =
+                    thesis_company.company_ticker
+                INNER JOIN intelligence_updates AS update_record
+                  ON update_record.id = update_company.update_id
+                WHERE thesis_company.thesis_id = ?
+                  AND (
+                    EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluation_requeue AS requeue
+                      WHERE requeue.update_id = update_record.id
+                    )
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM thesis_evaluations AS evaluation
+                      INNER JOIN thesis_evaluation_updates AS evaluation_link
+                        ON evaluation_link.evaluation_id = evaluation.id
+                      WHERE evaluation.thesis_id = thesis_company.thesis_id
+                        AND evaluation_link.update_id = update_record.id
+                        AND evaluation.review_status IN (
+                          'pending', 'accepted', 'rejected', 'deferred'
+                        )
+                    )
+                  )
+              `)
+              .get(thesisId),
+          );
+    return result ? numeric(result, "count") : 0;
   }
 
   createThesis(input: ThesisInput): Thesis {
@@ -1344,12 +2101,67 @@ export class RelayRepository {
     if (!evaluation) {
       throw new RangeError(`Unknown thesis evaluation: ${id}`);
     }
+    const nextReviewOn = input.nextReviewOn?.trim() || null;
+    if (nextReviewOn) {
+      assertIsoDate(nextReviewOn, "next review date");
+    }
+    const portfolioDecisions = (input.portfolioDecisions ?? []).map(
+      (decision) => ({
+        portfolioItemId: decision.portfolioItemId.trim(),
+        action: decision.action,
+        rationale: decision.rationale.trim(),
+      }),
+    );
+    if (
+      new Set(portfolioDecisions.map((decision) => decision.portfolioItemId))
+        .size !== portfolioDecisions.length
+    ) {
+      throw new TypeError(
+        "A portfolio item can have only one decision per thesis review.",
+      );
+    }
+    if (input.decision !== "accepted" && portfolioDecisions.length > 0) {
+      throw new TypeError(
+        "Portfolio decisions can be recorded only for an accepted thesis review.",
+      );
+    }
+    const knownPortfolioItem = this.database.prepare(
+      "SELECT 1 FROM portfolio_items WHERE id = ? AND status <> 'archived'",
+    );
+    const linkedPortfolioItem = this.database.prepare(`
+      SELECT 1
+      FROM portfolio_thesis_exposures
+      WHERE portfolio_item_id = ? AND thesis_id = ?
+    `);
+    portfolioDecisions.forEach((decision) => {
+      if (!decision.portfolioItemId || !decision.rationale) {
+        throw new TypeError(
+          "Portfolio decisions require an item and a rationale.",
+        );
+      }
+      if (!knownPortfolioItem.get(decision.portfolioItemId)) {
+        throw new PortfolioItemNotFoundError(decision.portfolioItemId);
+      }
+      if (!linkedPortfolioItem.get(decision.portfolioItemId, evaluation.thesisId)) {
+        throw new TypeError(
+          `Portfolio item ${decision.portfolioItemId} is not exposed to thesis ${evaluation.thesisId}.`,
+        );
+      }
+    });
     if (
       evaluation.reviewStatus === "accepted" ||
       evaluation.reviewStatus === "rejected"
     ) {
       if (evaluation.reviewStatus === input.decision) {
-        return evaluation;
+        if (
+          evaluation.nextReviewOn === nextReviewOn &&
+          samePortfolioDecisions(
+            evaluation.portfolioDecisions,
+            portfolioDecisions,
+          )
+        ) {
+          return evaluation;
+        }
       }
       throw new TypeError(
         `A ${evaluation.reviewStatus} thesis evaluation is final.`,
@@ -1405,6 +2217,10 @@ export class RelayRepository {
               reviewedAt,
               evaluation.id,
             );
+          this.copyThesisVersionStructure(
+            thesis.currentVersion.id,
+            acceptedVersionId,
+          );
           this.database
             .prepare(`
               UPDATE theses
@@ -1434,12 +2250,26 @@ export class RelayRepository {
             evaluation.id,
           ),
         );
+        const insertPortfolioDecision = this.database.prepare(`
+          INSERT INTO portfolio_decisions (
+            evaluation_id, portfolio_item_id, action, rationale, created_at
+          ) VALUES (?, ?, ?, ?, ?)
+        `);
+        portfolioDecisions.forEach((decision) => {
+          insertPortfolioDecision.run(
+            evaluation.id,
+            decision.portfolioItemId,
+            decision.action,
+            decision.rationale,
+            reviewedAt,
+          );
+        });
       }
       this.database
         .prepare(`
           UPDATE thesis_evaluations
           SET review_status = ?, review_note = ?, reviewed_at = ?,
-              accepted_version_id = ?
+              accepted_version_id = ?, next_review_on = ?
           WHERE id = ?
         `)
         .run(
@@ -1447,6 +2277,7 @@ export class RelayRepository {
           reviewNote,
           reviewedAt,
           acceptedVersionId,
+          nextReviewOn,
           evaluation.id,
         );
     });
@@ -1746,6 +2577,41 @@ export class RelayRepository {
     const reviewStatement = this.database.prepare(
       "SELECT * FROM impact_reviews WHERE impact_id = ?",
     );
+    const storyClusterId = nullableText(updateRow, "story_cluster_id");
+    const lineageRows = storyClusterId
+      ? rows(
+          this.database
+            .prepare(`
+              SELECT id, publisher, story_match_score, story_match_reason
+              FROM intelligence_updates
+              WHERE story_cluster_id = ?
+              ORDER BY published_at ASC, id ASC
+            `)
+            .all(storyClusterId),
+        )
+      : [];
+    const sourceLineage =
+      storyClusterId && lineageRows.length > 1
+        ? {
+            evidenceChainId: storyClusterId,
+            reportCount: lineageRows.length,
+            publishers: [
+              ...new Set(
+                lineageRows.map((lineageRow) =>
+                  text(lineageRow, "publisher"),
+                ),
+              ),
+            ],
+            updateIds: lineageRows.map((lineageRow) =>
+              text(lineageRow, "id"),
+            ),
+            matchScore:
+              typeof updateRow.story_match_score === "number"
+                ? updateRow.story_match_score
+                : null,
+            matchReason: nullableText(updateRow, "story_match_reason"),
+          }
+        : null;
 
     return {
       id: text(updateRow, "id"),
@@ -1825,7 +2691,23 @@ export class RelayRepository {
         claimIds: parseJson<string[]>(impactRow.claim_ids_json, []),
       })),
       model: nullableText(updateRow, "model"),
+      ...(sourceLineage ? { sourceLineage } : {}),
     };
+  }
+
+  getEvidenceChainIdForUpdate(updateId: string): string | null {
+    const updateRow = row(
+      this.database
+        .prepare(`
+          SELECT story_cluster_id
+          FROM intelligence_updates
+          WHERE id = ?
+        `)
+        .get(updateId),
+    );
+    return updateRow
+      ? nullableText(updateRow, "story_cluster_id")
+      : null;
   }
 
   deleteUpdate(id: string): boolean {
@@ -1907,12 +2789,15 @@ export class RelayRepository {
 
   persistAnalyzedUpdate(update: IntelligenceUpdate): IntelligenceUpdate {
     assertSignalInvariants(update);
+    const storyLineage = this.resolveStoryLineage(update);
     const insertUpdate = this.database.prepare(`
       INSERT INTO intelligence_updates (
         id, title, publisher, source_url, published_at, ingested_at, materiality,
         materiality_reason, novelty, sentiment, what_happened, why_it_matters,
-        beneficiaries_json, threatened_json, watch_next_json, model
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        beneficiaries_json, threatened_json, watch_next_json, model,
+        story_cluster_id, story_match_score, story_match_reason,
+        story_entity_tickers_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title = excluded.title,
         publisher = excluded.publisher,
@@ -1928,7 +2813,11 @@ export class RelayRepository {
         beneficiaries_json = excluded.beneficiaries_json,
         threatened_json = excluded.threatened_json,
         watch_next_json = excluded.watch_next_json,
-        model = excluded.model
+        model = excluded.model,
+        story_cluster_id = excluded.story_cluster_id,
+        story_match_score = excluded.story_match_score,
+        story_match_reason = excluded.story_match_reason,
+        story_entity_tickers_json = excluded.story_entity_tickers_json
     `);
     const insertLayer = this.database.prepare(
       "INSERT INTO update_layers (update_id, layer_id) VALUES (?, ?)",
@@ -1996,6 +2885,10 @@ export class RelayRepository {
         JSON.stringify(update.threatened),
         JSON.stringify(update.watchNext),
         update.model,
+        storyLineage.evidenceChainId,
+        storyLineage.matchScore,
+        storyLineage.matchReason,
+        JSON.stringify(storyLineage.entityTickers),
       );
       this.database
         .prepare("DELETE FROM update_layers WHERE update_id = ?")
@@ -2107,6 +3000,129 @@ export class RelayRepository {
       throw new Error(`Failed to reload update ${update.id}`);
     }
     return persisted;
+  }
+
+  private resolveStoryLineage(update: IntelligenceUpdate): {
+    evidenceChainId: string;
+    matchScore: number | null;
+    matchReason: string | null;
+    entityTickers: string[];
+  } {
+    const existingRow = row(
+      this.database
+        .prepare(`
+          SELECT story_cluster_id, story_match_score, story_match_reason,
+                 story_entity_tickers_json
+          FROM intelligence_updates
+          WHERE id = ?
+        `)
+        .get(update.id),
+    );
+    if (existingRow) {
+      return {
+        evidenceChainId:
+          nullableText(existingRow, "story_cluster_id") ??
+          `story-legacy-${update.id}`,
+        matchScore:
+          typeof existingRow.story_match_score === "number"
+            ? existingRow.story_match_score
+            : null,
+        matchReason: nullableText(existingRow, "story_match_reason"),
+        entityTickers: parseJson<string[]>(
+          existingRow.story_entity_tickers_json,
+          update.companyTickers,
+        ),
+      };
+    }
+
+    const entityTickers = [
+      ...new Set(
+        update.companyTickers
+          .map((ticker) => ticker.trim().toUpperCase())
+          .filter(Boolean),
+      ),
+    ].sort();
+    const candidateRows = rows(
+      this.database
+        .prepare(`
+          SELECT id, title, published_at, story_cluster_id,
+                 story_entity_tickers_json
+          FROM intelligence_updates
+          WHERE id <> ?
+        `)
+        .all(update.id),
+    );
+    const candidates: StoryCandidate[] = candidateRows.map(
+      (candidateRow) => ({
+        id: text(candidateRow, "id"),
+        title: text(candidateRow, "title"),
+        publishedAt: text(candidateRow, "published_at"),
+        companyTickers: parseJson<string[]>(
+          candidateRow.story_entity_tickers_json,
+          [],
+        ),
+      }),
+    );
+    const currentCandidate: StoryCandidate = {
+      id: update.id,
+      title: update.title,
+      publishedAt: update.publishedAt,
+      companyTickers: entityTickers,
+    };
+    const cluster = clusterStories([...candidates, currentCandidate]).find(
+      (candidateCluster) =>
+        candidateCluster.members.some((member) => member.id === update.id),
+    );
+    if (!cluster) {
+      throw new Error(`Failed to assign story lineage for ${update.id}`);
+    }
+
+    const existingMembers = cluster.members
+      .filter((member) => member.id !== update.id)
+      .map((member) => ({
+        member,
+        row: candidateRows.find(
+          (candidateRow) => text(candidateRow, "id") === member.id,
+        ),
+      }))
+      .filter(
+        (
+          result,
+        ): result is {
+          member: (typeof cluster.members)[number];
+          row: SqlRow;
+        } => Boolean(result.row),
+      );
+    const persistedEvidenceChainId = existingMembers
+      .map(({ row: memberRow }) =>
+        nullableText(memberRow, "story_cluster_id"),
+      )
+      .find((value): value is string => Boolean(value));
+    const comparison =
+      cluster.members.find((member) => member.id === update.id)
+        ?.comparisonToAnchor ??
+      existingMembers
+        .map(({ member }) => member.comparisonToAnchor)
+        .filter(
+          (
+            result,
+          ): result is NonNullable<typeof result> => result !== null,
+        )
+        .sort((left, right) => right.score - left.score)[0] ??
+      null;
+
+    return {
+      evidenceChainId: persistedEvidenceChainId ?? cluster.key,
+      matchScore: persistedEvidenceChainId ? comparison?.score ?? null : null,
+      matchReason:
+        persistedEvidenceChainId && comparison
+          ? comparison.reasons
+              .filter((reason) => reason.passed)
+              .map((reason) => reason.detail)
+              .join(" ")
+          : null,
+      entityTickers,
+    };
   }
 
   getBrief(id: string): DailyBrief | null {
@@ -2260,14 +3276,7 @@ export class RelayRepository {
     const sourceUrl = input.sourceUrl
       ? canonicalizeUrl(input.sourceUrl)
       : null;
-    const contentHash = createHash("sha256")
-      .update(
-        JSON.stringify({
-          content: input.content.trim(),
-          sourceUrl,
-        }),
-      )
-      .digest("hex");
+    const contentHash = sourceDocumentContentHash(input.content, sourceUrl);
     const existing = row(
       this.database
         .prepare(`
@@ -2336,14 +3345,190 @@ export class RelayRepository {
       .run(updateId, documentId);
   }
 
-  markSourceDocumentError(documentId: string, message: string): void {
+  recordSourceDocumentRetryAttempt(documentId: string): void {
+    const attemptedAt = new Date().toISOString();
     this.database
       .prepare(`
         UPDATE source_documents
-        SET analysis_status = 'error', error_message = ?
+        SET attempt_count = attempt_count + 1,
+            last_attempted_at = ?
+        WHERE id = ?
+          AND analysis_status = 'error'
+          AND suppressed_at IS NULL
+      `)
+      .run(attemptedAt, documentId);
+  }
+
+  markSourceDocumentError(
+    documentId: string,
+    message: string,
+    options: { recordAttempt?: boolean } = {},
+  ): void {
+    const attemptedAt = new Date().toISOString();
+    const recordAttempt = options.recordAttempt !== false;
+    this.database
+      .prepare(`
+        UPDATE source_documents
+        SET analysis_status = 'error',
+            error_message = ?,
+            attempt_count = attempt_count + ?,
+            last_attempted_at = CASE
+              WHEN ? = 1 THEN ?
+              ELSE last_attempted_at
+            END
         WHERE id = ? AND suppressed_at IS NULL
       `)
-      .run(sanitizeStoredError(message), documentId);
+      .run(
+        sanitizeStoredError(message),
+        recordAttempt ? 1 : 0,
+        recordAttempt ? 1 : 0,
+        attemptedAt,
+        documentId,
+      );
+  }
+
+  listFailedSourceDocuments(): FailedSourceDocument[] {
+    return rows(
+      this.database
+        .prepare(`
+          SELECT id, title, publisher, source_url, published_at, source_kind,
+                 error_message, attempt_count, last_attempted_at, ingested_at
+          FROM source_documents
+          WHERE analysis_status = 'error'
+            AND suppressed_at IS NULL
+          ORDER BY COALESCE(last_attempted_at, ingested_at) DESC, id
+        `)
+        .all(),
+    ).map((documentRow) => ({
+      id: text(documentRow, "id"),
+      title: text(documentRow, "title"),
+      publisher: text(documentRow, "publisher"),
+      sourceUrl: nullableText(documentRow, "source_url"),
+      publishedAt: text(documentRow, "published_at"),
+      sourceKind: text(documentRow, "source_kind") as SourceKind,
+      errorMessage: text(documentRow, "error_message"),
+      attemptCount: numeric(documentRow, "attempt_count"),
+      lastAttemptedAt: nullableText(documentRow, "last_attempted_at"),
+      ingestedAt: text(documentRow, "ingested_at"),
+    }));
+  }
+
+  getSourceDocumentForRecovery(
+    documentId: string,
+  ): SourceDocumentRecoveryRecord | null {
+    const documentRow = row(
+      this.database
+        .prepare(`
+          SELECT id, title, publisher, source_url, published_at, content,
+                 source_kind, research_source_id, analysis_status, update_id,
+                 ingested_at, error_message, attempt_count, last_attempted_at,
+                 suppressed_at
+          FROM source_documents
+          WHERE id = ?
+        `)
+        .get(documentId),
+    );
+    if (!documentRow) {
+      return null;
+    }
+    return {
+      id: text(documentRow, "id"),
+      title: text(documentRow, "title"),
+      publisher: text(documentRow, "publisher"),
+      sourceUrl: nullableText(documentRow, "source_url"),
+      publishedAt: text(documentRow, "published_at"),
+      content: text(documentRow, "content"),
+      sourceKind: text(documentRow, "source_kind") as SourceKind,
+      researchSourceId: nullableText(documentRow, "research_source_id"),
+      status: documentRow.suppressed_at
+        ? "suppressed"
+        : (text(
+            documentRow,
+            "analysis_status",
+          ) as SourceDocumentRecoveryRecord["status"]),
+      updateId: nullableText(documentRow, "update_id"),
+      ingestedAt: text(documentRow, "ingested_at"),
+      errorMessage: nullableText(documentRow, "error_message"),
+      attemptCount: numeric(documentRow, "attempt_count"),
+      lastAttemptedAt: nullableText(documentRow, "last_attempted_at"),
+    };
+  }
+
+  updateSourceDocumentForRecovery(
+    documentId: string,
+    input: SourceDocumentRecoveryUpdate,
+  ): SourceDocumentRecoveryRecord {
+    const document = this.getSourceDocumentForRecovery(documentId);
+    if (!document) {
+      throw new RangeError(`Source document not found: ${documentId}`);
+    }
+    if (document.status !== "error") {
+      throw new TypeError(
+        `Only failed source documents can be recovered: ${documentId}`,
+      );
+    }
+
+    const suppliedUrl = input.sourceUrl
+      ? canonicalizeUrl(input.sourceUrl)
+      : null;
+    if (
+      document.sourceUrl &&
+      suppliedUrl &&
+      document.sourceUrl !== suppliedUrl
+    ) {
+      throw new TypeError(
+        "The recovery URL must match the original source URL.",
+      );
+    }
+    const sourceUrl = document.sourceUrl ?? suppliedUrl;
+    const content = input.content ?? document.content;
+    const contentHash = sourceDocumentContentHash(content, sourceUrl);
+    const collision = row(
+      this.database
+        .prepare(`
+          SELECT id
+          FROM source_documents
+          WHERE content_hash = ? AND id <> ?
+          LIMIT 1
+        `)
+        .get(contentHash, documentId),
+    );
+    if (collision) {
+      throw new RangeError(
+        `Recovery content duplicates source document ${text(collision, "id")}.`,
+      );
+    }
+
+    this.database
+      .prepare(`
+        UPDATE source_documents
+        SET title = ?,
+            publisher = ?,
+            source_url = ?,
+            published_at = ?,
+            content = ?,
+            content_hash = ?,
+            source_kind = ?
+        WHERE id = ?
+          AND analysis_status = 'error'
+          AND suppressed_at IS NULL
+      `)
+      .run(
+        input.title ?? document.title,
+        input.publisher ?? document.publisher,
+        sourceUrl,
+        input.publishedAt ?? document.publishedAt,
+        content,
+        contentHash,
+        input.sourceKind ?? document.sourceKind,
+        documentId,
+      );
+
+    const updated = this.getSourceDocumentForRecovery(documentId);
+    if (!updated) {
+      throw new Error(`Failed to reload source document ${documentId}.`);
+    }
+    return updated;
   }
 
   getResearchSourceIdForUpdate(updateId: string): string | null {
@@ -2374,6 +3559,123 @@ export class RelayRepository {
         WHERE id = ?
       `)
       .run(status, new Date().toISOString(), sourceId);
+  }
+
+  private mapPortfolioItem(itemRow: SqlRow): PortfolioItem {
+    const id = text(itemRow, "id");
+    const exposureRows = rows(
+      this.database
+        .prepare(`
+          SELECT exposure.*, thesis.title AS thesis_title
+          FROM portfolio_thesis_exposures AS exposure
+          INNER JOIN theses AS thesis ON thesis.id = exposure.thesis_id
+          WHERE exposure.portfolio_item_id = ?
+          ORDER BY exposure.sort_order, thesis.title, thesis.id
+        `)
+        .all(id),
+    );
+    const decisionRow = row(
+      this.database
+        .prepare(`
+          SELECT decision.*
+          FROM portfolio_decisions AS decision
+          INNER JOIN thesis_evaluations AS evaluation
+            ON evaluation.id = decision.evaluation_id
+          WHERE decision.portfolio_item_id = ?
+            AND evaluation.review_status = 'accepted'
+          ORDER BY evaluation.reviewed_at DESC, decision.created_at DESC,
+                   decision.evaluation_id DESC
+          LIMIT 1
+        `)
+        .get(id),
+    );
+    const allocationBps = itemRow.allocation_bps;
+    return {
+      id,
+      symbol: nullableText(itemRow, "symbol"),
+      name: text(itemRow, "name"),
+      assetType: text(itemRow, "asset_type") as PortfolioItem["assetType"],
+      companyTicker: nullableText(itemRow, "company_ticker"),
+      status: text(itemRow, "status") as PortfolioItem["status"],
+      allocationBps:
+        typeof allocationBps === "number" ? allocationBps : null,
+      allocationPercent:
+        typeof allocationBps === "number" ? allocationBps / 100 : null,
+      thesisExposures: exposureRows.map((exposureRow) =>
+        this.mapPortfolioExposure(exposureRow),
+      ),
+      latestDecision: decisionRow
+        ? this.mapPortfolioDecision(decisionRow)
+        : null,
+      createdAt: text(itemRow, "created_at"),
+      updatedAt: text(itemRow, "updated_at"),
+    };
+  }
+
+  private mapPortfolioExposure(
+    exposureRow: SqlRow,
+  ): PortfolioThesisExposure {
+    return {
+      portfolioItemId: text(exposureRow, "portfolio_item_id"),
+      thesisId: text(exposureRow, "thesis_id"),
+      thesisTitle: text(exposureRow, "thesis_title"),
+      exposureType: text(
+        exposureRow,
+        "exposure_type",
+      ) as PortfolioThesisExposure["exposureType"],
+      captureMechanism: text(exposureRow, "capture_mechanism"),
+      sortOrder: numeric(exposureRow, "sort_order"),
+    };
+  }
+
+  private mapPortfolioDecision(decisionRow: SqlRow): PortfolioDecision {
+    return {
+      evaluationId: text(decisionRow, "evaluation_id"),
+      portfolioItemId: text(decisionRow, "portfolio_item_id"),
+      action: text(
+        decisionRow,
+        "action",
+      ) as PortfolioDecision["action"],
+      rationale: text(decisionRow, "rationale"),
+      createdAt: text(decisionRow, "created_at"),
+    };
+  }
+
+  private buildPortfolioOverlaps(
+    holdings: PortfolioItem[],
+  ): PortfolioOverlap[] {
+    const overlaps: PortfolioOverlap[] = [];
+    holdings.forEach((left, leftIndex) => {
+      holdings.slice(leftIndex + 1).forEach((right) => {
+        const rightTheses = new Map(
+          right.thesisExposures.map((exposure) => [
+            exposure.thesisId,
+            exposure.thesisTitle,
+          ]),
+        );
+        const sharedTheses = left.thesisExposures.flatMap((exposure) => {
+          const thesisTitle = rightTheses.get(exposure.thesisId);
+          return thesisTitle
+            ? [{ thesisId: exposure.thesisId, thesisTitle }]
+            : [];
+        });
+        if (sharedTheses.length > 0) {
+          overlaps.push({
+            leftPortfolioItemId: left.id,
+            leftPortfolioItemName: left.name,
+            rightPortfolioItemId: right.id,
+            rightPortfolioItemName: right.name,
+            sharedTheses,
+          });
+        }
+      });
+    });
+    return overlaps.toSorted(
+      (left, right) =>
+        right.sharedTheses.length - left.sharedTheses.length ||
+        left.leftPortfolioItemName.localeCompare(right.leftPortfolioItemName) ||
+        left.rightPortfolioItemName.localeCompare(right.rightPortfolioItemName),
+    );
   }
 
   private mapThesisVersion(versionRow: SqlRow): ThesisVersion {
@@ -2437,6 +3739,16 @@ export class RelayRepository {
       evaluationRow,
       "proposed_confidence",
     );
+    const portfolioDecisions = rows(
+      this.database
+        .prepare(`
+          SELECT *
+          FROM portfolio_decisions
+          WHERE evaluation_id = ?
+          ORDER BY portfolio_item_id
+        `)
+        .all(id),
+    ).map((decisionRow) => this.mapPortfolioDecision(decisionRow));
     return {
       id,
       thesisId: text(evaluationRow, "thesis_id"),
@@ -2483,10 +3795,50 @@ export class RelayRepository {
         "review_status",
       ) as ThesisEvaluation["reviewStatus"],
       reviewNote: nullableText(evaluationRow, "review_note"),
+      nextReviewOn: nullableText(evaluationRow, "next_review_on"),
+      portfolioDecisions,
       model: nullableText(evaluationRow, "model"),
       createdAt: text(evaluationRow, "created_at"),
       reviewedAt: nullableText(evaluationRow, "reviewed_at"),
     };
+  }
+
+  private mapThesisRoutedSignal(
+    signalRow: SqlRow,
+  ): ThesisRoutedSignal {
+    return {
+      updateId: text(signalRow, "update_id"),
+      title: text(signalRow, "title"),
+      publisher: text(signalRow, "publisher"),
+      publishedAt: text(signalRow, "published_at"),
+      relevance: nullableText(
+        signalRow,
+        "relevance",
+      ) as ThesisRoutedSignal["relevance"],
+      materiality: nullableText(
+        signalRow,
+        "materiality",
+      ) as ThesisRoutedSignal["materiality"],
+      rationale: text(signalRow, "rationale"),
+      evaluationState: text(
+        signalRow,
+        "evaluation_state",
+      ) as ThesisRoutedSignal["evaluationState"],
+    };
+  }
+
+  private hasTable(name: string): boolean {
+    return Boolean(
+      row(
+        this.database
+          .prepare(`
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = ?
+          `)
+          .get(name),
+      ),
+    );
   }
 
   private assertKnownThesisAssociations(
@@ -2509,6 +3861,34 @@ export class RelayRepository {
         throw new RangeError(`Unknown stack layer: ${layerId}`);
       }
     });
+  }
+
+  private copyThesisVersionStructure(
+    previousVersionId: string,
+    nextVersionId: string,
+  ): void {
+    this.database
+      .prepare(`
+        INSERT INTO thesis_version_bottlenecks (
+          thesis_version_id, bottleneck_key, title, description, sort_order
+        )
+        SELECT ?, bottleneck_key, title, description, sort_order
+        FROM thesis_version_bottlenecks
+        WHERE thesis_version_id = ?
+      `)
+      .run(nextVersionId, previousVersionId);
+    this.database
+      .prepare(`
+        INSERT INTO thesis_version_company_captures (
+          thesis_version_id, capture_key, bottleneck_key, company_ticker,
+          role, mechanism, sort_order
+        )
+        SELECT ?, capture_key, bottleneck_key, company_ticker,
+               role, mechanism, sort_order
+        FROM thesis_version_company_captures
+        WHERE thesis_version_id = ?
+      `)
+      .run(nextVersionId, previousVersionId);
   }
 
   private mapCompany(companyRow: SqlRow): Company {
@@ -2573,12 +3953,27 @@ export function createRelayRepository(
   database.exec("PRAGMA busy_timeout = 5000");
   const repository = new RelayRepository(database);
   if (options.seed ?? true) {
+    const explicitlyRequestedDemoData =
+      options.demoData === true ||
+      (options.demoData === undefined &&
+        process.env.RELAY_DEMO_DATA?.trim().toLowerCase() === "true");
     const includeDemoData =
       options.demoData ??
       (process.env.NODE_ENV === "test" ||
         process.env.RELAY_DEMO_DATA?.trim().toLowerCase() === "true");
     seedDatabase(repository, { includeDemoData });
+    repository.seedPortfolioCatalog({
+      items: seedPortfolioItems,
+      exposures: seedPortfolioThesisExposures,
+      thesisStructures: seedThesisStructures,
+    });
+    if (explicitlyRequestedDemoData) {
+      repository.seedPortfolioReviewHistory(seedPortfolioReviews);
+    }
     if (!includeDemoData) {
+      repository.clearPortfolioReviewHistory(
+        seedPortfolioReviews.map((review) => review.id),
+      );
       clearDemoData(repository);
     }
   }
@@ -2610,6 +4005,20 @@ function sanitizeStoredError(message: string): string {
     )
     .replace(/[\r\n\t]+/g, " ")
     .slice(0, 1_000);
+}
+
+function sourceDocumentContentHash(
+  content: string,
+  sourceUrl: string | null,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        content: content.trim(),
+        sourceUrl,
+      }),
+    )
+    .digest("hex");
 }
 
 function mapImpactReview(reviewRow: SqlRow): ImpactReview {
@@ -2724,6 +4133,53 @@ function confidenceToScore(confidence: Company["confidence"]): number {
       return 60;
     case "low":
       return 35;
+  }
+}
+
+function evaluationMomentum(
+  evaluation: Pick<ThesisEvaluation, "outcome" | "confidenceDelta">,
+): ThesisMomentum {
+  switch (evaluation.outcome) {
+    case "reinforced":
+      return "strengthening";
+    case "weakened":
+    case "contradicted":
+      return "weakening";
+    case "revised":
+      return evaluation.confidenceDelta > 0
+        ? "strengthening"
+        : evaluation.confidenceDelta < 0
+          ? "weakening"
+          : "unchanged";
+    case "unchanged":
+      return "unchanged";
+  }
+}
+
+function samePortfolioDecisions(
+  persisted: readonly PortfolioDecision[],
+  proposed: readonly PortfolioDecisionInput[],
+): boolean {
+  if (persisted.length !== proposed.length) {
+    return false;
+  }
+  const persistedByItem = new Map(
+    persisted.map((decision) => [decision.portfolioItemId, decision]),
+  );
+  return proposed.every((decision) => {
+    const existing = persistedByItem.get(decision.portfolioItemId);
+    return existing?.action === decision.action &&
+      existing.rationale === decision.rationale;
+  });
+}
+
+function assertIsoDate(value: string, label: string): void {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new TypeError(`Invalid ISO date for ${label}.`);
+  }
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
+    throw new TypeError(`Invalid ISO date for ${label}.`);
   }
 }
 

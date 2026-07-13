@@ -9,14 +9,14 @@ import {
 
 import { AppShell } from "./components/layout/AppShell";
 import { DashboardProvider } from "./context/DashboardProvider";
+import { legacyDashboardRedirect } from "./lib/navigation";
 import { BeliefDetailPage } from "./routes/BeliefDetailPage";
 import { BeliefsPage } from "./routes/BeliefsPage";
-import { BriefDetailPage } from "./routes/BriefDetailPage";
-import { BriefsPage } from "./routes/BriefsPage";
+import { DashboardPage } from "./routes/DashboardPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
+import { ReviewsPage } from "./routes/ReviewsPage";
 import { SourcesPage } from "./routes/SourcesPage";
 import { SearchPage } from "./routes/SearchPage";
-import { StackPage } from "./routes/StackPage";
 import { TodayPage } from "./routes/TodayPage";
 import { UpdatesPage } from "./routes/UpdatesPage";
 
@@ -34,21 +34,52 @@ function LegacyThesesRedirect() {
   return <Navigate replace to={`${target}${location.search}`} />;
 }
 
+function LegacyBriefsRedirect() {
+  const location = useLocation();
+  const { briefId } = useParams();
+  const parameters = new URLSearchParams(location.search);
+  parameters.set("archive", "briefs");
+  if (briefId) {
+    parameters.set("brief", briefId);
+  }
+  return <Navigate replace to={`/today?${parameters.toString()}`} />;
+}
+
+function LegacyStackRedirect() {
+  const location = useLocation();
+  const parameters = new URLSearchParams(location.search);
+  parameters.set("context", "stack");
+  return <Navigate replace to={`/theses?${parameters.toString()}`} />;
+}
+
+function DashboardEntry() {
+  const location = useLocation();
+  const redirect = legacyDashboardRedirect(location.search);
+
+  if (redirect) {
+    return <Navigate replace to={redirect} />;
+  }
+
+  return <DashboardPage />;
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <DashboardProvider>
         <Routes>
           <Route element={<AppShell />}>
-            <Route index element={<TodayPage />} />
+            <Route index element={<DashboardEntry />} />
+            <Route path="today" element={<TodayPage />} />
             <Route path="theses" element={<BeliefsPage />} />
             <Route path="theses/:beliefId" element={<BeliefDetailPage />} />
-            <Route path="briefs" element={<BriefsPage />} />
-            <Route path="briefs/:briefId" element={<BriefDetailPage />} />
+            <Route path="reviews" element={<ReviewsPage />} />
+            <Route path="briefs" element={<LegacyBriefsRedirect />} />
+            <Route path="briefs/:briefId" element={<LegacyBriefsRedirect />} />
             <Route path="signals" element={<UpdatesPage />} />
             <Route path="updates" element={<LegacyUpdatesRedirect />} />
             <Route path="search" element={<SearchPage />} />
-            <Route path="stack" element={<StackPage />} />
+            <Route path="stack" element={<LegacyStackRedirect />} />
             <Route path="beliefs" element={<LegacyThesesRedirect />} />
             <Route
               path="beliefs/:beliefId"

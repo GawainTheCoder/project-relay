@@ -12,6 +12,7 @@ export interface SignalImportInput extends ImportSourceInput {
 interface BuildSignalImportInputOptions {
   content: string;
   mode: SignalIntakeMode;
+  publishedAt?: string;
   publisher: string;
   sourceKind: SourceKind;
   sourceProfileId: string;
@@ -22,6 +23,7 @@ interface BuildSignalImportInputOptions {
 export function buildSignalImportInput({
   content,
   mode,
+  publishedAt,
   publisher,
   sourceKind,
   sourceProfileId,
@@ -32,6 +34,9 @@ export function buildSignalImportInput({
     title,
     publisher,
     ...(sourceUrl ? { sourceUrl } : {}),
+    ...(publishedAt
+      ? { publishedAt: `${publishedAt}T00:00:00.000Z` }
+      : {}),
     ...(mode === "excerpt" ? { content } : {}),
     sourceKind,
     ...(sourceProfileId ? { sourceProfileId } : {}),

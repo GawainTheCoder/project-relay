@@ -6,22 +6,38 @@ import {
   auditMacroThesisSourceCoverage,
   MACRO_THESIS_SOURCE_COVERAGE,
 } from "./source-coverage.js";
+import { seedTheses } from "../seeds/catalog.js";
 import type { TrustedSourceDefinition } from "./types.js";
 
 describe("macro thesis source coverage", () => {
-  it("audits all six configured macro theses", () => {
+  it("audits every active seeded macro thesis, including missing coverage", () => {
     const coverage = auditMacroThesisSourceCoverage();
+    const activeMacroThesisIds = seedTheses
+      .filter((thesis) => thesis.kind === "macro")
+      .map((thesis) => thesis.id);
 
-    expect(coverage).toHaveLength(6);
-    expect(coverage.map((entry) => entry.thesisId)).toEqual(
-      MACRO_THESIS_SOURCE_COVERAGE.map((entry) => entry.thesisId),
+    expect(coverage).toHaveLength(7);
+    expect(coverage.map((entry) => entry.thesisId).toSorted()).toEqual(
+      activeMacroThesisIds.toSorted(),
     );
-    expect(new Set(coverage.map((entry) => entry.thesisId)).size).toBe(6);
+    expect(new Set(coverage.map((entry) => entry.thesisId)).size).toBe(7);
     expect(
-      coverage.every((entry) =>
-        entry.strongSourceCount > 0 && entry.status !== "missing"
-      ),
+      coverage
+        .filter((entry) => entry.thesisId !== "macro-space-infrastructure")
+        .every((entry) =>
+          entry.strongSourceCount > 0 && entry.status !== "missing"
+        ),
     ).toBe(true);
+    expect(
+      coverage.find(
+        (entry) => entry.thesisId === "macro-space-infrastructure",
+      ),
+    ).toMatchObject({
+      status: "missing",
+      strongSourceCount: 0,
+      sources: [],
+    });
+    expect(MACRO_THESIS_SOURCE_COVERAGE).toHaveLength(7);
   });
 
   it("classifies automated, manual-only, and missing coverage", () => {

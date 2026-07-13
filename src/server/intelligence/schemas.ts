@@ -85,8 +85,8 @@ export const analysisOutputSchema = z
             relevance: macroThesisRelevanceSchema,
             stance: thesisEvidenceStanceSchema,
             rationale: z.string().trim().min(1).max(1_500),
-            claimLocators: z
-              .array(z.string().trim().min(1).max(50))
+            claimIndexes: z
+              .array(z.number().int().min(0).max(23))
               .max(24),
           })
           .strict(),

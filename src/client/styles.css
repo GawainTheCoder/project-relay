@@ -8,9 +8,10 @@
   --color-relay-raised: #111e2c;
   --color-relay-border: #223142;
   --color-relay-border-strong: #33465a;
+  --color-relay-control: #506781;
   --color-relay-text: #f1f5f9;
   --color-relay-muted: #8f9daf;
-  --color-relay-subtle: #647286;
+  --color-relay-subtle: #78889c;
   --color-relay-accent: #4f8cff;
   --color-relay-accent-soft: #18355f;
   --color-relay-positive: #58d68d;
@@ -47,6 +48,12 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: var(--color-relay-bg);
+}
+
+@media (max-width: 1023px) {
+  html {
+    scroll-padding-bottom: 76px;
+  }
 }
 
 button,
