@@ -30,7 +30,7 @@ export function SentimentBadge({ sentiment }: { sentiment: Sentiment }) {
 
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] ${styles[sentiment]}`}
+      className={`inline-flex min-h-7 items-center gap-1 rounded border px-2 py-0.5 text-xs font-medium capitalize ${styles[sentiment]}`}
     >
       <Icon aria-hidden="true" className="size-3" strokeWidth={2} />
       {titleCase(sentiment)}
@@ -53,7 +53,7 @@ export function MaterialityBadge({
 
   return (
     <span
-      className={`inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] ${styles[materiality]}`}
+      className={`inline-flex min-h-7 items-center rounded border px-2 py-0.5 text-xs font-medium capitalize ${styles[materiality]}`}
     >
       {titleCase(materiality)}
     </span>

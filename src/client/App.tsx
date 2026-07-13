@@ -9,9 +9,12 @@ import {
 
 import { AppShell } from "./components/layout/AppShell";
 import { DashboardProvider } from "./context/DashboardProvider";
+import { legacyDashboardRedirect } from "./lib/navigation";
 import { BeliefDetailPage } from "./routes/BeliefDetailPage";
 import { BeliefsPage } from "./routes/BeliefsPage";
+import { DashboardPage } from "./routes/DashboardPage";
 import { NotFoundPage } from "./routes/NotFoundPage";
+import { ReviewsPage } from "./routes/ReviewsPage";
 import { SourcesPage } from "./routes/SourcesPage";
 import { SearchPage } from "./routes/SearchPage";
 import { TodayPage } from "./routes/TodayPage";
@@ -39,7 +42,7 @@ function LegacyBriefsRedirect() {
   if (briefId) {
     parameters.set("brief", briefId);
   }
-  return <Navigate replace to={`/?${parameters.toString()}`} />;
+  return <Navigate replace to={`/today?${parameters.toString()}`} />;
 }
 
 function LegacyStackRedirect() {
@@ -49,15 +52,28 @@ function LegacyStackRedirect() {
   return <Navigate replace to={`/theses?${parameters.toString()}`} />;
 }
 
+function DashboardEntry() {
+  const location = useLocation();
+  const redirect = legacyDashboardRedirect(location.search);
+
+  if (redirect) {
+    return <Navigate replace to={redirect} />;
+  }
+
+  return <DashboardPage />;
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <DashboardProvider>
         <Routes>
           <Route element={<AppShell />}>
-            <Route index element={<TodayPage />} />
+            <Route index element={<DashboardEntry />} />
+            <Route path="today" element={<TodayPage />} />
             <Route path="theses" element={<BeliefsPage />} />
             <Route path="theses/:beliefId" element={<BeliefDetailPage />} />
+            <Route path="reviews" element={<ReviewsPage />} />
             <Route path="briefs" element={<LegacyBriefsRedirect />} />
             <Route path="briefs/:briefId" element={<LegacyBriefsRedirect />} />
             <Route path="signals" element={<UpdatesPage />} />

@@ -2,6 +2,8 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Building2,
+  CalendarClock,
+  ClipboardCheck,
   LoaderCircle,
   Network,
   Trash2,
@@ -9,24 +11,22 @@ import {
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
-import type {
-  LayerId,
-  ThesisEvaluationReviewInput,
-} from "../../shared/contracts";
+import type { LayerId } from "../../shared/contracts";
 import { PageError, PageLoading } from "../components/ui/AsyncState";
 import { Button } from "../components/ui/Button";
+import { ThesisMomentumBadge } from "../components/ui/ThesisMomentumBadge";
 import { useDashboard } from "../context/useDashboard";
 import { BeliefConditions } from "../features/beliefs/BeliefConditions";
 import { ConfidenceMeter } from "../features/beliefs/ConfidenceMeter";
 import { EvidenceRail } from "../features/beliefs/EvidenceRail";
-import { PendingEvaluations } from "../features/beliefs/PendingEvaluations";
 import { useBeliefDetail } from "../features/beliefs/useBeliefs";
 import { VersionTimeline } from "../features/beliefs/VersionTimeline";
+import { ThesisInvestmentChain } from "../features/investment/ThesisInvestmentChain";
+import { useInvestmentWorkspace } from "../features/investment/useInvestmentWorkspace";
 import { SourceCoverageBadge } from "../features/sources/SourceCoverageAudit";
 import {
   type BeliefRoutedSignal,
   removeCompany,
-  reviewBeliefEvaluation,
 } from "../lib/api";
 import { formatDate, getLayerName } from "../lib/format";
 
@@ -236,6 +236,7 @@ export function BeliefDetailPage() {
     beliefRevision,
   );
   const navigate = useNavigate();
+  const investment = useInvestmentWorkspace();
   const [isRemoveOpen, setIsRemoveOpen] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -296,13 +297,6 @@ export function BeliefDetailPage() {
   const sourceCoverage = data.sourceCoverage.find(
     (coverage) => coverage.thesisId === belief.id,
   );
-  const reviewEvaluation = async (
-    evaluationId: string,
-    decision: ThesisEvaluationReviewInput["decision"],
-  ) => {
-    await reviewBeliefEvaluation(evaluationId, { decision });
-    setBeliefRevision((current) => current + 1);
-  };
   const evaluateRoutedSignals = async () => {
     await evaluateAllBeliefs();
     setBeliefRevision((current) => current + 1);
@@ -326,6 +320,7 @@ export function BeliefDetailPage() {
                   <TypeIcon aria-hidden="true" className="size-3.5" />
                   {belief.kind} thesis
                 </span>
+                <ThesisMomentumBadge momentum={belief.momentum} />
                 {sourceCoverage ? (
                   <Link to="/sources#macro-thesis-coverage">
                     <SourceCoverageBadge status={sourceCoverage.status} />
@@ -355,6 +350,15 @@ export function BeliefDetailPage() {
                   Remove
                 </Button>
               ) : null}
+              {belief.pendingEvaluations.length ? (
+                <Link
+                  className="inline-flex min-h-11 items-center gap-2 rounded-md border border-relay-accent bg-relay-accent/10 px-3 text-sm font-medium text-relay-accent hover:bg-relay-accent hover:text-relay-deep"
+                  to={`/reviews?review=${encodeURIComponent(belief.pendingEvaluations[0]!.id)}`}
+                >
+                  <ClipboardCheck aria-hidden="true" className="size-4" />
+                  Review proposal
+                </Link>
+              ) : null}
             </div>
           </div>
         </div>
@@ -382,6 +386,12 @@ export function BeliefDetailPage() {
             <h2 className="mt-4 text-xl font-medium leading-8 tracking-tight sm:text-3xl sm:leading-10">
               {belief.statement}
             </h2>
+            {belief.nextReviewOn ? (
+              <p className="mt-5 flex items-center gap-2 text-xs text-relay-muted">
+                <CalendarClock aria-hidden="true" className="size-4" />
+                Next review {formatDate(belief.nextReviewOn)}
+              </p>
+            ) : null}
             {belief.whyItMatters ? (
               <p className="mt-5 max-w-3xl text-[15px] leading-7 text-relay-muted">
                 {belief.whyItMatters}
@@ -400,6 +410,13 @@ export function BeliefDetailPage() {
             </section>
           ) : null}
 
+          {belief.kind === "macro" ? (
+            <ThesisInvestmentChain
+              belief={belief}
+              portfolio={investment.portfolio}
+            />
+          ) : null}
+
           <BeliefConditions
             strengthening={belief.strengtheningConditions}
             unknowns={belief.unknowns}
@@ -410,10 +427,31 @@ export function BeliefDetailPage() {
             onEvaluate={evaluateRoutedSignals}
             routedSignals={belief.routedSignals}
           />
-          <PendingEvaluations
-            evaluations={belief.pendingEvaluations}
-            onReview={reviewEvaluation}
-          />
+          <section className="mt-10 border-y border-relay-border py-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-semibold">Decision review</h2>
+                <p className="mt-1 text-xs leading-5 text-relay-muted">
+                  Review thesis direction, portfolio action, and the next
+                  checkpoint together in the decision journal.
+                </p>
+              </div>
+              {belief.pendingEvaluations.length ? (
+                <Link
+                  className="inline-flex min-h-11 items-center gap-2 rounded-md border border-relay-accent bg-relay-accent/10 px-3 text-sm font-medium text-relay-accent hover:bg-relay-accent hover:text-relay-deep"
+                  to={`/reviews?review=${encodeURIComponent(belief.pendingEvaluations[0]!.id)}`}
+                >
+                  <ClipboardCheck aria-hidden="true" className="size-4" />
+                  Open {belief.pendingEvaluations.length} review
+                  {belief.pendingEvaluations.length === 1 ? "" : "s"}
+                </Link>
+              ) : (
+                <span className="text-xs text-relay-subtle">
+                  No proposal waiting
+                </span>
+              )}
+            </div>
+          </section>
         </main>
 
         <EvidenceRail

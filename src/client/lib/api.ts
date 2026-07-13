@@ -9,12 +9,18 @@ import type {
   ImpactReviewInput,
   ImportSourceInput,
   IntelligenceUpdate,
+  PortfolioReadModel,
   ResearchSource,
   ResearchSourceInput,
+  ReviewsReadModel,
   SearchResult,
   SourceProfileInput,
   SourceRefreshResult,
   Thesis,
+  ThesisBottleneck,
+  ThesisMomentum,
+  CompanyCaptureMechanism,
+  PortfolioThesisExposure,
   ThesisEvaluation,
   ThesisEvaluationRequeueResult,
   ThesisEvaluationReviewInput,
@@ -82,12 +88,18 @@ export interface BeliefSummary {
   statement: string;
   confidence: number;
   companyTicker: string | null;
+  companyTickers: string[];
   layerIds: string[];
   updatedAt: string;
   supportingEvidenceCount: number;
   opposingEvidenceCount: number;
   pendingEvaluationCount: number;
   awaitingEvaluationCount: number;
+  momentum: ThesisMomentum;
+  nextReviewOn: string | null;
+  bottlenecks: ThesisBottleneck[];
+  captureMechanisms: CompanyCaptureMechanism[];
+  portfolioExposures: PortfolioThesisExposure[];
 }
 
 export interface BeliefDetail extends BeliefSummary {
@@ -164,6 +176,18 @@ async function requestJson<T>(
 
 export function getDashboard(signal?: AbortSignal) {
   return requestJson<DashboardPayload>("/api/dashboard", {
+    ...(signal ? { signal } : {}),
+  });
+}
+
+export function getPortfolio(signal?: AbortSignal): Promise<PortfolioReadModel> {
+  return requestJson<PortfolioReadModel>("/api/portfolio", {
+    ...(signal ? { signal } : {}),
+  });
+}
+
+export function getReviews(signal?: AbortSignal): Promise<ReviewsReadModel> {
+  return requestJson<ReviewsReadModel>("/api/reviews?status=all&limit=100", {
     ...(signal ? { signal } : {}),
   });
 }
@@ -414,6 +438,7 @@ function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
       thesis.kind === "company"
         ? (thesis.companyTickers[0] ?? null)
         : null,
+    companyTickers: thesis.companyTickers,
     layerIds: thesis.layerIds,
     updatedAt: thesis.updatedAt,
     supportingEvidenceCount: thesis.evidence.filter(
@@ -430,6 +455,11 @@ function thesisToBeliefSummary(thesis: Thesis): BeliefSummary {
       routedSignals.filter(
         (signal) => signal.evaluationState === "awaiting-evaluation",
       ).length,
+    momentum: thesis.momentum,
+    nextReviewOn: thesis.nextReviewOn,
+    bottlenecks: thesis.bottlenecks,
+    captureMechanisms: thesis.captureMechanisms,
+    portfolioExposures: thesis.portfolioExposures,
   };
 }
 

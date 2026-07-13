@@ -254,7 +254,7 @@ export function BriefArchiveSection({
               <li key={brief.id}>
                 <Link
                   className="group grid gap-4 py-5 sm:grid-cols-[150px_minmax(0,1fr)_auto] sm:items-start"
-                  to={`/?archive=briefs&brief=${encodeURIComponent(brief.id)}`}
+                  to={`/today?archive=briefs&brief=${encodeURIComponent(brief.id)}`}
                 >
                   <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.08em] text-relay-subtle">
                     <CalendarDays aria-hidden="true" className="size-3.5" />
@@ -500,7 +500,7 @@ export function TodayPage() {
                 )}
                 <Link
                   className="inline-flex h-10 items-center rounded-md border border-relay-border px-4 text-sm text-relay-muted hover:border-relay-border-strong hover:text-relay-text"
-                  to="/?archive=briefs"
+                  to="/today?archive=briefs"
                 >
                   Brief archive
                 </Link>
@@ -782,7 +782,7 @@ export function TodayPage() {
           <section className="mt-10 border-t border-relay-border pt-5">
             <Link
               className="group flex items-center justify-between gap-3 text-sm text-relay-muted hover:text-relay-text"
-              to="/?archive=briefs"
+              to="/today?archive=briefs"
             >
               <span className="flex items-center gap-2.5">
                 <BookOpen

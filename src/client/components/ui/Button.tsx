@@ -4,9 +4,9 @@ type ButtonVariant = "primary" | "secondary" | "quiet" | "danger";
 
 const variants: Record<ButtonVariant, string> = {
   primary:
-    "border-relay-accent bg-relay-accent text-white hover:bg-[#669bff]",
+    "border-relay-accent bg-relay-accent text-relay-deep hover:bg-[#669bff]",
   secondary:
-    "border-relay-border-strong bg-relay-surface-2 text-relay-text hover:border-relay-accent/70 hover:bg-relay-raised",
+    "border-relay-control bg-relay-surface-2 text-relay-text hover:border-relay-accent/70 hover:bg-relay-raised",
   quiet:
     "border-transparent bg-transparent text-relay-muted hover:bg-relay-surface-2 hover:text-relay-text",
   danger:
@@ -27,7 +27,7 @@ export function Button({
 }: ButtonProps) {
   return (
     <button
-      className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-md border px-3 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${variants[variant]} ${className}`}
+      className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-md border px-3.5 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-45 ${variants[variant]} ${className}`}
       type={type}
       {...props}
     >
