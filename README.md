@@ -1,18 +1,24 @@
 # Relay
 
-Relay is a personal, versioned thesis system for the AI-infrastructure stack.
-It watches a small set of trusted sources, preserves their exact claims as an
-immutable evidence ledger, and evaluates whether that evidence changes a
-company or macro infrastructure thesis.
+Relay is a personal, versioned investment-thesis tracker. It connects macro
+theses to their bottlenecks, the companies positioned to capture or depend on
+those bottlenecks, exact supporting and opposing evidence, and an explicit
+portfolio decision.
 
-Relay is deliberately not a filing vault, PDF archive, generic news reader,
-portfolio tracker, or document-management system. Most incoming items should be
-classified as **not material** or reinforce the current mental model without
-changing it. A daily brief with “No meaningful change” is a successful result.
+Relay watches a small set of trusted sources, preserves their exact claims as
+an immutable evidence ledger, and evaluates whether that evidence changes a
+company or macro thesis. Portfolio ownership never biases model evaluation:
+the model proposes a thesis outcome, while the owner separately records a
+buy, hold, add, reduce, or sell decision.
+
+Relay is deliberately not a broker, performance terminal, filing vault, PDF
+archive, generic news reader, or document-management system. Most incoming
+items should be classified as **not material** or reinforce the current mental
+model without changing it.
 
 The core product question is:
 
-> **What thesis did this update?**
+> **What changed, which thesis did it affect, and what should I do next?**
 
 Articles and signals provide provenance; they are not the end product. Relay's
 primary output is a small set of reviewable changes to the owner's understanding
@@ -29,13 +35,16 @@ flowchart LR
     PROPOSAL -- "Unchanged" --> LEDGER["Retain as evidence"]
     PROPOSAL -- "Reinforced, weakened, contradicted, revised" --> REVIEW["Owner review"]
     REVIEW -- Accept --> VERSION["New current thesis version"]
+    REVIEW --> DECISION["Buy, hold, add, reduce, or sell"]
+    DECISION --> NEXT["Schedule the next review"]
     REVIEW -- "Reject or defer" --> HISTORY["Auditable evaluation history"]
     LEDGER --> BRIEF["What changed in my understanding?"]
     VERSION --> BRIEF
     HISTORY --> BRIEF
 ```
 
-Relay deliberately separates source analysis from thesis evaluation:
+Relay deliberately separates source analysis, thesis evaluation, and portfolio
+action:
 
 1. **Signal** — an immutable record of the source, exact quotes verified against
    normalized source paragraphs, and source-level classification.
@@ -44,7 +53,9 @@ Relay deliberately separates source analysis from thesis evaluation:
 3. **Evaluation** — a model-proposed outcome that cites supplied claims and
    explains the evidence-to-thesis reasoning.
 4. **Review** — an owner decision to accept, reject, or defer the proposal.
-5. **Version** — the new current thesis state created only when an accepted
+5. **Portfolio decision** — a separate per-holding buy, hold, add, reduce, or
+   sell action, rationale, and next review date.
+6. **Version** — the new current thesis state created only when an accepted
    evaluation actually changes the thesis.
 
 Valid evaluation outcomes are `unchanged`, `reinforced`, `weakened`,
@@ -57,17 +68,19 @@ never silently rewrites the current thesis.
 
 ## Product surfaces
 
-- **Today** answers “What changed in my understanding?” It separates the
-  largest thesis update from evidence that accumulated without changing a
-  thesis, and treats “No meaningful change” as a first-class outcome.
-- **Theses** (`/theses`) is the primary workspace. Company and Macro tabs show
-  the current thesis, confidence, evidence counts, and pending-review count.
-  `/theses/:beliefId` shows supporting, opposing, and contextual evidence;
-  unknowns; strengthening and weakening conditions; pending evaluations; and
+- **Dashboard** (`/`) shows illustrative current holdings and allocations,
+  active macro theses, the holdings that depend on each thesis, overlapping
+  exposure, recent evidence, and upcoming reviews.
+- **Theses** (`/theses`) keeps macro theses at the center. It exposes each
+  thesis's bottlenecks, company capture mechanisms, supporting and opposing
+  evidence, invalidation conditions, confidence, and strengthening, unchanged,
+  or weakening status. `/theses/:beliefId` retains the full evidence ledger and
   accepted version history.
-- **Signals** (`/signals`) is the source-derived evidence ledger. It
-  remains inspectable for provenance and review without being the product
-  center.
+- **Reviews** (`/reviews`) turns evidence into a disciplined decision journal:
+  what changed, the affected thesis, the thesis outcome, separate actions for
+  each exposed holding, rationale, and the next review date.
+- **Evidence** (`/signals`) remains the source-derived evidence ledger. It is a
+  secondary workspace for provenance and review rather than the product center.
 - **Briefs** keeps a dated archive of mental-model conclusions with their
   underlying thesis evaluations, signals, and exact evidence citations.
 - **Sources** shows trusted-source health, refreshes enabled public feeds,
@@ -78,13 +91,19 @@ never silently rewrites the current thesis.
   text.
 
 The stack map remains available as context linking macro and company theses to
-the infrastructure dependency graph. Legacy `/beliefs` and `/companies` routes
-redirect to `/theses`.
+the infrastructure dependency graph. Legacy `/beliefs`, `/companies`, and
+`/updates` routes continue to redirect to their current equivalents.
 
 ## Managing your tracker
 
-Relay starts with a focused AI-infrastructure watchlist, six macro theses, and
-a trusted-source catalog:
+Relay starts with a focused AI-infrastructure research universe, macro theses,
+a trusted-source catalog, and clearly labelled illustrative portfolio data:
+
+- Current examples: SpaceX, VOO, SMH, and TSM.
+- Watchlist examples: AVGO, NVDA, AMD, MU, SK hynix, VRT, ETN, and GEV.
+- Explicit exposure links reveal shared assumptions. For example, SMH and TSM
+  both depend on memory, networking, and custom-silicon theses without copying
+  the same evidence or double-counting allocation.
 
 - Use **Theses → Add company thesis** to define a company, infrastructure
   layers, current thesis, confirmation criteria, disconfirming criteria, watch
@@ -295,6 +314,8 @@ Owner-management and history APIs include:
 | --- | --- | --- |
 | `GET` | `/api/theses?kind=company\|macro&status=active\|archived\|all` | List versioned theses. |
 | `GET` | `/api/theses/:id` | Read current state, evidence, evaluations, and version history. |
+| `GET` | `/api/portfolio` | Read holdings, watchlist, explicit thesis exposure, and derived overlaps. |
+| `GET` | `/api/reviews` | Read the thesis-review queue and decision history. |
 | `POST` | `/api/theses/evaluate` | Evaluate newer evidence against active company and macro theses. |
 | `POST` | `/api/thesis-evaluations/:id/review` | Accept, reject, or defer a proposed thesis update. |
 | `POST` | `/api/companies` | Add or restore a company thesis. |
@@ -312,7 +333,8 @@ Owner-management and history APIs include:
 
 SQLite remains the private system of record for source provenance, hashes,
 analysis status, signals, exact claims, theses, thesis versions,
-evaluation proposals and reviews, evidence links, and briefs. Raw source
+evaluation proposals and reviews, portfolio exposure and decisions, evidence
+links, and briefs. Raw source
 records are internal provenance/cache data and are not presented as a document
 library.
 
@@ -390,6 +412,8 @@ analysis are ignored by Git and restricted to the current OS user.
 
 Schema changes are additive. Existing company rows are backfilled into
 version-one company theses, while macro theses are seeded independently.
+Portfolio items and thesis-exposure links are seeded idempotently, and
+version-scoped bottleneck/capture rows follow accepted thesis versions.
 Existing source documents and legacy analyses are preserved. Removed companies
 and sources are archived so prior evidence remains valid, owner-added feeds
 survive catalog reseeding, and new analyses record source provenance plus an
@@ -445,6 +469,8 @@ analysis.
   evidence chains for owner review.
 - Company theses can be added and archived in the UI, but macro theses are
   currently seeded in code and cannot yet be created or edited in the UI.
+- Starter allocations are illustrative seed data and are not yet editable from
+  the UI or synchronized with a brokerage account.
 - Pending thesis evaluations are visible in thesis detail and can be accepted,
   rejected, or deferred. Deferred proposals remain in a separate later-review
   section.
