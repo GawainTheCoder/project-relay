@@ -35,7 +35,7 @@ describe("Relay API", () => {
     };
     expect(dashboard.companies).toHaveLength(13);
     expect(dashboard.updates).toHaveLength(7);
-    expect(dashboard.sourceCoverage).toHaveLength(6);
+    expect(dashboard.sourceCoverage).toHaveLength(7);
     expect(dashboard.sourceCoverage.map((entry) => entry.thesisId)).toEqual([
       "macro-memory-bottleneck",
       "macro-networking-bottleneck",
@@ -43,6 +43,7 @@ describe("Relay API", () => {
       "macro-power-cooling",
       "macro-custom-silicon",
       "macro-inference-portability",
+      "macro-space-infrastructure",
     ]);
     expect(
       dashboard.sourceCoverage.every((entry) =>
@@ -207,6 +208,66 @@ describe("Relay API", () => {
       expect(
         acceptedPayload.history.map((review) => review.evaluation.id),
       ).toContain("demo-review-custom-silicon");
+    } finally {
+      demoRepository.close();
+    }
+  });
+
+  it("distinguishes missing and unrelated portfolio review decisions", async () => {
+    const demoRepository = createRelayRepository(":memory:", {
+      demoData: true,
+    });
+    try {
+      const app = createApp({ repository: demoRepository });
+      const missingResponse = await app.request(
+        "/api/thesis-evaluations/demo-review-custom-silicon/review",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            decision: "accepted",
+            portfolioDecisions: [
+              {
+                portfolioItemId: "portfolio-missing",
+                action: "buy",
+                rationale: "Exercise the missing-item error contract.",
+              },
+            ],
+          }),
+        },
+      );
+      expect(missingResponse.status).toBe(404);
+      await expect(missingResponse.json()).resolves.toMatchObject({
+        error: { code: "PORTFOLIO_ITEM_NOT_FOUND" },
+      });
+
+      const unrelatedResponse = await app.request(
+        "/api/thesis-evaluations/demo-review-custom-silicon/review",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            decision: "accepted",
+            portfolioDecisions: [
+              {
+                portfolioItemId: "portfolio-spacex",
+                action: "hold",
+                rationale: "SpaceX is unrelated to the custom-silicon thesis.",
+              },
+            ],
+          }),
+        },
+      );
+      expect(unrelatedResponse.status).toBe(409);
+      await expect(unrelatedResponse.json()).resolves.toMatchObject({
+        error: {
+          code: "THESIS_EVALUATION_CONFLICT",
+          message: expect.stringContaining("is not exposed to thesis"),
+        },
+      });
+      expect(
+        demoRepository.getThesisEvaluation("demo-review-custom-silicon"),
+      ).toMatchObject({ reviewStatus: "pending" });
     } finally {
       demoRepository.close();
     }

@@ -159,6 +159,16 @@ export interface SourceDocumentRecoveryRecord {
   lastAttemptedAt: string | null;
 }
 
+export class PortfolioItemNotFoundError extends RangeError {
+  readonly portfolioItemId: string;
+
+  constructor(portfolioItemId: string) {
+    super(`Unknown active portfolio item: ${portfolioItemId}`);
+    this.name = "PortfolioItemNotFoundError";
+    this.portfolioItemId = portfolioItemId;
+  }
+}
+
 export interface SourceDocumentRecoveryUpdate {
   title?: string;
   publisher?: string;
@@ -645,10 +655,23 @@ export class RelayRepository {
     const portfolioItems = new Map(
       this.listPortfolioItems().map((item) => [item.id, item]),
     );
-    const evaluations = this.listThesisEvaluations(filters).slice(
-      0,
-      filters.limit ?? 100,
-    );
+    const evaluations = this.listThesisEvaluations(filters)
+      .toSorted((left, right) => {
+        const leftActivityAt =
+          left.reviewStatus === "accepted" ||
+            left.reviewStatus === "rejected"
+            ? (left.reviewedAt ?? left.createdAt)
+            : left.createdAt;
+        const rightActivityAt =
+          right.reviewStatus === "accepted" ||
+            right.reviewStatus === "rejected"
+            ? (right.reviewedAt ?? right.createdAt)
+            : right.createdAt;
+        return rightActivityAt.localeCompare(leftActivityAt) ||
+          right.createdAt.localeCompare(left.createdAt) ||
+          right.id.localeCompare(left.id);
+      })
+      .slice(0, filters.limit ?? 100);
     return evaluations.flatMap((evaluation) => {
       const thesis = this.getThesis(evaluation.thesisId);
       return thesis
@@ -680,6 +703,30 @@ export class RelayRepository {
   clearDemoIntelligence(updateIds: string[], briefId: string): void {
     this.withTransaction(() => {
       this.database.prepare("DELETE FROM daily_briefs WHERE id = ?").run(briefId);
+      const hasAcceptedEvaluation = this.database.prepare(`
+        SELECT 1
+        FROM thesis_evaluation_updates AS link
+        INNER JOIN thesis_evaluations AS evaluation
+          ON evaluation.id = link.evaluation_id
+        WHERE link.update_id = ?
+          AND evaluation.review_status = 'accepted'
+        LIMIT 1
+      `);
+      const deleteUnacceptedEvaluations = this.database.prepare(`
+        DELETE FROM thesis_evaluations
+        WHERE review_status IN ('pending', 'deferred', 'rejected')
+          AND id IN (
+            SELECT evaluation_id
+            FROM thesis_evaluation_updates
+            WHERE update_id = ?
+          )
+      `);
+      const deleteLinkedThesisEvidence = this.database.prepare(`
+        DELETE FROM thesis_evidence
+        WHERE claim_id IN (
+          SELECT id FROM evidence_claims WHERE update_id = ?
+        )
+      `);
       const deleteDerivedBrief = this.database.prepare(`
         DELETE FROM daily_briefs
         WHERE id IN (
@@ -693,6 +740,13 @@ export class RelayRepository {
         "DELETE FROM impact_reviews WHERE update_id = ?",
       );
       updateIds.forEach((updateId) => {
+        // Accepted reviews are durable user decisions. Retain their source
+        // signal so the accepted history and evidence provenance stay valid.
+        if (hasAcceptedEvaluation.get(updateId)) {
+          return;
+        }
+        deleteUnacceptedEvaluations.run(updateId);
+        deleteLinkedThesisEvidence.run(updateId);
         deleteDerivedBrief.run(updateId);
         deleteDemoReviews.run(updateId);
         deleteUpdate.run(updateId);
@@ -938,15 +992,23 @@ export class RelayRepository {
       ? this.listThesisRoutedSignals(id, kind)
       : [];
     const evaluations = this.listThesisEvaluations({ thesisId: id });
-    const latestAcceptedEvaluation = evaluations.find(
+    const reviewedEvaluations = evaluations
+      .filter(
+        (
+          evaluation,
+        ): evaluation is ThesisEvaluation & { reviewedAt: string } =>
+          evaluation.reviewedAt !== null,
+      )
+      .toSorted(
+        (left, right) =>
+          right.reviewedAt.localeCompare(left.reviewedAt) ||
+          right.createdAt.localeCompare(left.createdAt) ||
+          right.id.localeCompare(left.id),
+      );
+    const latestAcceptedEvaluation = reviewedEvaluations.find(
       (evaluation) => evaluation.reviewStatus === "accepted",
     );
-    const scheduledEvaluation = evaluations.find(
-      (evaluation) =>
-        (evaluation.reviewStatus === "accepted" ||
-          evaluation.reviewStatus === "deferred") &&
-        evaluation.nextReviewOn,
-    );
+    const latestReview = reviewedEvaluations[0];
     return {
       id,
       kind,
@@ -957,7 +1019,7 @@ export class RelayRepository {
       momentum: latestAcceptedEvaluation
         ? evaluationMomentum(latestAcceptedEvaluation)
         : "unchanged",
-      nextReviewOn: scheduledEvaluation?.nextReviewOn ?? null,
+      nextReviewOn: latestReview?.nextReviewOn ?? null,
       bottlenecks: this.listThesisBottlenecks(currentVersionId),
       captureMechanisms:
         this.listThesisCaptureMechanisms(currentVersionId),
@@ -2078,9 +2140,7 @@ export class RelayRepository {
         );
       }
       if (!knownPortfolioItem.get(decision.portfolioItemId)) {
-        throw new RangeError(
-          `Unknown active portfolio item: ${decision.portfolioItemId}`,
-        );
+        throw new PortfolioItemNotFoundError(decision.portfolioItemId);
       }
       if (!linkedPortfolioItem.get(decision.portfolioItemId, evaluation.thesisId)) {
         throw new TypeError(

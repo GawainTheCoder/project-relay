@@ -28,6 +28,7 @@ import {
 } from "./api/schemas.js";
 import {
   createRelayRepository,
+  PortfolioItemNotFoundError,
   type RelayRepository,
 } from "./db/repository.js";
 import { createImpactReviewRepository } from "./evaluation/index.js";
@@ -397,6 +398,14 @@ export function createApp(options: CreateAppOptions = {}): Hono {
           ),
         );
       } catch (error) {
+        if (error instanceof PortfolioItemNotFoundError) {
+          return jsonError(
+            context,
+            404,
+            "PORTFOLIO_ITEM_NOT_FOUND",
+            `The portfolio item ${error.portfolioItemId} does not exist or is archived.`,
+          );
+        }
         if (error instanceof RangeError) {
           return jsonError(
             context,

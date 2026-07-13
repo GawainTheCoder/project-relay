@@ -157,6 +157,12 @@ export const MACRO_THESIS_SOURCE_COVERAGE = [
       "serve-the-home-manual",
     ],
   },
+  {
+    thesisId: "macro-space-infrastructure",
+    thesisTitle: "Reusable launch and satellite scale compound space economics",
+    layerIds: ["materials-builders"],
+    sourceIds: [],
+  },
 ] as const satisfies readonly MacroCoverageMapping[];
 
 export function auditMacroThesisSourceCoverage(

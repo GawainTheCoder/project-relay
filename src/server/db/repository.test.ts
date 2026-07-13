@@ -574,6 +574,66 @@ describe("RelayRepository", () => {
     );
   });
 
+  it("derives momentum and review schedule from review chronology", () => {
+    const first = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "chronology-first-created",
+        proposedConfidenceScore: 87,
+      }),
+    );
+    repository.reviewThesisEvaluation(first.id, {
+      decision: "accepted",
+      nextReviewOn: "2026-08-01",
+    });
+    const advanced = repository.getThesis("company-nvda");
+    if (!advanced) {
+      throw new Error("Expected advanced company thesis");
+    }
+    const second = repository.persistThesisEvaluation(
+      buildEvaluation(repository, {
+        id: "chronology-last-reviewed",
+        outcome: "weakened",
+        proposedConfidenceScore:
+          advanced.currentVersion.confidenceScore - 1,
+        signalIds: ["nvda-fy26-q4"],
+        evidence: [
+          {
+            claimId: "claim-nvda-dc",
+            stance: "opposes",
+            rationale: "A later review interprets the evidence as weaker.",
+          },
+        ],
+      }),
+    );
+    repository.reviewThesisEvaluation(second.id, {
+      decision: "accepted",
+    });
+    repository.database
+      .prepare(`
+        UPDATE thesis_evaluations
+        SET created_at = ?, reviewed_at = ?
+        WHERE id = ?
+      `)
+      .run("2026-07-03T00:00:00.000Z", "2026-07-04T00:00:00.000Z", first.id);
+    repository.database
+      .prepare(`
+        UPDATE thesis_evaluations
+        SET created_at = ?, reviewed_at = ?
+        WHERE id = ?
+      `)
+      .run("2026-07-02T00:00:00.000Z", "2026-07-05T00:00:00.000Z", second.id);
+
+    expect(repository.getThesis("company-nvda")).toMatchObject({
+      momentum: "weakening",
+      nextReviewOn: null,
+    });
+    expect(
+      repository
+        .listThesisReviews({ reviewStatus: "accepted" })
+        .map((review) => review.evaluation.id),
+    ).toEqual([second.id, first.id]);
+  });
+
   it("preserves accepted unchanged evaluations without creating a thesis version", () => {
     const current = repository.getThesis("company-nvda")?.currentVersion;
     if (!current) {
@@ -1219,6 +1279,32 @@ describe("RelayRepository", () => {
     let fileRepository: RelayRepository | undefined;
     try {
       fileRepository = createRelayRepository(databasePath, { demoData: true });
+      const pendingDemoDependency = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-pending-demo-dependency",
+          proposedConfidenceScore: 86,
+        }),
+      );
+      const deferredDemoDependency = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-deferred-demo-dependency",
+          proposedConfidenceScore: 87,
+        }),
+      );
+      fileRepository.reviewThesisEvaluation(deferredDemoDependency.id, {
+        decision: "deferred",
+        note: "Wait for personal evidence before deciding.",
+      });
+      const rejectedDemoDependency = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-rejected-demo-dependency",
+          proposedConfidenceScore: 88,
+        }),
+      );
+      fileRepository.reviewThesisEvaluation(rejectedDemoDependency.id, {
+        decision: "rejected",
+        note: "Do not carry fixture-only evidence into the personal workspace.",
+      });
       fileRepository.persistAnalyzedUpdate(personalUpdate);
       const reviews = createImpactReviewRepository(fileRepository.database);
       reviews.reviewImpact({
@@ -1256,6 +1342,15 @@ describe("RelayRepository", () => {
       ]);
       expect(dashboard.demoData).toBe(false);
       expect(dashboard.brief).toBeNull();
+      expect(
+        fileRepository.getThesisEvaluation(pendingDemoDependency.id),
+      ).toBeNull();
+      expect(
+        fileRepository.getThesisEvaluation(deferredDemoDependency.id),
+      ).toBeNull();
+      expect(
+        fileRepository.getThesisEvaluation(rejectedDemoDependency.id),
+      ).toBeNull();
       expect(fileRepository.listThesisReviews()).toEqual([]);
       expect(
         fileRepository.getPortfolio().items.every(
@@ -1273,6 +1368,52 @@ describe("RelayRepository", () => {
           )
           .all(),
       ).toEqual([{ impact_id: "personal-impact-nvda-dynamo" }]);
+    } finally {
+      fileRepository?.close();
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("retains demo evidence required by an accepted user review", () => {
+    const directory = mkdtempSync(join(tmpdir(), "relay-accepted-demo-"));
+    const databasePath = join(directory, "relay.sqlite");
+    let fileRepository: RelayRepository | undefined;
+    try {
+      fileRepository = createRelayRepository(databasePath, { demoData: true });
+      const accepted = fileRepository.persistThesisEvaluation(
+        buildEvaluation(fileRepository, {
+          id: "personal-accepted-demo-dependency",
+          proposedConfidenceScore: 86,
+        }),
+      );
+      fileRepository.reviewThesisEvaluation(accepted.id, {
+        decision: "accepted",
+        note: "Keep this reviewed evidence as part of personal history.",
+      });
+      fileRepository.close();
+      fileRepository = undefined;
+
+      fileRepository = createRelayRepository(databasePath, { demoData: false });
+
+      expect(fileRepository.getUpdate("nvda-fy26-q4")).not.toBeNull();
+      expect(fileRepository.getUpdate("avgo-fy25-q4")).toBeNull();
+      expect(fileRepository.getThesisEvaluation(accepted.id)).toMatchObject({
+        reviewStatus: "accepted",
+        signalIds: ["nvda-fy26-q4"],
+        claimIds: ["claim-nvda-dc"],
+      });
+      expect(fileRepository.getThesis("company-nvda")).toMatchObject({
+        currentVersion: {
+          createdByEvaluationId: accepted.id,
+          confidenceScore: 86,
+        },
+        evidence: [
+          expect.objectContaining({
+            claimId: "claim-nvda-dc",
+            linkedByEvaluationId: accepted.id,
+          }),
+        ],
+      });
     } finally {
       fileRepository?.close();
       rmSync(directory, { force: true, recursive: true });
