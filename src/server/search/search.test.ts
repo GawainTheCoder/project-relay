@@ -46,6 +46,7 @@ describe("LocalSearchService", () => {
         expect.objectContaining({
           type: "brief",
           id: "brief-2026-06-27",
+          href: "/today?archive=briefs&brief=brief-2026-06-27",
         }),
       ]),
     );
