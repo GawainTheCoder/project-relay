@@ -8,7 +8,7 @@ describe("legacy dashboard routes", () => {
       "/today?archive=briefs",
     );
     expect(legacyDashboardRedirect("?brief=brief-2026-07-14")).toBe(
-      "/today?brief=brief-2026-07-14",
+      "/today?brief=brief-2026-07-14&archive=briefs",
     );
   });
 

@@ -134,8 +134,10 @@ export function PortfolioAllocationPanel({
                         ) : null}
                       </div>
                       <p className="mt-1 text-xs leading-5 text-relay-muted">
-                        {holding.thesisExposures.length} linked macro thesis
-                        {holding.thesisExposures.length === 1 ? "" : "es"}
+                        {holding.thesisExposures.length} linked macro{" "}
+                        {holding.thesisExposures.length === 1
+                          ? "thesis"
+                          : "theses"}
                         {holding.latestDecision
                           ? ` · Last decision: ${holding.latestDecision.action}`
                           : ""}

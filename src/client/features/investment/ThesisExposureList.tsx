@@ -1,7 +1,13 @@
-import { ArrowRight, GitCompareArrows } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowRight,
+  GitCompareArrows,
+  RefreshCw,
+} from "lucide-react";
 import { Link } from "react-router-dom";
 
 import type { PortfolioReadModel } from "../../../shared/contracts";
+import { Button } from "../../components/ui/Button";
 import { ThesisMomentumBadge } from "../../components/ui/ThesisMomentumBadge";
 import type { BeliefSummary } from "../../lib/api";
 
@@ -26,9 +32,15 @@ function linkedHoldings(
 
 export function ThesisExposureList({
   beliefs,
+  error,
+  isLoading,
+  onRetry,
   portfolio,
 }: {
   beliefs: BeliefSummary[];
+  error: string | null;
+  isLoading: boolean;
+  onRetry: () => void;
   portfolio: PortfolioReadModel | null;
 }) {
   const macroTheses = beliefs
@@ -67,7 +79,39 @@ export function ThesisExposureList({
         </Link>
       </div>
 
-      {macroTheses.length ? (
+      {isLoading && !portfolio ? (
+        <div aria-busy="true" className="py-7" role="status">
+          <span className="sr-only">Loading linked portfolio allocations</span>
+          <div className="space-y-4">
+            {[0, 1, 2].map((item) => (
+              <div
+                className="h-20 animate-pulse rounded-lg bg-relay-deep"
+                key={item}
+              />
+            ))}
+          </div>
+        </div>
+      ) : error && !portfolio ? (
+        <div className="py-8 text-center">
+          <AlertCircle
+            aria-hidden="true"
+            className="mx-auto size-5 text-relay-negative"
+          />
+          <h3 className="mt-4 text-sm font-semibold">
+            Portfolio exposure unavailable
+          </h3>
+          <p
+            className="mt-2 text-sm leading-6 text-relay-muted"
+            role="alert"
+          >
+            {error}
+          </p>
+          <Button className="mt-4" onClick={onRetry} variant="quiet">
+            <RefreshCw aria-hidden="true" className="size-4" />
+            Retry exposure
+          </Button>
+        </div>
+      ) : macroTheses.length ? (
         <ol className="divide-y divide-relay-border">
           {macroTheses.map((thesis) => {
             const holdings = linkedHoldings(thesis.id, portfolio);

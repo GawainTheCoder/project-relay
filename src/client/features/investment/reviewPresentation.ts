@@ -34,3 +34,7 @@ export function reviewStatusLabel(
   }
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
+
+export function reviewDisplayDate(evaluation: ThesisEvaluation): string {
+  return evaluation.reviewedAt ?? evaluation.createdAt;
+}

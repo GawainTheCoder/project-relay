@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { DashboardPayload } from "../../../shared/contracts";
 import {
@@ -47,9 +47,12 @@ function enrichBeliefDetail(
 
 export function useBeliefs(dashboard: DashboardPayload | null) {
   const [remoteState, setRemoteState] = useState<{
-    beliefs: BeliefSummary[];
+    beliefs: BeliefSummary[] | null;
     dashboard: DashboardPayload;
+    error: string | null;
+    isLoading: boolean;
   } | null>(null);
+  const [revision, setRevision] = useState(0);
   const fallback = useMemo(
     () => (dashboard ? deriveBeliefSummaries(dashboard) : []),
     [dashboard],
@@ -61,19 +64,53 @@ export function useBeliefs(dashboard: DashboardPayload | null) {
     }
     const controller = new AbortController();
     void listBeliefs(controller.signal)
-      .then((beliefs) => setRemoteState({ beliefs, dashboard }))
+      .then((beliefs) =>
+        setRemoteState({ beliefs, dashboard, error: null, isLoading: false }),
+      )
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          // Older Relay servers do not expose belief endpoints yet. The
-          // dashboard-derived compatibility model remains fully usable.
+          setRemoteState((current) => ({
+            beliefs: current?.dashboard === dashboard ? current.beliefs : null,
+            dashboard,
+            error:
+              error instanceof Error
+                ? error.message
+                : "Thesis data is unavailable.",
+            isLoading: false,
+          }));
         }
       });
     return () => controller.abort();
+  }, [dashboard, revision]);
+
+  const reload = useCallback(() => {
+    setRemoteState((current) =>
+      dashboard
+        ? {
+            beliefs:
+              current?.dashboard === dashboard ? current.beliefs : null,
+            dashboard,
+            error: null,
+            isLoading: true,
+          }
+        : current,
+    );
+    setRevision((current) => current + 1);
   }, [dashboard]);
 
-  return remoteState?.dashboard === dashboard
-    ? remoteState.beliefs
-    : fallback;
+  const currentState =
+    remoteState?.dashboard === dashboard ? remoteState : null;
+  const canonicalBeliefs = currentState?.beliefs ?? null;
+  const hasCanonicalBeliefs = canonicalBeliefs !== null;
+
+  return {
+    beliefs: canonicalBeliefs ?? fallback,
+    error: hasCanonicalBeliefs ? null : (currentState?.error ?? null),
+    isLoading:
+      Boolean(dashboard) &&
+      (!currentState || (currentState.isLoading && !hasCanonicalBeliefs)),
+    reload,
+  };
 }
 
 export function useBeliefDetail(

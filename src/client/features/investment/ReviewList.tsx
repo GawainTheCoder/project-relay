@@ -3,7 +3,11 @@ import { CalendarClock, CheckCircle2 } from "lucide-react";
 import type { ThesisReview } from "../../../shared/contracts";
 import { ThesisMomentumBadge } from "../../components/ui/ThesisMomentumBadge";
 import { formatDate } from "../../lib/format";
-import { evaluationMomentum, reviewStatusLabel } from "./reviewPresentation";
+import {
+  evaluationMomentum,
+  reviewDisplayDate,
+  reviewStatusLabel,
+} from "./reviewPresentation";
 
 export function ReviewList({
   emptyDescription,
@@ -39,6 +43,7 @@ export function ReviewList({
     <ol className="divide-y divide-relay-border">
       {reviews.map((review) => {
         const isSelected = review.evaluation.id === selectedId;
+        const displayedAt = reviewDisplayDate(review.evaluation);
         return (
           <li key={review.evaluation.id}>
             <button
@@ -62,14 +67,17 @@ export function ReviewList({
               <h3 className="mt-3 text-sm font-semibold leading-5 group-hover:text-relay-accent">
                 {review.thesisTitle}
               </h3>
-              <p className="mt-2 flex items-center gap-1.5 text-xs text-relay-muted">
+              <time
+                className="mt-2 flex items-center gap-1.5 text-xs text-relay-muted"
+                dateTime={displayedAt}
+              >
                 <CalendarClock aria-hidden="true" className="size-3.5" />
-                {formatDate(review.evaluation.createdAt, {
+                {formatDate(displayedAt, {
                   month: "short",
                   day: "numeric",
                   year: "numeric",
                 })}
-              </p>
+              </time>
             </button>
           </li>
         );

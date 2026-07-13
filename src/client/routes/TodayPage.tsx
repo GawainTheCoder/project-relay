@@ -301,7 +301,8 @@ export function BriefArchiveSection({
 
 export function TodayPage() {
   const { data, error, isLoading, regenerateBrief, reload } = useDashboard();
-  const beliefs = useBeliefs(data);
+  const beliefWorkspace = useBeliefs(data);
+  const beliefs = beliefWorkspace.beliefs;
   const [searchParams] = useSearchParams();
   const [selectedClaimId, setSelectedClaimId] = useState<string | null>(null);
   const [isGeneratingBrief, setIsGeneratingBrief] = useState(false);
@@ -413,14 +414,23 @@ export function TodayPage() {
     0,
   );
 
-  if (isLoading) {
+  if (isLoading || beliefWorkspace.isLoading) {
     return <PageLoading label="Updating today’s mental model" />;
   }
-  if (error || !data) {
+  if (error || beliefWorkspace.error || !data) {
     return (
       <PageError
-        error={error ?? "Dashboard data is unavailable."}
-        onRetry={() => void reload()}
+        error={
+          error ?? beliefWorkspace.error ?? "Dashboard data is unavailable."
+        }
+        onRetry={() => {
+          if (error || !data) {
+            void reload();
+          }
+          if (beliefWorkspace.error) {
+            beliefWorkspace.reload();
+          }
+        }}
       />
     );
   }

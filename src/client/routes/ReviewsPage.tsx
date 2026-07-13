@@ -189,12 +189,15 @@ export function ReviewsPage() {
           </aside>
 
           <ReviewDetailPanel
+            evidenceError={dashboard.data ? null : dashboard.error}
+            isEvidenceLoading={dashboard.isLoading && !dashboard.data}
             key={
               selectedReview
                 ? `${selectedReview.evaluation.id}:${selectedReview.evaluation.reviewStatus}:${selectedReview.evaluation.reviewedAt ?? "open"}`
                 : "empty-review"
             }
             onCompleted={onCompleted}
+            onEvidenceRetry={() => void dashboard.reload()}
             review={selectedReview}
             updates={dashboard.data?.updates ?? []}
           />

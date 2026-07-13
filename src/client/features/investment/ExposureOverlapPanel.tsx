@@ -51,7 +51,7 @@ export function ExposureOverlapPanel({
           <div className="mt-4 flex flex-wrap gap-2">
             {overlap.sharedTheses.map((thesis) => (
               <Link
-                className="inline-flex min-h-9 items-center rounded-md border border-relay-control bg-relay-surface px-3 text-xs text-relay-text hover:border-relay-accent hover:text-relay-accent"
+                className="inline-flex min-h-11 items-center rounded-md border border-relay-control bg-relay-surface px-3 text-xs text-relay-text hover:border-relay-accent hover:text-relay-accent"
                 key={thesis.thesisId}
                 to={`/theses/${encodeURIComponent(thesis.thesisId)}`}
               >

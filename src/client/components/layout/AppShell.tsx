@@ -293,7 +293,7 @@ export function AppShell() {
           >
             <button
               aria-label="Close navigation"
-              className="absolute right-3 top-4 rounded p-2 text-relay-muted hover:bg-relay-surface-2 hover:text-relay-text"
+              className="absolute right-3 top-4 grid size-11 place-items-center rounded-md text-relay-muted hover:bg-relay-surface-2 hover:text-relay-text"
               onClick={() => setIsMobileOpen(false)}
               ref={mobileCloseButtonRef}
               type="button"

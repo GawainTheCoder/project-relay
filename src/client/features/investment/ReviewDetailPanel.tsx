@@ -27,7 +27,11 @@ import {
   PortfolioDecisionFieldset,
   type PortfolioDecisionDraft,
 } from "./PortfolioDecisionFieldset";
-import { evaluationMomentum, reviewStatusLabel } from "./reviewPresentation";
+import {
+  evaluationMomentum,
+  reviewDisplayDate,
+  reviewStatusLabel,
+} from "./reviewPresentation";
 
 function initialDecisionDrafts(
   review: ThesisReview,
@@ -70,13 +74,19 @@ function localDateInputValue(date = new Date()): string {
 }
 
 export function ReviewDetailPanel({
+  evidenceError = null,
+  isEvidenceLoading = false,
   onCompleted,
+  onEvidenceRetry,
   review,
   updates,
 }: {
+  evidenceError?: string | null;
+  isEvidenceLoading?: boolean;
   onCompleted: (
     decision: ThesisEvaluationReviewInput["decision"],
   ) => Promise<void>;
+  onEvidenceRetry?: () => void;
   review: ThesisReview | null;
   updates: IntelligenceUpdate[];
 }) {
@@ -116,6 +126,7 @@ export function ReviewDetailPanel({
   }
 
   const evaluation = review.evaluation;
+  const displayedAt = reviewDisplayDate(evaluation);
   const affectedItems = itemsForReview(review);
   const currentHoldings = affectedItems.filter(
     (item) => item.status === "holding",
@@ -205,10 +216,10 @@ export function ReviewDetailPanel({
           </div>
           <time
             className="flex items-center gap-1.5 text-xs text-relay-muted"
-            dateTime={evaluation.createdAt}
+            dateTime={displayedAt}
           >
             <CalendarDays aria-hidden="true" className="size-3.5" />
-            {formatDate(evaluation.createdAt, {
+            {formatDate(displayedAt, {
               month: "short",
               day: "numeric",
               year: "numeric",
@@ -279,7 +290,41 @@ export function ReviewDetailPanel({
               {evaluation.claimIds.length === 1 ? "" : "s"}
             </span>
           </div>
-          {evidence.length ? (
+          {isEvidenceLoading ? (
+            <div
+              aria-busy="true"
+              className="flex min-h-24 items-center gap-3 py-5 text-sm text-relay-muted"
+              role="status"
+            >
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-4 animate-spin text-relay-accent"
+              />
+              Loading cited evidence
+            </div>
+          ) : evidenceError ? (
+            <div className="py-5">
+              <p
+                className="flex items-start gap-2 text-sm leading-6 text-relay-negative"
+                role="alert"
+              >
+                <AlertCircle
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0"
+                />
+                Cited evidence could not be loaded. {evidenceError}
+              </p>
+              {onEvidenceRetry ? (
+                <Button
+                  className="mt-4"
+                  onClick={onEvidenceRetry}
+                  variant="quiet"
+                >
+                  Retry evidence
+                </Button>
+              ) : null}
+            </div>
+          ) : evidence.length ? (
             <ol className="divide-y divide-relay-border">
               {evidence.map(({ claim, update }, index) => (
                 <li className="py-4" key={claim.id}>

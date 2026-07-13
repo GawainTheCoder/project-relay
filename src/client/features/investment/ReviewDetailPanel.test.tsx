@@ -7,7 +7,10 @@ import type {
   ThesisReview,
 } from "../../../shared/contracts";
 import { ReviewDetailPanel } from "./ReviewDetailPanel";
-import { evaluationMomentum } from "./reviewPresentation";
+import {
+  evaluationMomentum,
+  reviewDisplayDate,
+} from "./reviewPresentation";
 
 function evaluation(
   overrides: Partial<ThesisEvaluation> = {},
@@ -85,6 +88,37 @@ describe("ReviewDetailPanel", () => {
     expect(markup).toContain("Optional · rationale required only when choosing an action");
     expect(markup).toContain("No action");
   });
+
+  it("distinguishes evidence loading and error states from a true empty result", () => {
+    const loadingMarkup = renderToStaticMarkup(
+      <MemoryRouter>
+        <ReviewDetailPanel
+          isEvidenceLoading
+          onCompleted={async () => undefined}
+          review={review}
+          updates={[]}
+        />
+      </MemoryRouter>,
+    );
+    const errorMarkup = renderToStaticMarkup(
+      <MemoryRouter>
+        <ReviewDetailPanel
+          evidenceError="Dashboard unavailable"
+          onCompleted={async () => undefined}
+          onEvidenceRetry={() => undefined}
+          review={review}
+          updates={[]}
+        />
+      </MemoryRouter>,
+    );
+
+    expect(loadingMarkup).toContain("Loading cited evidence");
+    expect(loadingMarkup).not.toContain(
+      "Exact source quotes remain available",
+    );
+    expect(errorMarkup).toContain("Cited evidence could not be loaded");
+    expect(errorMarkup).toContain("Retry evidence");
+  });
 });
 
 describe("evaluationMomentum", () => {
@@ -103,5 +137,16 @@ describe("evaluationMomentum", () => {
         evaluation({ outcome: "revised", confidenceDelta: -4 }),
       ),
     ).toBe("weakening");
+  });
+
+  it("uses the decision timestamp when a review has been recorded", () => {
+    expect(
+      reviewDisplayDate(
+        evaluation({ reviewedAt: "2026-07-20T09:30:00.000Z" }),
+      ),
+    ).toBe("2026-07-20T09:30:00.000Z");
+    expect(reviewDisplayDate(evaluation())).toBe(
+      "2026-07-14T08:00:00.000Z",
+    );
   });
 });

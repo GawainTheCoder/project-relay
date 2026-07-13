@@ -14,16 +14,26 @@ import { formatDate } from "../lib/format";
 export function DashboardPage() {
   const { data, error, isLoading, reload } = useDashboard();
   const investment = useInvestmentWorkspace();
-  const beliefs = useBeliefs(data);
+  const beliefWorkspace = useBeliefs(data);
+  const beliefs = beliefWorkspace.beliefs;
 
-  if (isLoading) {
+  if (isLoading || beliefWorkspace.isLoading) {
     return <PageLoading label="Loading investment dashboard" />;
   }
-  if (error || !data) {
+  if (error || beliefWorkspace.error || !data) {
     return (
       <PageError
-        error={error ?? "Dashboard data is unavailable."}
-        onRetry={() => void reload()}
+        error={
+          error ?? beliefWorkspace.error ?? "Dashboard data is unavailable."
+        }
+        onRetry={() => {
+          if (error || !data) {
+            void reload();
+          }
+          if (beliefWorkspace.error) {
+            beliefWorkspace.reload();
+          }
+        }}
       />
     );
   }
@@ -133,6 +143,9 @@ export function DashboardPage() {
           </div>
           <ThesisExposureList
             beliefs={beliefs}
+            error={investment.errors.portfolio}
+            isLoading={investment.isLoading}
+            onRetry={() => void investment.reload()}
             portfolio={investment.portfolio}
           />
         </section>

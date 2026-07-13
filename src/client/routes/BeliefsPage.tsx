@@ -1,4 +1,5 @@
 import {
+  AlertCircle,
   ArrowRight,
   BrainCircuit,
   Building2,
@@ -7,13 +8,13 @@ import {
   Layers3,
   Network,
   Plus,
+  RefreshCw,
   Search,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import type {
-  DashboardPayload,
   LayerId,
   PortfolioReadModel,
   ThesisSourceCoverage,
@@ -23,6 +24,7 @@ import { Button } from "../components/ui/Button";
 import { ThesisMomentumBadge } from "../components/ui/ThesisMomentumBadge";
 import { useDashboard } from "../context/useDashboard";
 import { useBeliefs } from "../features/beliefs/useBeliefs";
+import { isRelatedCompanyThesis } from "../features/beliefs/macroAssociations";
 import { AddCompanyDialog } from "../features/companies/AddCompanyDialog";
 import { useInvestmentWorkspace } from "../features/investment/useInvestmentWorkspace";
 import { SourceCoverageBadge } from "../features/sources/SourceCoverageAudit";
@@ -80,45 +82,6 @@ function matchesQuery(belief: BeliefSummary, query: string): boolean {
     .includes(query);
 }
 
-function getMacroCompanyTickers(
-  macro: BeliefSummary,
-  data: DashboardPayload,
-): Set<string> {
-  return new Set(
-    data.layers
-      .filter((layer) => macro.layerIds.includes(layer.id))
-      .flatMap((layer) => layer.companyTickers),
-  );
-}
-
-function isRelatedCompanyThesis(
-  company: BeliefSummary,
-  macro: BeliefSummary,
-  data: DashboardPayload,
-): boolean {
-  const explicitCompanyTickers = new Set([
-    ...macro.companyTickers,
-    ...macro.captureMechanisms.map((capture) => capture.companyTicker),
-  ]);
-  if (explicitCompanyTickers.size > 0) {
-    return Boolean(
-      company.companyTicker &&
-        explicitCompanyTickers.has(company.companyTicker),
-    );
-  }
-
-  // Keep the layer inference only for older local data without explicit links.
-  const macroCompanyTickers = getMacroCompanyTickers(macro, data);
-  const sharesLayer = company.layerIds.some((layerId) =>
-    macro.layerIds.includes(layerId),
-  );
-  return Boolean(
-    sharesLayer ||
-      (company.companyTicker &&
-        macroCompanyTickers.has(company.companyTicker)),
-  );
-}
-
 function filterBelief(
   belief: BeliefSummary,
   query: string,
@@ -129,7 +92,6 @@ function filterBelief(
 
 function buildMacroThesisGroups(
   beliefs: BeliefSummary[],
-  data: DashboardPayload,
   query: string,
   status: ThesisStatusFilter,
 ): {
@@ -142,7 +104,7 @@ function buildMacroThesisGroups(
   const relatedCompanyIds = new Set<string>();
   const groups = macroTheses.flatMap((macro) => {
     const relatedCompanies = companyTheses.filter((company) =>
-      isRelatedCompanyThesis(company, macro, data),
+      isRelatedCompanyThesis(company, macro),
     );
     relatedCompanies.forEach((company) => relatedCompanyIds.add(company.id));
     const visibleCompanies = relatedCompanies.filter((company) =>
@@ -252,12 +214,16 @@ function MacroThesisSection({
   isExpanded,
   onToggle,
   portfolio,
+  portfolioError,
+  isPortfolioLoading,
   sourceCoverage,
 }: {
   group: MacroThesisGroup;
   isExpanded: boolean;
   onToggle: () => void;
   portfolio: PortfolioReadModel | null;
+  portfolioError: string | null;
+  isPortfolioLoading: boolean;
   sourceCoverage: ThesisSourceCoverage | undefined;
 }) {
   const companiesId = `macro-companies-${group.macro.id}`;
@@ -312,7 +278,11 @@ function MacroThesisSection({
                     .slice(0, 4)
                     .map((item) => item.symbol ?? item.name)
                     .join(" · ")
-                : "No portfolio exposure"}
+                : isPortfolioLoading && !portfolio
+                  ? "Loading portfolio exposure"
+                  : portfolioError && !portfolio
+                    ? "Portfolio unavailable"
+                    : "No portfolio exposure"}
             </div>
             <div className="mt-2">{group.companies.length} companies</div>
             {totalPending(group) ? (
@@ -395,7 +365,8 @@ function normalizeStatus(value: string | null): ThesisStatusFilter {
 export function BeliefsPage() {
   const { data, error, isLoading, reload } = useDashboard();
   const investment = useInvestmentWorkspace();
-  const beliefs = useBeliefs(data);
+  const beliefWorkspace = useBeliefs(data);
+  const beliefs = beliefWorkspace.beliefs;
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState("");
@@ -419,7 +390,7 @@ export function BeliefsPage() {
   const grouped = useMemo(
     () =>
       data
-        ? buildMacroThesisGroups(beliefs, data, query, status)
+        ? buildMacroThesisGroups(beliefs, query, status)
         : { groups: [], orphanCompanies: [] },
     [beliefs, data, query, status],
   );
@@ -433,14 +404,25 @@ export function BeliefsPage() {
     0,
   );
 
-  if (isLoading) {
+  if (isLoading || beliefWorkspace.isLoading) {
     return <PageLoading label="Loading theses" />;
   }
-  if (error || !data) {
+  if (error || beliefWorkspace.error || !data) {
     return (
       <PageError
-        error={error ?? "Thesis intelligence is unavailable."}
-        onRetry={() => void reload()}
+        error={
+          error ??
+          beliefWorkspace.error ??
+          "Thesis intelligence is unavailable."
+        }
+        onRetry={() => {
+          if (error || !data) {
+            void reload();
+          }
+          if (beliefWorkspace.error) {
+            beliefWorkspace.reload();
+          }
+        }}
       />
     );
   }
@@ -545,6 +527,24 @@ export function BeliefsPage() {
           </label>
         </div>
 
+        {investment.errors.portfolio && !investment.portfolio ? (
+          <div
+            className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-relay-negative/35 bg-relay-negative/5 px-4 py-3"
+          >
+            <p
+              className="flex items-center gap-2 text-sm text-relay-negative"
+              role="alert"
+            >
+              <AlertCircle aria-hidden="true" className="size-4 shrink-0" />
+              Portfolio exposure could not be loaded. {investment.errors.portfolio}
+            </p>
+            <Button onClick={() => void investment.reload()} variant="quiet">
+              <RefreshCw aria-hidden="true" className="size-4" />
+              Retry portfolio
+            </Button>
+          </div>
+        ) : null}
+
         {showStackContext ? (
           <div className="py-7">
             <StackContextSection data={data} />
@@ -569,9 +569,11 @@ export function BeliefsPage() {
               <MacroThesisSection
                 group={group}
                 isExpanded={expandedMacroIds.has(group.macro.id)}
+                isPortfolioLoading={investment.isLoading}
                 key={group.macro.id}
                 onToggle={() => toggleMacroCompanies(group.macro.id)}
                 portfolio={investment.portfolio}
+                portfolioError={investment.errors.portfolio}
                 sourceCoverage={coverageByThesisId.get(group.macro.id)}
               />
             ))}
