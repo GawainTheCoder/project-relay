@@ -25,7 +25,7 @@
     "@hono/node-server": "2.0.6",
     "@mozilla/readability": "0.6.0",
     "dotenv": "17.4.2",
-    "fast-xml-parser": "5.9.3",
+    "fast-xml-parser": "5.10.1",
     "hono": "4.12.27",
     "linkedom": "0.18.12",
     "lucide-react": "1.21.0",
